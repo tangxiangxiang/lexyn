@@ -131,14 +131,19 @@ export function createLibraryRepository(database: LexynLocalDatabase) {
       await appendOutboxOperations(database, [deckChange('deck.update', record)], now)
     }),
 
-    setDeckArchived: (id: string, archived: boolean) => write(async () => {
-      const deck = await requireDeck(id, false)
-      if ((deck.archivedAt !== undefined) === archived) return
-      const now = Date.now()
-      const record = { ...revise(deck, now), archivedAt: archived ? now : undefined }
-      await decks.put(record)
-      await appendOutboxOperations(database, [deckChange(archived ? 'deck.archive' : 'deck.restore', record)], now)
-    }),
+    setDeckArchived: (id: string, archived: boolean) =>
+      database.transaction('rw', [decks, client_outbox, sync_meta, database.learn_sessions], async () => {
+        const deck = await requireDeck(id, false)
+        if ((deck.archivedAt !== undefined) === archived) return
+        const now = Date.now()
+        const record = { ...revise(deck, now), archivedAt: archived ? now : undefined }
+        await decks.put(record)
+        if (archived) {
+          await database.learn_sessions.where('deckId').equals(id).and((session) => session.status === 'active')
+            .modify({ status: 'paused', updatedAt: now })
+        }
+        await appendOutboxOperations(database, [deckChange(archived ? 'deck.archive' : 'deck.restore', record)], now)
+      }),
 
     createEntry: (deckId: string, input: EntryInput) => write(async () => {
       await requireDeck(deckId)
