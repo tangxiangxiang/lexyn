@@ -149,6 +149,8 @@ test('practice events aggregate from distinct IDs and ignore skipped attempts', 
 })
 
 test.each([false, true])('replays both devices in deterministic order (reverse arrival: %s)', async (reverse) => {
+  const receivedAt = Date.now()
+  vi.spyOn(Date, 'now').mockReturnValue(receivedAt)
   const parent = deck()
   const word = entry(parent.id)
   await result([operation('deck.create', parent), operation('entry.create', word)])
@@ -174,15 +176,27 @@ test.each([false, true])('replays both devices in deterministic order (reverse a
     expect(await result([op], device)).toMatchObject([{ status: 'accepted' }])
     expect(await result([op], device)).toMatchObject([{ status: 'already_applied' }])
   }
-  const future = make('hard', Date.now() + 86_400_000)
+  const future = make('again', receivedAt + 86_400_000)
   expect(await result([operation('review.create', future)], deviceB)).toMatchObject([{ status: 'accepted' }])
+  // The valid review arrives later and belongs after the clamped event, even though its raw time is earlier.
+  const later = make('again', receivedAt + 60_000)
+  expect(await result([operation('review.create', later)], deviceA)).toMatchObject([{ status: 'accepted' }])
   const reviews = (await page('/api/sync/pull')).changes.map(({ record }) => record).filter((record): record is Extract<SyncRecord, { kind: 'review' }> => record.kind === 'review')
-  expect(reviews.map(({ event }) => event.id).sort()).toEqual([a.id, b.id, future.id].sort())
+  expect(reviews.map(({ event }) => event.id).sort()).toEqual([a.id, b.id, future.id, later.id].sort())
   expect(reviews.find(({ event }) => event.id === a.id)?.event).toMatchObject(a)
   expect(reviews.find(({ event }) => event.id === b.id)?.event).toMatchObject(b)
   expect(reviews[1].card.schedulerState).toEqual(await rebuildCardFromEvents([a, b]))
-  expect(reviews[2].event.reviewedAt).toBe(future.reviewedAt)
-  expect(reviews[2].event.effectiveReviewedAt).toBeLessThan(future.reviewedAt)
-  expect(reviews[2].card.schedulerState).toEqual(await rebuildCardFromEvents(reviews.map(({ event }) => event)))
-  expect(reviews[2].card.schedulerState.stabilityFast).toBeGreaterThan(0)
+  const firstTime = new Date(a.reviewedAt)
+  let expected = engine.newCard({ now: firstTime, cardId })
+  for (const [event, timestamp] of [[a, a.reviewedAt], [b, b.reviewedAt], [future, receivedAt], [later, later.reviewedAt]] as const) {
+    expected = engine.review({ card: expected, grade: schedulerGrades[event.rating], now: new Date(timestamp) }).card
+    if (event === future) {
+      expect(reviews[2].event).toEqual({ ...future, effectiveReviewedAt: receivedAt })
+      expect(reviews[2].card.schedulerState).toEqual(serializeCard(expected))
+      expect(reviews[2].card.dueAt).toBeLessThan(future.reviewedAt)
+    }
+  }
+  expect(reviews[3].event.effectiveReviewedAt).toBe(later.reviewedAt)
+  expect(reviews[3].card).toMatchObject({ lastEventId: later.id, schedulerState: serializeCard(expected) })
+  expect(reviews[3].card.schedulerState.stabilityFast).toBeGreaterThan(0)
 })

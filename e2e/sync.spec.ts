@@ -1,6 +1,6 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
 import type { OutboxOperation } from '../shared/contracts/library'
-import type { PushRequest } from '../shared/contracts/sync'
+import type { PushRequest, PushResponse } from '../shared/contracts/sync'
 import type { LearnProgress } from '../shared/domain/learning'
 import type { ReviewCard, ReviewEvent } from '../shared/domain/review'
 import { rebuildCardFromEvents } from '../shared/srs/scheduler'
@@ -32,10 +32,51 @@ async function waitSynced(page: Page) {
 
 async function syncNow(page: Page) {
   await Promise.all([
-    page.waitForResponse((response) => new URL(response.url()).pathname === '/api/sync/pull' && response.ok()),
-    page.getByRole('button', { name: 'Sync now' }).click(),
+    page.waitForResponse((response) => new URL(response.url()).pathname === '/api/sync/pull' && response.ok(), { timeout: 25_000 }),
+    page.getByRole('button', { name: 'Sync now' }).click({ timeout: 15_000 }),
   ])
   await waitSynced(page)
+}
+
+async function retryAfterLostReviewAck(page: Page, opId: string, reconnect: () => Promise<void>) {
+  const syncButton = page.getByRole('button', { name: 'Sync now' })
+  await syncButton.evaluate((button, opId) => {
+    const fetch = window.fetch.bind(window)
+    let forwarded = false
+    // Keep background retries from winning the race with the manual retry.
+    button.addEventListener('click', () => { window.fetch = fetch }, { capture: true, once: true })
+    window.fetch = async (input, init) => {
+      if (input !== '/api/sync/push' || typeof init?.body !== 'string'
+        || !(JSON.parse(init.body) as PushRequest).operations.some((operation) => operation.opId === opId)) {
+        return fetch(input, init)
+      }
+      if (forwarded) return new Response(null, { status: 503 })
+      forwarded = true
+      // Use the browser's real authenticated request, then lose the ACK at the client boundary.
+      const response = await fetch(input, init)
+      await response.arrayBuffer()
+      throw new TypeError('Injected lost sync response')
+    }
+  }, opId)
+
+  const receipt = async () => {
+    const response = await page.waitForResponse((response) => {
+      const request = response.request()
+      return new URL(response.url()).pathname === '/api/sync/push' && request.method() === 'POST'
+        && (request.postDataJSON() as PushRequest).operations.some((operation) => operation.opId === opId)
+    }, { timeout: 15_000 })
+    expect(response.ok()).toBe(true)
+    const { results } = await response.json() as PushResponse
+    return results
+  }
+
+  const [accepted] = await Promise.all([receipt(), reconnect()])
+  expect(accepted).toEqual([{ opId, status: 'accepted', serverSeq: expect.any(Number) }])
+  await expect(page.getByText('Needs attention', { exact: true })).toBeVisible()
+  expect(await records(page, 'client_outbox')).toMatchObject([{ operationId: opId }])
+
+  const [retried] = await Promise.all([receipt(), syncNow(page)])
+  expect(retried).toEqual(accepted.map((result) => ({ ...result, status: 'already_applied' })))
 }
 
 async function createDeck(page: Page, name: string) {
@@ -161,23 +202,9 @@ for (const reverse of [false, true]) {
       const [first, second] = reverse ? [b, a] : [a, b]
 
       if (!reverse) {
-        let dropped = false
-        let allowRetry = false
-        await first.page.route('**/api/sync/push', async (route) => {
-          const body = route.request().postDataJSON() as PushRequest
-          if (!body.operations.some(({ kind }) => kind === 'review.create') || allowRetry) return route.continue()
-          if (dropped) return route.fulfill({ status: 500, json: { error: { message: 'Injected retry outage' } } })
-          const response = await route.fetch()
-          expect(response.ok()).toBe(true)
-          expect(await response.json()).toMatchObject({ results: [{ status: 'accepted' }] })
-          dropped = true
-          await route.abort('failed')
+        await test.step('recover the original review operation after the server ACK is lost', async () => {
+          await retryAfterLostReviewAck(first.page, aPending[0].opId, () => first.context.setOffline(false))
         })
-        await first.context.setOffline(false)
-        await expect.poll(() => dropped).toBe(true)
-        expect(await records(first.page, 'client_outbox')).toMatchObject([{ operationId: aPending[0].opId }])
-        allowRetry = true
-        await syncNow(first.page)
       } else {
         await first.context.setOffline(false)
         await syncNow(first.page)
