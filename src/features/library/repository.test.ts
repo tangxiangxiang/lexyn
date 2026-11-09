@@ -19,7 +19,7 @@ afterEach(async () => {
   await database.delete()
 })
 
-test('upgrades v1 without clearing preferences, sync metadata or legacy outbox entries', async () => {
+test('upgrades v1 to v4 without clearing preferences, sync metadata or legacy outbox entries', async () => {
   const legacy = new Dexie(database.name)
   legacy.version(1).stores({ preferences: 'key', sync_meta: 'key', client_outbox: 'operationId, createdAt' })
   await legacy.table('preferences').add({ key: 'appearance', value: 'dark' })
@@ -28,7 +28,7 @@ test('upgrades v1 without clearing preferences, sync metadata or legacy outbox e
   await legacy.table('client_outbox').add(previous)
   legacy.close()
   await database.open()
-  expect(database.verno).toBe(3)
+  expect(database.verno).toBe(4)
   expect(await database.preferences.get('appearance')).toEqual({ key: 'appearance', value: 'dark' })
   expect(await database.sync_meta.get('previous')).toEqual({ key: 'previous', value: 'saved' })
   expect(await database.client_outbox.get(previous.operationId)).toEqual(previous)
@@ -36,7 +36,7 @@ test('upgrades v1 without clearing preferences, sync metadata or legacy outbox e
   expect(await database.preferences.get('daily-new-words')).toEqual({ key: 'daily-new-words', value: 10 })
 })
 
-test('upgrades v2 to v3 while preserving library, preferences and outbox sequence', async () => {
+test('upgrades v2 to v4 while preserving library, preferences and outbox sequence', async () => {
   const legacy = new Dexie(database.name)
   legacy.version(1).stores({ preferences: 'key', sync_meta: 'key', client_outbox: 'operationId, createdAt' })
   legacy.version(2).stores({ decks: 'id', entries: 'id, deckId, &[deckId+activeTerm]', client_outbox: 'operationId, createdAt, &sequence' })
@@ -52,6 +52,8 @@ test('upgrades v2 to v3 while preserving library, preferences and outbox sequenc
   expect(await database.client_outbox.get('old-op')).toMatchObject({ sequence: 4 })
   expect(await database.sync_meta.get('library.outbox.sequence')).toEqual({ key: 'library.outbox.sequence', value: '4' })
   expect(await database.practice_events.count()).toBe(0)
+  expect(await database.review_events.count()).toBe(0)
+  expect(database.verno).toBe(4)
 })
 
 test('commits a completed practice event, progress, session and shared outbox sequence atomically', async () => {
@@ -204,8 +206,8 @@ test('exports archived decks and removed words without internal storage fields',
   await library.setDeckArchived(id, true)
   const result = JSON.parse(JSON.stringify(await library.exportLibrary()))
   expect(result).toEqual({
-    format: 'lexyn-library', formatVersion: 2, exportedAt: expect.any(String), dailyNewWords: 10,
-    metadata: { librarySchemaVersion: 3, scope: 'library' },
+    format: 'lexyn-library', formatVersion: 3, exportedAt: expect.any(String), dailyNewWords: 10,
+    metadata: { librarySchemaVersion: 4, scope: 'library' },
     decks: [{
       id, name: 'Systems', revision: 2, archivedAt: expect.any(Number),
       createdAt: expect.any(Number), updatedAt: expect.any(Number),
@@ -214,6 +216,8 @@ test('exports archived decks and removed words without internal storage fields',
       id: word.id, deckId: id, term: 'deadlock', normalizedTerm: 'deadlock', meaning: '死锁',
       revision: 2, deletedAt: expect.any(Number), createdAt: expect.any(Number), updatedAt: expect.any(Number),
     }], practiceEvents: [], learnProgress: [],
+    reviewCards: [], reviewEvents: [],
+    schedulerConfig: expect.objectContaining({ version: 'fsrs-7-v1' }),
   })
   const log = await database.client_outbox.orderBy('sequence').toArray()
   expect(log.every((operation) => 'opId' in operation && operation.opId === operation.operationId)).toBe(true)

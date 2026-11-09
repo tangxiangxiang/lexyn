@@ -2,6 +2,7 @@ import Dexie, { type EntityTable } from 'dexie'
 import type { OutboxOperation } from '../../shared/contracts/library'
 import type { Deck, Entry } from '../../shared/domain/library'
 import type { LearnProgress, LearnSession, PracticeEvent, DailyNewWords } from '../../shared/domain/learning'
+import type { ReviewCard, ReviewEvent, ReviewSession } from '../../shared/domain/review'
 
 export type Appearance = 'system' | 'light' | 'dark'
 
@@ -46,6 +47,10 @@ export class LexynLocalDatabase extends Dexie {
   learn_progress!: EntityTable<LearnProgressRecord, 'entryId'>
   learn_sessions!: EntityTable<LearnSessionRecord, 'sessionId'>
 
+  review_cards!: EntityTable<ReviewCard, 'id'>
+  review_events!: EntityTable<ReviewEvent, 'id'>
+  review_sessions!: EntityTable<ReviewSession, 'sessionId'>
+
   constructor(name = 'lexyn') {
     super(name)
     this.version(1).stores({
@@ -69,6 +74,11 @@ export class LexynLocalDatabase extends Dexie {
       learn_sessions: 'sessionId, deckId, status, updatedAt',
     }).upgrade(async (transaction) => {
       await transaction.table('preferences').put({ key: 'daily-new-words', value: 10 })
+    })
+    this.version(4).stores({
+      review_cards: 'id, entryId, deckId, dueAt, scheduleStatus, &[entryId+direction]',
+      review_events: 'id, cardId, entryId, deckId, sessionId, reviewedAt, [cardId+reviewedAt], &[sessionId+cardId]',
+      review_sessions: 'sessionId, status, updatedAt',
     })
   }
 }

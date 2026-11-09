@@ -2,6 +2,7 @@ import type { LibraryChange, LibraryExport, OutboxChange } from '../../../shared
 import { cleanDeck, cleanEntry, LibraryError, normalizeTerm } from '../../../shared/domain/library'
 import type { Deck, DeckInput, Entry, EntryInput } from '../../../shared/domain/library'
 import { db, type DeckRecord, type EntryRecord, type LexynLocalDatabase } from '../../db/local'
+import { createReviewScheduler, schedulerConfigSnapshot } from '../../../shared/srs/scheduler'
 import type { DuplicateMode, ImportPreview } from './import'
 
 const sequenceKey = 'library.outbox.sequence'
@@ -44,13 +45,15 @@ export async function appendOutboxOperations(database: LexynLocalDatabase, chang
   }
   await database.client_outbox.bulkAdd(changes.map((change, index) => {
     const opId = crypto.randomUUID()
+    const isStudyEvent = change.kind === 'practice.create' || change.kind === 'review.create'
     return {
       ...change,
       operationId: opId,
       opId,
       schemaVersion: 1,
-      entityId: change.kind === 'practice.create' ? change.payload.entryId : change.payload.id,
-      baseRevision: change.kind === 'practice.create' ? 0 : change.payload.revision - 1,
+      entityId: change.kind === 'practice.create' ? change.payload.entryId
+        : change.kind === 'review.create' ? change.payload.cardId : change.payload.id,
+      baseRevision: isStudyEvent ? 0 : change.payload.revision - 1,
       sequence: previous + index + 1, createdAt: now,
     }
   }))
@@ -210,27 +213,33 @@ export function createLibraryRepository(database: LexynLocalDatabase) {
       return { added, updated, skipped: preview.valid - added - updated, invalid: preview.invalid }
     }),
 
-    exportLibrary: (deckId?: string): Promise<LibraryExport> => database.transaction('r',
-      [decks, entries, database.practice_events, database.learn_progress, database.preferences], async () => {
-      const records = deckId === undefined ? await decks.toArray() : [await requireDeck(deckId, false)]
-      const words = deckId === undefined ? await entries.toArray() : await entries.where('deckId').equals(deckId).toArray()
-      const ids = new Set(words.map(({ id }) => id))
-      const allEvents = deckId === undefined ? await database.practice_events.toArray()
-        : await database.practice_events.where('deckId').equals(deckId).toArray()
-      const allProgress = deckId === undefined ? await database.learn_progress.toArray()
-        : (await database.learn_progress.toArray()).filter(({ entryId }) => ids.has(entryId))
-      return {
-        format: 'lexyn-library', formatVersion: 2, exportedAt: new Date().toISOString(),
-        metadata: { librarySchemaVersion: 3, scope: deckId === undefined ? 'library' : 'deck' },
-        decks: records.map(deckSnapshot), entries: words.map(entrySnapshot),
-        practiceEvents: allEvents.filter(({ entryId }) => ids.has(entryId)),
-        learnProgress: allProgress,
-        dailyNewWords: await (async () => {
-          const value = (await database.preferences.get('daily-new-words'))?.value
-          return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 100 ? value : 10
-        })(),
-      }
-    }),
+    exportLibrary: async (deckId?: string): Promise<LibraryExport> => {
+      const schedulerConfig = schedulerConfigSnapshot(await createReviewScheduler())
+      const { practice_events, learn_progress, preferences, review_cards, review_events } = database
+      return database.transaction('r', [decks, entries, practice_events, learn_progress, preferences, review_cards, review_events], async () => {
+        const records = deckId === undefined ? await decks.toArray() : [await requireDeck(deckId, false)]
+        const words = deckId === undefined ? await entries.toArray() : await entries.where('deckId').equals(deckId).toArray()
+        const ids = new Set(words.map(({ id }) => id))
+        const allEvents = deckId === undefined ? await database.practice_events.toArray()
+          : await database.practice_events.where('deckId').equals(deckId).toArray()
+        const allProgress = deckId === undefined ? await database.learn_progress.toArray()
+          : (await database.learn_progress.toArray()).filter(({ entryId }) => ids.has(entryId))
+        return {
+          format: 'lexyn-library', formatVersion: 3, exportedAt: new Date().toISOString(),
+          metadata: { librarySchemaVersion: 4, scope: deckId === undefined ? 'library' : 'deck' },
+          decks: records.map(deckSnapshot), entries: words.map(entrySnapshot),
+          practiceEvents: allEvents.filter(({ entryId }) => ids.has(entryId)),
+          learnProgress: allProgress,
+          reviewCards: deckId === undefined ? await review_cards.toArray() : await review_cards.where('deckId').equals(deckId).toArray(),
+          reviewEvents: deckId === undefined ? await review_events.toArray() : await review_events.where('deckId').equals(deckId).toArray(),
+          schedulerConfig,
+          dailyNewWords: await (async () => {
+            const value = (await database.preferences.get('daily-new-words'))?.value
+            return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 100 ? value : 10
+          })(),
+        }
+      })
+    },
   }
 }
 

@@ -90,7 +90,7 @@ test('archive pauses the session and restore resumes the same word with its atte
   expect(await database.practice_events.count()).toBe(0)
 })
 
-test('preserves existing v3 history and repairs an exhausted cursor left by an earlier skip', async () => {
+test('preserves existing Learn history and repairs an exhausted cursor left by an earlier skip', async () => {
   const { words: [first], sessionId } = await start(['saved', 'removed'])
   await learn.recordAttempt(sessionId, first.term, true)
   await learn.finishCurrent(sessionId, 'completed')
@@ -102,7 +102,7 @@ test('preserves existing v3 history and repairs an exhausted cursor left by an e
   await database.open()
 
   await learn.advanceInvalid(sessionId, undefined)
-  expect(database.verno).toBe(3)
+  expect(database.verno).toBe(4)
   expect(await learn.result(sessionId)).toMatchObject({
     session: { status: 'completed', currentIndex: 0 }, completed: 1, firstCompleted: 1,
   })

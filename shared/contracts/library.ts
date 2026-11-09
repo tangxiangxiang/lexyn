@@ -1,4 +1,5 @@
 import type { Deck, Entry } from '../domain/library'
+import type { ReviewCard, ReviewEvent, ReviewSchedulerConfig } from '../domain/review'
 import type { PracticeEvent } from '../domain/learning'
 
 export type DeckOperationKind = 'deck.create' | 'deck.update' | 'deck.archive' | 'deck.restore'
@@ -30,11 +31,17 @@ export type PracticeOperation = {
   createdAt: number
 }
 
-export type OutboxOperation = LibraryOperation | PracticeOperation
-export type PracticeChange = Omit<PracticeOperation, 'sequence' | 'createdAt' | 'operationId'> & { operationId?: string }
-export type OutboxChange = (LibraryChange | PracticeChange) & { baseServerRevision?: number }
+export type ReviewOperation = Omit<PracticeOperation, 'kind' | 'payload'> & {
+  kind: 'review.create'
+  payload: ReviewEvent
+}
 
-export interface LibraryExport {
+export type OutboxOperation = LibraryOperation | PracticeOperation | ReviewOperation
+export type PracticeChange = Omit<PracticeOperation, 'sequence' | 'createdAt' | 'operationId'> & { operationId?: string }
+export type ReviewChange = Omit<ReviewOperation, 'sequence' | 'createdAt'>
+export type OutboxChange = (LibraryChange | PracticeChange | ReviewChange) & { baseServerRevision?: number }
+
+export interface LibraryExportV2 {
   format: 'lexyn-library'
   formatVersion: 2
   exportedAt: string
@@ -44,4 +51,12 @@ export interface LibraryExport {
   practiceEvents: PracticeEvent[]
   learnProgress: import('../domain/learning').LearnProgress[]
   dailyNewWords: number
+}
+
+export interface LibraryExport extends Omit<LibraryExportV2, 'formatVersion' | 'metadata'> {
+  formatVersion: 3
+  metadata: { librarySchemaVersion: 4; scope: 'library' | 'deck' }
+  reviewCards: ReviewCard[]
+  reviewEvents: ReviewEvent[]
+  schedulerConfig: ReviewSchedulerConfig
 }

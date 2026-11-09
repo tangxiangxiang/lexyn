@@ -124,7 +124,7 @@ test('previews TXT and CSV, explicitly overwrites duplicates and downloads full 
   ])
   const exported: LibraryExport = JSON.parse(await readFile(await download.path(), 'utf8'))
   expect(exported).toMatchObject({
-    format: 'lexyn-library', formatVersion: 2, metadata: { scope: 'library', librarySchemaVersion: 3 },
+    format: 'lexyn-library', formatVersion: 3, metadata: { scope: 'library', librarySchemaVersion: 4 },
     dailyNewWords: 10,
     decks: [{ name: 'Computer English', archivedAt: expect.any(Number), revision: 2 }],
   })
