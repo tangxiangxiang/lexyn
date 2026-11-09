@@ -100,6 +100,9 @@ function exportDeck() {
         </div>
         <div class="library-actions">
           <NButton :disabled="busy" @click="exportDeck">Export deck</NButton>
+          <RouterLink :to="{ path: '/learn', query: { deckId } }" custom v-slot="{ href, navigate }">
+            <NButton tag="a" :href="href" :disabled="archived || activeCount === 0" @click="navigate">Start learning</NButton>
+          </RouterLink>
           <NButton v-if="archived" type="primary" :disabled="busy" @click="restoreDeck">Restore deck</NButton>
           <template v-else>
             <NButton @click="importing = true">Import words</NButton>

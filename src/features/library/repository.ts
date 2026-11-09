@@ -1,4 +1,4 @@
-import type { LibraryChange, LibraryExport } from '../../../shared/contracts/library'
+import type { LibraryChange, LibraryExport, OutboxChange } from '../../../shared/contracts/library'
 import { cleanDeck, cleanEntry, LibraryError, normalizeTerm } from '../../../shared/domain/library'
 import type { Deck, DeckInput, Entry, EntryInput } from '../../../shared/domain/library'
 import { db, type DeckRecord, type EntryRecord, type LexynLocalDatabase } from '../../db/local'
@@ -36,30 +36,32 @@ function entryChange(kind: Extract<LibraryChange, { payload: Entry }>['kind'], r
   return { kind, payload: entrySnapshot(record), baseServerRevision: record.serverRevision }
 }
 
-type PendingChange = LibraryChange & { baseServerRevision?: number }
+export async function appendOutboxOperations(database: LexynLocalDatabase, changes: OutboxChange[], now: number) {
+  if (!changes.length) return
+  const previous = Number((await database.sync_meta.get(sequenceKey))?.value ?? 0)
+  if (!Number.isSafeInteger(previous) || previous < 0 || !Number.isSafeInteger(previous + changes.length)) {
+    throw new LibraryError('The local operation log cannot allocate a sequence.')
+  }
+  await database.client_outbox.bulkAdd(changes.map((change, index) => {
+    const opId = crypto.randomUUID()
+    return {
+      ...change,
+      operationId: opId,
+      opId,
+      schemaVersion: 1,
+      entityId: change.kind === 'practice.create' ? change.payload.entryId : change.payload.id,
+      baseRevision: change.kind === 'practice.create' ? 0 : change.payload.revision - 1,
+      sequence: previous + index + 1, createdAt: now,
+    }
+  }))
+  await database.sync_meta.put({ key: sequenceKey, value: String(previous + changes.length) })
+}
 
 export function createLibraryRepository(database: LexynLocalDatabase) {
   const { decks, entries, client_outbox, sync_meta } = database
   const read = <T>(action: () => Promise<T>) => database.transaction('r', [decks, entries], action)
   const write = <T>(action: () => Promise<T>) =>
     database.transaction('rw', [decks, entries, client_outbox, sync_meta], action)
-
-  async function append(changes: PendingChange[], now: number) {
-    if (!changes.length) return
-    const previous = Number((await sync_meta.get(sequenceKey))?.value ?? 0)
-    if (!Number.isSafeInteger(previous) || previous < 0 || !Number.isSafeInteger(previous + changes.length)) {
-      throw new LibraryError('The local operation log cannot allocate a sequence.')
-    }
-    await client_outbox.bulkAdd(changes.map((change, index) => {
-      const opId = crypto.randomUUID()
-      return {
-        ...change, operationId: opId, opId, schemaVersion: 1,
-        entityId: change.payload.id, baseRevision: change.payload.revision - 1,
-        sequence: previous + index + 1, createdAt: now,
-      }
-    }))
-    await sync_meta.put({ key: sequenceKey, value: String(previous + changes.length) })
-  }
 
   async function requireDeck(id: string, active = true) {
     const deck = await decks.get(id)
@@ -116,7 +118,7 @@ export function createLibraryRepository(database: LexynLocalDatabase) {
       const now = Date.now()
       const record = { ...newEntity(now), ...cleanDeck(input) }
       await decks.add(record)
-      await append([deckChange('deck.create', record)], now)
+      await appendOutboxOperations(database, [deckChange('deck.create', record)], now)
       return deckSnapshot(record)
     }),
 
@@ -126,7 +128,7 @@ export function createLibraryRepository(database: LexynLocalDatabase) {
       checkRevision(deck.revision, expectedRevision)
       const record = { ...revise(deck, now), ...cleanDeck(input) }
       await decks.put(record)
-      await append([deckChange('deck.update', record)], now)
+      await appendOutboxOperations(database, [deckChange('deck.update', record)], now)
     }),
 
     setDeckArchived: (id: string, archived: boolean) => write(async () => {
@@ -135,7 +137,7 @@ export function createLibraryRepository(database: LexynLocalDatabase) {
       const now = Date.now()
       const record = { ...revise(deck, now), archivedAt: archived ? now : undefined }
       await decks.put(record)
-      await append([deckChange(archived ? 'deck.archive' : 'deck.restore', record)], now)
+      await appendOutboxOperations(database, [deckChange(archived ? 'deck.archive' : 'deck.restore', record)], now)
     }),
 
     createEntry: (deckId: string, input: EntryInput) => write(async () => {
@@ -144,7 +146,7 @@ export function createLibraryRepository(database: LexynLocalDatabase) {
       const record = makeEntry(deckId, input, now)
       await ensureUnique(deckId, record.normalizedTerm)
       await entries.add(record)
-      await append([entryChange('entry.create', record)], now)
+      await appendOutboxOperations(database, [entryChange('entry.create', record)], now)
       return entrySnapshot(record)
     }),
 
@@ -156,7 +158,7 @@ export function createLibraryRepository(database: LexynLocalDatabase) {
       const record = makeEntry(deckId, input, now, previous)
       await ensureUnique(deckId, record.normalizedTerm, id)
       await entries.put(record)
-      await append([entryChange('entry.update', record)], now)
+      await appendOutboxOperations(database, [entryChange('entry.update', record)], now)
     }),
 
     setEntryRemoved: (deckId: string, id: string, removed: boolean) => write(async () => {
@@ -170,7 +172,7 @@ export function createLibraryRepository(database: LexynLocalDatabase) {
         activeTerm: removed ? undefined : entry.normalizedTerm,
       }
       await entries.put(record)
-      await append([entryChange(removed ? 'entry.delete' : 'entry.restore', record)], now)
+      await appendOutboxOperations(database, [entryChange(removed ? 'entry.delete' : 'entry.restore', record)], now)
     }),
 
     importEntries: (deckId: string, preview: ImportPreview, mode: DuplicateMode) => write(async () => {
@@ -179,7 +181,7 @@ export function createLibraryRepository(database: LexynLocalDatabase) {
       const existing = new Map((await entries.where('deckId').equals(deckId).toArray())
         .filter((record) => record.deletedAt === undefined).map((record) => [record.normalizedTerm, record]))
       const records: EntryRecord[] = []
-      const changes: PendingChange[] = []
+      const changes: OutboxChange[] = []
       const seen = new Set<string>()
       let added = 0
       let updated = 0
@@ -199,17 +201,29 @@ export function createLibraryRepository(database: LexynLocalDatabase) {
         else added++
       }
       await entries.bulkPut(records)
-      await append(changes, now)
+      await appendOutboxOperations(database, changes, now)
       return { added, updated, skipped: preview.valid - added - updated, invalid: preview.invalid }
     }),
 
-    exportLibrary: (deckId?: string): Promise<LibraryExport> => read(async () => {
+    exportLibrary: (deckId?: string): Promise<LibraryExport> => database.transaction('r',
+      [decks, entries, database.practice_events, database.learn_progress, database.preferences], async () => {
       const records = deckId === undefined ? await decks.toArray() : [await requireDeck(deckId, false)]
       const words = deckId === undefined ? await entries.toArray() : await entries.where('deckId').equals(deckId).toArray()
+      const ids = new Set(words.map(({ id }) => id))
+      const allEvents = deckId === undefined ? await database.practice_events.toArray()
+        : await database.practice_events.where('deckId').equals(deckId).toArray()
+      const allProgress = deckId === undefined ? await database.learn_progress.toArray()
+        : (await database.learn_progress.toArray()).filter(({ entryId }) => ids.has(entryId))
       return {
-        format: 'lexyn-library', formatVersion: 1, exportedAt: new Date().toISOString(),
-        metadata: { librarySchemaVersion: 2, scope: deckId === undefined ? 'library' : 'deck' },
+        format: 'lexyn-library', formatVersion: 2, exportedAt: new Date().toISOString(),
+        metadata: { librarySchemaVersion: 3, scope: deckId === undefined ? 'library' : 'deck' },
         decks: records.map(deckSnapshot), entries: words.map(entrySnapshot),
+        practiceEvents: allEvents.filter(({ entryId }) => ids.has(entryId)),
+        learnProgress: allProgress,
+        dailyNewWords: await (async () => {
+          const value = (await database.preferences.get('daily-new-words'))?.value
+          return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 100 ? value : 10
+        })(),
       }
     }),
   }
