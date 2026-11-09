@@ -26,6 +26,7 @@ export interface Entry extends LocalEntity, EntryInput {
   deckId: string
   normalizedTerm: string
   deletedAt?: number
+  termChangedAt?: number
 }
 
 export const entryLimits = { term: 240, meaning: 2000, phonetic: 240, example: 4000, note: 4000 }

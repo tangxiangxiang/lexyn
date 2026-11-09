@@ -1,6 +1,6 @@
-import type { Deck, Entry } from '../domain/library'
-import type { ReviewCard, ReviewEvent, ReviewSchedulerConfig } from '../domain/review'
-import type { PracticeEvent } from '../domain/learning'
+import type { Deck, Entry } from '../domain/library.ts'
+import type { ReviewCard, ReviewEvent, ReviewSchedulerConfig } from '../domain/review.ts'
+import type { PracticeEvent } from '../domain/learning.ts'
 
 export type DeckOperationKind = 'deck.create' | 'deck.update' | 'deck.archive' | 'deck.restore'
 export type EntryOperationKind = 'entry.create' | 'entry.update' | 'entry.delete' | 'entry.restore'
@@ -49,7 +49,7 @@ export interface LibraryExportV2 {
   decks: Deck[]
   entries: Entry[]
   practiceEvents: PracticeEvent[]
-  learnProgress: import('../domain/learning').LearnProgress[]
+  learnProgress: import('../domain/learning.ts').LearnProgress[]
   dailyNewWords: number
 }
 

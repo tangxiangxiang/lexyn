@@ -245,7 +245,7 @@ test('upgrades a real v3 database without changing preferences, progress, events
     for (const [table, data] of Object.entries(oldData)) await legacy.table(table).bulkAdd(data)
     legacy.close()
     await upgraded.open()
-    expect(upgraded.verno).toBe(4)
+    expect(upgraded.verno).toBe(5)
     for (const [table, data] of Object.entries(oldData)) expect(await upgraded.table(table).toArray()).toEqual(data)
     expect(await upgraded.review_cards.count()).toBe(0)
     expect(await upgraded.review_events.count()).toBe(0)

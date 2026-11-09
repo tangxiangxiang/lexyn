@@ -11,10 +11,24 @@ export function readConfig(env: NodeJS.ProcessEnv) {
   const proxyHost = host === '0.0.0.0' ? '127.0.0.1' : host === '::' ? '::1' : host
   const urlHost = proxyHost.includes(':') ? `[${proxyHost}]` : proxyHost
 
+  const origin = `http://${urlHost}:${port}`
+  const production = env.NODE_ENV === 'production'
+  const publicOrigin = env.LEXYN_PUBLIC_ORIGIN || (production ? '' : origin)
+  let url: URL
+  try {
+    url = new URL(publicOrigin)
+  } catch {
+    throw new Error('Set LEXYN_PUBLIC_ORIGIN to the application origin.')
+  }
+  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+  if (url.origin !== publicOrigin || (url.protocol !== 'https:' && (production || !loopback || url.protocol !== 'http:'))) {
+    throw new Error('LEXYN_PUBLIC_ORIGIN must be an HTTPS origin, or a loopback HTTP origin in development.')
+  }
   return {
     host,
     port,
-    origin: `http://${urlHost}:${port}`,
+    origin,
+    publicOrigin,
     dataDir: resolve(env.LEXYN_DATA_DIR || 'data'),
   }
 }

@@ -6,6 +6,7 @@ import {
   FSRS_MODEL, createReviewScheduler, isReviewRating, restoreCard, schedulerConfigSnapshot,
   schedulerGrades, serializeCard, serializeRevlog,
 } from '../../../shared/srs/scheduler'
+import { stableJson } from '../../../shared/contracts/sync'
 import { db, type LexynLocalDatabase } from '../../db/local'
 import { appendOutboxOperations } from '../library/repository'
 
@@ -203,6 +204,7 @@ export function createReviewRepository(database: LexynLocalDatabase) {
         if (existing) return existing
         const latest = await scoreTarget(sessionId, cardId, now)
         if (latest.card?.revision !== previous?.revision || latest.card?.lastEventId !== previous?.lastEventId
+          || stableJson(latest.card?.schedulerState) !== stableJson(previous?.schedulerState)
           || latest.entry.revision !== entry.revision) {
           throw new ReviewError('The card changed during saving. Check the current answer and rate it again.')
         }

@@ -19,7 +19,7 @@ afterEach(async () => {
   await database.delete()
 })
 
-test('upgrades v1 to v4 without clearing preferences, sync metadata or legacy outbox entries', async () => {
+test('upgrades v1 to v5 without clearing preferences, sync metadata or legacy outbox entries', async () => {
   const legacy = new Dexie(database.name)
   legacy.version(1).stores({ preferences: 'key', sync_meta: 'key', client_outbox: 'operationId, createdAt' })
   await legacy.table('preferences').add({ key: 'appearance', value: 'dark' })
@@ -28,7 +28,7 @@ test('upgrades v1 to v4 without clearing preferences, sync metadata or legacy ou
   await legacy.table('client_outbox').add(previous)
   legacy.close()
   await database.open()
-  expect(database.verno).toBe(4)
+  expect(database.verno).toBe(5)
   expect(await database.preferences.get('appearance')).toEqual({ key: 'appearance', value: 'dark' })
   expect(await database.sync_meta.get('previous')).toEqual({ key: 'previous', value: 'saved' })
   expect(await database.client_outbox.get(previous.operationId)).toEqual(previous)
@@ -36,7 +36,7 @@ test('upgrades v1 to v4 without clearing preferences, sync metadata or legacy ou
   expect(await database.preferences.get('daily-new-words')).toEqual({ key: 'daily-new-words', value: 10 })
 })
 
-test('upgrades v2 to v4 while preserving library, preferences and outbox sequence', async () => {
+test('upgrades v2 to v5 while preserving library, preferences and outbox sequence', async () => {
   const legacy = new Dexie(database.name)
   legacy.version(1).stores({ preferences: 'key', sync_meta: 'key', client_outbox: 'operationId, createdAt' })
   legacy.version(2).stores({ decks: 'id', entries: 'id, deckId, &[deckId+activeTerm]', client_outbox: 'operationId, createdAt, &sequence' })
@@ -53,7 +53,7 @@ test('upgrades v2 to v4 while preserving library, preferences and outbox sequenc
   expect(await database.sync_meta.get('library.outbox.sequence')).toEqual({ key: 'library.outbox.sequence', value: '4' })
   expect(await database.practice_events.count()).toBe(0)
   expect(await database.review_events.count()).toBe(0)
-  expect(database.verno).toBe(4)
+  expect(database.verno).toBe(5)
 })
 
 test('commits a completed practice event, progress, session and shared outbox sequence atomically', async () => {

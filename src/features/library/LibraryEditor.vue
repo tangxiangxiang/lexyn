@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { reactive } from 'vue'
+import { computed, reactive } from 'vue'
 import { NAlert, NButton, NInput } from 'naive-ui'
-import { entryLimits, type Deck, type Entry } from '../../../shared/domain/library'
+import { entryLimits, normalizeTerm, type Deck, type Entry } from '../../../shared/domain/library'
 import LibraryDialog from './LibraryDialog.vue'
 import { useLibraryAction } from './library-ui'
 import { library } from './repository'
@@ -17,6 +17,7 @@ const entryForm = reactive({
   term: entry?.term ?? '', meaning: entry?.meaning ?? '', phonetic: entry?.phonetic ?? '',
   example: entry?.example ?? '', note: entry?.note ?? '',
 })
+const changedTerm = computed(() => !!entry && normalizeTerm(entryForm.term) !== entry.normalizedTerm)
 const fields = [
   { key: 'term', label: 'Term', multiline: false, optional: false },
   { key: 'meaning', label: 'Meaning', multiline: true, optional: true },
@@ -60,6 +61,9 @@ async function save() {
             :input-props="{ id: `library-word-${field.key}`, required: !field.optional }" />
         </template>
       </template>
+      <NAlert v-if="changedTerm" type="warning">
+        Changing the spelling keeps this word’s existing review history and schedule. Add a separate word if it has a different meaning.
+      </NAlert>
       <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
       <div class="library-dialog-actions">
         <NButton :disabled="busy" @click="emit('close')">Cancel</NButton>

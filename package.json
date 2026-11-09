@@ -11,6 +11,7 @@
     "dev:api": "node --env-file-if-exists=.env --watch server/index.ts",
     "dev:web": "node --env-file-if-exists=.env node_modules/vite/bin/vite.js",
     "build": "vite build && tsc -p tsconfig.server.json",
+    "owner:init": "node --env-file-if-exists=.env server/auth/init-owner.ts",
     "start": "node --env-file-if-exists=.env dist-server/server/index.js",
     "typecheck": "vue-tsc --noEmit",
     "test": "vitest run",

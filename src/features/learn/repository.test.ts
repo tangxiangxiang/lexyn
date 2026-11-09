@@ -102,7 +102,7 @@ test('preserves existing Learn history and repairs an exhausted cursor left by a
   await database.open()
 
   await learn.advanceInvalid(sessionId, undefined)
-  expect(database.verno).toBe(4)
+  expect(database.verno).toBe(5)
   expect(await learn.result(sessionId)).toMatchObject({
     session: { status: 'completed', currentIndex: 0 }, completed: 1, firstCompleted: 1,
   })

@@ -1,7 +1,7 @@
 import { DefaultScheduler, Rating, State, type DefaultSchedulerOptions, type DefaultSchedulerCard,
   type DefaultSchedulerRevlog } from 'ts-fsrs'
 import { FSRS7Model } from 'ts-fsrs/models/fsrs-7'
-import type { ReviewCardState, ReviewEvent, ReviewRating, ReviewRevlog, ReviewSchedulerConfig } from '../domain/review'
+import type { ReviewCardState, ReviewEvent, ReviewRating, ReviewRevlog, ReviewSchedulerConfig } from '../domain/review.ts'
 
 export const FSRS_MODEL = 'FSRS-7'
 export const DEFAULT_DESIRED_RETENTION = 0.9
@@ -76,7 +76,8 @@ export function serializeRevlog(
 
 /** Replay one card's immutable events in UTC order with a stable tie-breaker. */
 export async function rebuildCardFromEvents(events: readonly ReviewEvent[]): Promise<ReviewCardState | undefined> {
-  const ordered = [...events].sort((a, b) => a.reviewedAt - b.reviewedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  const time = (event: ReviewEvent) => event.effectiveReviewedAt ?? event.reviewedAt
+  const ordered = [...events].sort((a, b) => time(a) - time(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   const schedulers = new Map<string, ReviewScheduler>()
   let card: DefaultSchedulerCard<'FSRS-7'> | undefined
   for (const event of ordered) {
@@ -94,7 +95,7 @@ export async function rebuildCardFromEvents(events: readonly ReviewEvent[]): Pro
       scheduler = await createReviewScheduler(config.options)
       schedulers.set(key, scheduler)
     }
-    const now = utcDate(event.reviewedAt)
+    const now = utcDate(time(event))
     card ??= scheduler.newCard({ now, cardId: event.cardId })
     card = scheduler.review({ card, grade: schedulerGrades[event.rating], now }).card
   }

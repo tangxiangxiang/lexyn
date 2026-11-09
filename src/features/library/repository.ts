@@ -7,11 +7,11 @@ import type { DuplicateMode, ImportPreview } from './import'
 
 const sequenceKey = 'library.outbox.sequence'
 
-function deckSnapshot({ serverRevision: _, ...deck }: DeckRecord): Deck {
+export function deckSnapshot({ serverRevision: _, ...deck }: DeckRecord): Deck {
   return deck
 }
 
-function entrySnapshot({ serverRevision: _, activeTerm: _active, ...entry }: EntryRecord): Entry {
+export function entrySnapshot({ serverRevision: _, activeTerm: _active, ...entry }: EntryRecord): Entry {
   return entry
 }
 
@@ -91,6 +91,7 @@ export function createLibraryRepository(database: LexynLocalDatabase) {
     return {
       ...(previous ? revise(previous, now) : { ...newEntity(now), deckId }),
       ...cleaned, normalizedTerm, activeTerm: normalizedTerm,
+      termChangedAt: previous && previous.normalizedTerm !== normalizedTerm ? now : previous?.termChangedAt,
     }
   }
 

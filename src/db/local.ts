@@ -2,6 +2,7 @@ import Dexie, { type EntityTable } from 'dexie'
 import type { OutboxOperation } from '../../shared/contracts/library'
 import type { Deck, Entry } from '../../shared/domain/library'
 import type { LearnProgress, LearnSession, PracticeEvent, DailyNewWords } from '../../shared/domain/learning'
+import type { SyncIssue, SyncShadow, SyncState } from '../features/sync/types'
 import type { ReviewCard, ReviewEvent, ReviewSession } from '../../shared/domain/review'
 
 export type Appearance = 'system' | 'light' | 'dark'
@@ -51,6 +52,10 @@ export class LexynLocalDatabase extends Dexie {
   review_events!: EntityTable<ReviewEvent, 'id'>
   review_sessions!: EntityTable<ReviewSession, 'sessionId'>
 
+  sync_state!: EntityTable<SyncState, 'key'>
+  sync_issues!: EntityTable<SyncIssue, 'opId'>
+  sync_shadows!: EntityTable<SyncShadow, 'key'>
+
   constructor(name = 'lexyn') {
     super(name)
     this.version(1).stores({
@@ -79,6 +84,12 @@ export class LexynLocalDatabase extends Dexie {
       review_cards: 'id, entryId, deckId, dueAt, scheduleStatus, &[entryId+direction]',
       review_events: 'id, cardId, entryId, deckId, sessionId, reviewedAt, [cardId+reviewedAt], &[sessionId+cardId]',
       review_sessions: 'sessionId, status, updatedAt',
+    })
+    this.version(5).stores({
+      sync_state: 'key',
+      sync_issues: 'opId, entityKey, status',
+      sync_shadows: 'key, dirty',
+      review_events: 'id, cardId, entryId, deckId, sessionId, reviewedAt, [cardId+reviewedAt], [sessionId+cardId]',
     })
   }
 }

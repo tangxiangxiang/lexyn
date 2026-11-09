@@ -5,6 +5,6 @@ import { readConfig } from './server/config/env.ts'
 export default defineConfig(({ command }) => ({
   plugins: [vue()],
   server: command === 'serve'
-    ? { proxy: { '/api': { target: readConfig(process.env).origin } } }
+    ? { host: '127.0.0.1', port: 5173, strictPort: true, proxy: { '/api': { target: readConfig(process.env).origin } } }
     : undefined,
 }))

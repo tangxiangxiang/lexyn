@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { NAlert, NButton, NCard, NInputNumber, NRadioButton, NRadioGroup } from 'naive-ui'
+import SyncSettings from '../sync/SyncSettings.vue'
 import AppIcon from '../../components/AppIcon.vue'
 import { useAppearance } from '../../ui/appearance'
 import { readDailyNewWords, writeDailyNewWords } from '../../db/local'
@@ -55,5 +56,6 @@ function saveDailyNewWords(value: number | null) {
         {{ dailyNewWordsError }}
       </NAlert>
     </NCard>
+    <SyncSettings />
   </section>
 </template>

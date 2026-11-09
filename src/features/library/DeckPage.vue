@@ -130,6 +130,9 @@ function exportDeck() {
             <article class="library-row">
               <div class="library-row-copy">
                 <h2>{{ entry.term }}</h2>
+                <p v-if="entry.termChangedAt !== undefined" class="library-muted">
+                  Spelling changed. Existing review history and schedule are retained.
+                </p>
                 <p v-if="entry.phonetic" class="library-muted">{{ entry.phonetic }}</p>
                 <p v-if="hasRecallPrompt(entry)" class="library-preserve">{{ entry.meaning }}</p>
                 <NTag v-else size="small" type="warning">Needs meaning</NTag>
