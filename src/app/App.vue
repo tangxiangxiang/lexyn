@@ -49,7 +49,8 @@ onMounted(async () => {
           <span>Lexyn</span>
         </RouterLink>
         <nav class="nav" aria-label="Main navigation">
-          <RouterLink v-for="item in navigation" :key="item.path" :to="item.path">
+          <RouterLink v-for="item in navigation" :key="item.path" :to="item.path"
+            :class="{ 'nav-section-active': item.path === '/library' && $route.name === 'library-deck' }">
             <AppIcon :name="item.icon" />
             <span>{{ item.title }}</span>
           </RouterLink>

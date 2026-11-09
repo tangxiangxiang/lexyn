@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import EmptyPage from '../components/EmptyPage.vue'
 import LibraryPage from '../features/library/LibraryPage.vue'
+import DeckPage from '../features/library/DeckPage.vue'
 import LearnPage from '../features/learn/LearnPage.vue'
 import ReviewPage from '../features/review/ReviewPage.vue'
 import ProgressPage from '../features/progress/ProgressPage.vue'
@@ -20,6 +21,7 @@ export const router = createRouter({
   routes: [
     { path: '/', redirect: '/library' },
     ...navigation.map(({ path, title, component }) => ({ path, component, meta: { title } })),
+    { path: '/library/:deckId', name: 'library-deck', component: DeckPage, props: true, meta: { title: 'Library' } },
     {
       path: '/:pathMatch(.*)*',
       component: EmptyPage,

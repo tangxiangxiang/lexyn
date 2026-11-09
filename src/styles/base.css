@@ -96,7 +96,7 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 }
 
 .nav a:hover { background: var(--hover-surface); }
-.nav a[aria-current="page"] { color: var(--accent); background: var(--accent-surface); }
+.nav a[aria-current="page"], .nav a.nav-section-active { color: var(--accent); background: var(--accent-surface); }
 
 .sidebar-note {
   margin: auto 4px 0;

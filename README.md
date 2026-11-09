@@ -2,7 +2,7 @@
 
 **Learn. Recall. Retain.**
 
-Lexyn 是一款面向个人的词汇学习与长期记忆工具。Phase 1 提供 Library、Learn、Review、Progress 和 Settings 五个页面的应用外壳。可以在 Settings 中切换主题，偏好会保存在当前浏览器。
+Lexyn 是一款面向个人的词汇学习与长期记忆工具。Phase 2 的 Library 可以管理单词本和词条，导入 TXT / CSV 并导出 JSON。Settings 中的主题偏好也保存在当前浏览器。
 
 ## 技术栈
 
@@ -35,6 +35,32 @@ npm run dev
 ```
 
 在 Vite 输出的地址打开应用，默认是 `http://localhost:5173`。前端支持热更新，Vite 将 `/api` 请求转发给 Hono。访问 `/api/health` 可检查服务和 SQLite。
+
+## 使用 Library
+
+1. 在 **Library** 点 **New deck**，填写名称与可选描述。点单词本名称进入详情。
+2. 点 **Add word** 添加词条，或点 **Import words** 批量导入。释义可以留空，之后通过 **Needs meaning** 找到待完善的词。
+3. 搜索框支持英文词汇和中文释义的部分匹配。用 **Removed** 恢复移除的词条，用 **Archived decks** 恢复归档的单词本。词条恢复时若已有同名活动词条，会提示冲突。
+
+导入文件使用 UTF-8，可带 BOM。每个文件最多 5 MiB、10,000 条数据记录。TXT 支持每行一个词或词组，也支持英文和释义之间使用一个 Tab。可以在预览中手动指定格式。CSV 使用逗号分隔，首行是表头。将源列映射到 `term` 和 `meaning`，后者允许空值。还可以映射 `phonetic`、`example` 和 `note`。CSV 支持字段内逗号、转义双引号和换行。
+
+```csv
+term,meaning,example
+copy-on-write,写时复制,"This uses copy-on-write, a common optimization."
+WAL,,
+```
+
+确认前可查看有效行、重复行、无效行与缺失释义数。重复比较按单词本进行，对词汇做 NFC 规范化、去除首尾空白并统一大小写。文件内保留第一条有效记录。已有词条默认跳过，显式选择覆盖时保留原 ID，并仅修改映射到的字段。无效记录会列在预览中并跳过。文件编码、CSV 结构或文件限制有问题时会阻止导入。专业词汇、缩写和词组可以直接添加。
+
+**Export library** 下载全部单词本和词条，包括归档单词本与已移除词条。详情中的 **Export deck** 只导出当前单词本及其所有词条。JSON 包含 `format: "lexyn-library"`、`formatVersion: 1`、导出时间、schema 和范围元数据，以及对象的 ID、修订号、时间戳和软删除状态。JSON 恢复安排在后续阶段。
+
+词库保存在当前浏览器配置和站点来源的 IndexedDB 中。打开页面后，词库操作可离线完成。首次加载或重新打开页面需要能访问应用。请用 localhost 或 HTTPS 访问，以便浏览器生成 UUID。清理站点数据、换浏览器配置或换访问地址会影响对原词库的访问，建议定期导出 JSON。当前词库仅保存在本设备，跨设备同步将在 Phase 5 实现。
+
+### 数据迁移与操作日志
+
+Dexie v2 在原数据库新增 `decks` 和 `entries`，保留主题偏好、同步元数据与已有 outbox。活动词条使用按单词本划分的唯一索引，移除后释放该索引，恢复时重新检查冲突。每次变更在同一事务保存业务对象与操作日志。
+
+版本 1 的操作记录包含 `opId`、`schemaVersion`、`entityId`、`kind`、完整变更后快照 `payload`、`baseRevision`、`sequence` 和 `createdAt`。创建时本地修订号为 1，`baseRevision` 为 0，此后每次变更递增 1。`sequence` 记录设备上的提交顺序。未来的服务端修订号单独存储为 `serverRevision`，相应的操作基线为 `baseServerRevision`。
 
 ## 构建与启动
 
@@ -69,8 +95,8 @@ src/
   styles/        设计变量与响应式布局
   ui/            主题状态和图标定义
 shared/
-  contracts/     HTTP 响应契约
-  domain/        练习和复习事件类型
+  contracts/     HTTP 响应、词库导出与操作日志契约
+  domain/        词库校验、练习和复习事件类型
   srs/           FSRS-7 工厂与初始化测试
 server/
   config/        运行配置
@@ -81,4 +107,4 @@ docs/            产品与技术设计基线
 .github/workflows/
 ```
 
-Phase 2 的单词本与词汇模型以 [Phase 0 产品与技术架构设计](docs/phase-0-product-architecture.md) 为起点。新增存储结构时延续 SQLite 和 Dexie 的版本迁移；开放个人数据 API 前需要先确定访问控制边界。
+后续学习、复习和同步以 [Phase 0 产品与技术架构设计](docs/phase-0-product-architecture.md) 为基线。

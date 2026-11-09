@@ -1,0 +1,72 @@
+.library-page {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.library-page .library-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.library-actions, .library-toolbar, .library-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.library-actions { flex-shrink: 0; }
+.library-back { width: fit-content; color: var(--accent); font-weight: 600; }
+.library-muted { color: var(--muted); font-size: 0.875rem; }
+.library-preserve { white-space: pre-wrap; }
+.library-list, .library-preview { list-style: none; margin: 0; padding: 0; }
+.library-list { display: grid; gap: 10px; min-width: 0; }
+.library-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.library-row-copy { min-width: 0; overflow-wrap: anywhere; }
+.library-row-copy h2 { font-size: 1.05rem; font-weight: 650; }
+.library-row-copy h2 a { text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.library-row-copy p { margin-top: 5px; }
+.library-row-copy .n-tag { margin-top: 5px; }
+
+.library-dialog {
+  width: min(600px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+}
+
+.library-form { display: grid; gap: 10px; min-width: 0; }
+.library-form label, .library-form legend { font-weight: 600; }
+.library-form small { font-weight: 400; }
+.library-form input[type="file"] { max-width: 100%; min-width: 0; }
+.library-dialog-copy { margin: 0; font-size: 0.875rem; overflow-wrap: anywhere; }
+.library-dialog-actions { justify-content: flex-end; margin-top: 8px; }
+.library-mapping {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.library-mapping span { text-transform: capitalize; }
+.library-form h3 { margin: 0 0 4px; }
+.library-preview { margin-top: 6px; }
+.library-preview li {
+  display: grid;
+  padding: 6px 0;
+  gap: 2px;
+  border-bottom: 1px solid var(--n-border-color);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 720px) {
+  .library-page .library-heading, .library-row { flex-direction: column; align-items: flex-start; }
+  .library-actions .n-button, .library-toolbar .n-button, .library-dialog-actions .n-button { min-height: 40px; }
+}
