@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
@@ -9,6 +9,7 @@ import { createApp } from '../../app.ts'
 import { initializeOwner } from '../../auth/owner.ts'
 import { openDatabase } from '../../db/database.ts'
 import { createSpeechCredentials } from '../../speech/credentials.ts'
+import { importEcdictCsv } from '../../dictionary/import.ts'
 import { createStudyStore } from '../../study/store.ts'
 
 const origin = 'http://127.0.0.1:3000'
@@ -244,4 +245,80 @@ test('reports text authorization failure separately and refuses archived work', 
   await library('archive-deck', [deckId, true, 1])
   expect((await start(path, 1, (await readJob(path)).id)).status).toBe(409)
   expect(send).toHaveBeenCalledTimes(1)
+})
+
+async function seedEcdict() {
+  const csv = join(directory, 'dictionary-fixture.csv')
+  writeFileSync(csv,
+    'word,phonetic,definition,translation,pos,collins,oxford,tag,bnc,frq,exchange,detail,audio\n' +
+    'banana,bəˈnɑːnə,,n. 香蕉,n.,,,,,,,,\n' +
+    'spring,sprɪŋ,,n. 春天,n.,,,,,,,,\n')
+  await importEcdictCsv(directory, csv, 'test-ecdict-source')
+}
+
+test('ECDICT API is protected, uses readonly lookup, and handles missing and installed states', async () => {
+  expect((await api('dictionary/status', undefined, { Cookie: '' })).status).toBe(401)
+  expect((await api('dictionary/lookup', { term: 'banana' }, { Origin: 'https://other.invalid' })).status).toBe(403)
+  expect(await (await api('dictionary/status')).json()).toMatchObject({ installed: false, wordCount: 0 })
+  await seedEcdict()
+  expect(await (await api('dictionary/status')).json()).toMatchObject({
+    installed: true, wordCount: 2, sourceCommit: 'test-ecdict-source',
+  })
+  expect(await (await api('dictionary/lookup', { term: 'banana' })).json()).toMatchObject({
+    found: true, match: 'exact', suggestedMeaning: '香蕉', needsReview: false,
+  })
+  expect(await (await api('dictionary/lookup-batch', { terms: ['banana', 'absent'] })).json()).toMatchObject([
+    { found: true, suggestedMeaning: '香蕉' }, { found: false, match: 'none' },
+  ])
+  expect((await api('dictionary/lookup', { term: '../../etc/passwd' })).status).toBe(200)
+  expect((await api('dictionary/lookup', { term: '\n' })).status).toBe(400)
+  expect((await api('dictionary/lookup-batch', { terms: Array(51).fill('banana') })).status).toBe(400)
+})
+
+test('batch saves clear ECDICT meanings and sends only contextual words to MiniMax', async () => {
+  await seedEcdict()
+  const { id: deckId } = await deck()
+  const first = await word(deckId, 'banana')
+  const ambiguous = await word(deckId, 'spring')
+  const path = 'vocabulary/batch/' + deckId
+  expect((await start(path, 2)).status).toBe(202)
+  await vi.waitFor(async () => expect((await readJob(path)).status).toBe('completed'))
+  expect(await readJob(path)).toMatchObject({
+    processed: 2, succeeded: 2, dictionarySaved: 1, aiSaved: 1, failed: 0, notFound: 0,
+  })
+  expect(snapshot(first.id)).toMatchObject({
+    term: 'banana', meaning: '香蕉', meaningSource: 'dictionary', phonetic: 'bəˈnɑːnə',
+  })
+  expect(snapshot(ambiguous.id)).toMatchObject({
+    term: 'spring', meaning: '线程', meaningSource: 'ai', phonetic: 'sprɪŋ',
+  })
+  expect(send).toHaveBeenCalledTimes(1)
+  const request = JSON.parse(String(send.mock.calls[0]?.[1]?.body))
+  const prompt = JSON.parse(request.messages[1].content)
+  expect(prompt.words).toContainEqual(expect.objectContaining({
+    term: 'spring', dictionaryHints: expect.objectContaining({ translation: 'n. 春天' }),
+  }))
+  const exported = await (await api('backup/library?args=%5Bnull%5D')).json()
+  expect(exported.data.entries).toContainEqual(expect.objectContaining({
+    id: first.id, meaningSource: 'dictionary',
+  }))
+  expect(db.prepare('SELECT count(*) FROM practice_events').pluck().get()).toBe(0)
+  expect(db.prepare('SELECT count(*) FROM review_events').pluck().get()).toBe(0)
+})
+
+test('ECDICT works without MiniMax key; unclear meanings remain untouched', async () => {
+  await seedEcdict()
+  createSpeechCredentials(db, directory).clear(headers['X-Lexyn-Owner'])
+  const { id: deckId } = await deck()
+  const clear = await word(deckId, 'banana')
+  const ambiguous = await word(deckId, 'spring')
+  const path = 'vocabulary/batch/' + deckId
+  expect((await start(path, 2)).status).toBe(202)
+  await vi.waitFor(async () => expect((await readJob(path)).status).toBe('completed'))
+  expect(await readJob(path)).toMatchObject({
+    succeeded: 1, dictionarySaved: 1, aiSaved: 0, failed: 1,
+  })
+  expect(snapshot(clear.id)).toMatchObject({ meaning: '香蕉', meaningSource: 'dictionary' })
+  expect(snapshot(ambiguous.id)).toMatchObject({ meaning: '', revision: 1 })
+  expect(send).toHaveBeenCalledTimes(0)
 })
