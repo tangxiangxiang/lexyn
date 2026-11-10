@@ -55,7 +55,7 @@ WAL,,
 
 **Export library** 下载服务器上的全部词库与学习历史，包括归档词本和已移除词条。**Export deck** 下载单个词本及其历史。JSON v4 包含每日额度、Owner 时区、复习事件和 FSRS 卡片。可在 **Settings → Data & Backup** 验证文件，再用 CLI 恢复到空实例。见 [备份与恢复](docs/backup-restore.md)。
 
-在词条编辑器点击 **AI 补全** 可直接填表，编辑后用原有 Save 操作保存。词本的 **缺少释义** 筛选支持一次确认、自动批量补全。补充解释与简短释义分别保存，复习揭晓前只显示简短释义。[AI 词汇增强](docs/vocabulary-ai.md)
+在词条编辑器点击 **查询 ECDICT** 可查看词典候选释义与音标，选用后仍需 Save 保存。**AI 补全** 继续提供语境生成。词本的 **缺少释义** 筛选一次确认后优先使用服务器 ECDICT，对未命中或需要语境判断的词再使用 MiniMax。已有释义不会自动覆盖。[ECDICT 安装及使用](docs/dictionary.md) · [AI 词汇增强](docs/vocabulary-ai.md)
 
 ## 使用 Learn
 
@@ -95,6 +95,7 @@ npm start
 
 - [NAS HTTPS、Compose 与镜像发布](docs/deployment.md)
 - [JSON 与 SQLite 备份及恢复](docs/backup-restore.md)
+- [ECDICT 独立词典安装与更新](docs/dictionary.md)
 - [PWA 安装、连接错误和代理检查](docs/pwa.md)
 
 ## 测试
@@ -130,6 +131,8 @@ server/
   auth/          Owner 初始化、登录及 Session
   study/         业务 API、服务端学习与复习事务
   backup/        JSON 验证恢复与 SQLite 在线备份
+  dictionary/    ECDICT CSV 导入、只读 SQLite 和查询 API
+  ai/vocabulary/ MiniMax 释义与词典优先批量任务
   routes/        健康检查
 e2e/             生产构建冒烟测试
 docs/            产品与技术设计基线
