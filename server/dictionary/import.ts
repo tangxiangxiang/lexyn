@@ -89,5 +89,6 @@ export async function importEcdictCsv(dataDir: string, csvPath: string, sourceCo
   } finally {
     db?.close()
     if (!swapped) rmSync(temporary, { force: true })
+    if (oldMoved && !swapped) rmSync(backup, { force: true })
   }
 }

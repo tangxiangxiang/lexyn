@@ -6,10 +6,15 @@ import type { Ecdict } from './ecdict.ts'
 export function dictionaryRoutes(dictionary: Ecdict, auth: ReturnType<typeof createAuthApi>) {
   const app = new Hono<AuthEnv>()
   app.use('*', auth.guardOrigin, auth.requireOwner, bodyLimit({
-    maxSize: 8192,
+    maxSize: 16 * 1024,
     onError: (c) => c.json({ error: { code: 'DICTIONARY_INPUT', message: 'Dictionary request too large.' } }, 413),
   }))
-  app.onError((_error, c) => c.json({ error: { code: 'DICTIONARY_INPUT', message: 'Invalid dictionary request.' } }, 400))
+  app.onError((error, c) => {
+    if (error instanceof Error && error.message === 'Invalid dictionary query.') {
+      return c.json({ error: { code: 'DICTIONARY_INPUT', message: 'Invalid dictionary query.' } }, 400)
+    }
+    return c.json({ error: { code: 'DICTIONARY_STORAGE', message: 'Dictionary lookup is temporarily unavailable.' } }, 503)
+  })
   app.get('/status', (c) => c.json(dictionary.status()))
   app.post('/lookup', async (c) => {
     if (c.req.header('Content-Type')?.split(';')[0] !== 'application/json') {

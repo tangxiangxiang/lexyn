@@ -16,7 +16,7 @@ export function suggestedMeaning(lookup: DictionaryLookup): string | undefined {
   const lines = lookup.entries[0].translation.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
   if (lines.length !== 1) return
   const line = lines[0]
-  if (/\[(?:网络|网络释义|人名)\]/.test(line) || /[；;]/.test(line) || /^</.test(line)) return
+  if (/\[(?:网络|网络释义|人名)\]/.test(line) || /[；;，,、]/.test(line) || /^</.test(line)) return
   const text = line.replace(header, '').replace(/^\[(?:计|医|法|经|化)\]\s*/, '').trim()
   if (!text || text.length > 80 || /[<>\r\n]/.test(text) || !/\p{Script=Han}/u.test(text)) return
   return text
@@ -67,8 +67,8 @@ export function createEcdict(dataDir?: string) {
     const query = term.trim().normalize('NFC')
     if (!query || query.length > 240 || /[\r\n\t\p{Cc}]/u.test(query)) throw new Error('Invalid dictionary query.')
     const rows = connection()?.prepare(
-      'SELECT word, phonetic, translation, definition, pos, tag FROM dictionary_entries WHERE lookup_key = ? LIMIT ?'
-    ).all(lookupKey(query), lookupLimit) as DictionaryEntry[] | undefined
+      'SELECT word, phonetic, translation, definition, pos, tag FROM dictionary_entries WHERE lookup_key = ? ORDER BY (word = ?) DESC, word LIMIT ?'
+    ).all(lookupKey(query), query, lookupLimit) as DictionaryEntry[] | undefined
     if (!rows?.length) return { query, found: false, match: 'none', entries: [], needsReview: false }
     const exact = rows.filter((row) => row.word === query)
     const entries = exact.length ? exact : rows
