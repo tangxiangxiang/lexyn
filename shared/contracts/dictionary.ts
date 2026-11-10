@@ -1,3 +1,5 @@
+import type { DictionaryMeaning } from '../domain/dictionary.ts'
+
 export interface DictionaryEntry {
   word: string
   phonetic: string
@@ -5,13 +7,13 @@ export interface DictionaryEntry {
   definition: string
   pos: string
   tag: string
+  dictionaryMeaning?: DictionaryMeaning
 }
 export interface DictionaryLookup {
   query: string
   found: boolean
   match: 'exact' | 'casefold' | 'none'
   entries: DictionaryEntry[]
-  suggestedMeaning?: string
   needsReview: boolean
 }
 export interface DictionaryStatus {

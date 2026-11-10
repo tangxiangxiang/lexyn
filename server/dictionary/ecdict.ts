@@ -1,29 +1,17 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
+import { dictionaryLimits } from '../../shared/domain/dictionary.ts'
+import { parseDictionaryMeaning } from './parse.ts'
 import type { DictionaryEntry, DictionaryLookup, DictionaryStatus } from '../../shared/contracts/dictionary.ts'
 
 export const dictionaryPath = (dataDir: string) => join(dataDir, 'dictionaries', 'ecdict.sqlite')
 export const lookupKey = (word: string) => word.trim().normalize('NFC').toLowerCase().normalize('NFC')
 
 const lookupLimit = 12
-const header = /^(?:n|v|vt|vi|adj|adv|a|prep|pron|conj|int|num|abbr|aux)\.\s*/i
-
-/** Never truncate arbitrary multi-sense dictionary content into a misleading review prompt. */
-export function suggestedMeaning(lookup: DictionaryLookup): string | undefined {
-  if (!lookup.found || lookup.entries.length !== 1) return
-  if (lookup.match === 'casefold' && /[A-Z]/.test(lookup.query)) return
-  const lines = lookup.entries[0].translation.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
-  if (lines.length !== 1) return
-  const line = lines[0]
-  if (/\[(?:网络|网络释义|人名)\]/.test(line) || /[；;，,、]/.test(line) || /^</.test(line)) return
-  const text = line.replace(header, '').replace(/^\[(?:计|医|法|经|化)\]\s*/, '').trim()
-  if (!text || text.length > 80 || /[<>\r\n]/.test(text) || !/\p{Script=Han}/u.test(text)) return
-  return text
-}
-
 export function createEcdict(dataDir?: string) {
   let db: Database.Database | undefined
+  let sourceRevision: string | undefined
   let error: string | undefined
   const path = dataDir ? dictionaryPath(dataDir) : undefined
 
@@ -38,6 +26,11 @@ export function createEcdict(dataDir?: string) {
         error = 'Unsupported dictionary database. Reimport ECDICT.'
         return
       }
+      try {
+        const revision = opened.prepare("SELECT value FROM dictionary_meta WHERE key = 'sourceCommit'").pluck().get()
+        sourceRevision = typeof revision === 'string' && revision.trim() && revision.length <= dictionaryLimits.sourceRevision
+          && !/\p{Cc}/u.test(revision) ? revision.trim() : undefined
+      } catch { sourceRevision = undefined }
       db = opened
       error = undefined
       return db
@@ -71,13 +64,13 @@ export function createEcdict(dataDir?: string) {
     ).all(lookupKey(query), query, lookupLimit) as DictionaryEntry[] | undefined
     if (!rows?.length) return { query, found: false, match: 'none', entries: [], needsReview: false }
     const exact = rows.filter((row) => row.word === query)
-    const entries = exact.length ? exact : rows
-    const result: DictionaryLookup = {
+    const entries = (exact.length ? exact : rows).map((row) => ({
+      ...row, dictionaryMeaning: parseDictionaryMeaning(row.word, row.translation, sourceRevision),
+    }))
+    return {
       query, found: true, match: exact.length ? 'exact' : 'casefold',
       entries, needsReview: entries.length !== 1,
     }
-    const meaning = suggestedMeaning(result)
-    return { ...result, suggestedMeaning: meaning, needsReview: result.needsReview || !meaning }
   }
   return { status, lookup, close: () => { db?.close(); db = undefined } }
 }

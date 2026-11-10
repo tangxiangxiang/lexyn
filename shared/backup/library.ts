@@ -1,4 +1,4 @@
-import type { LibraryExport } from '../contracts/library.ts'
+import { libraryFormatVersion, type LibraryExport } from '../contracts/library.ts'
 import { fields, integer, isUuid, object, time, validateCardState, validateEntity, validateEvent, validateTimezone } from '../contracts/validation.ts'
 import { stableJson } from '../contracts/json.ts'
 import type { LearnProgress } from '../domain/learning.ts'
@@ -45,7 +45,9 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
   let raw: unknown
   try { raw = JSON.parse(text) } catch { throw new Error('The file is not valid JSON.') }
   const root = object(raw)
-  requireValid(root.format === 'lexyn-library' && root.formatVersion === 4, 'Only Lexyn library backup format v4 is supported.')
+  const version = root.formatVersion
+  requireValid(root.format === 'lexyn-library' && (version === 4 || version === libraryFormatVersion),
+    'Only Lexyn library backup formats v4 and v5 are supported.')
   fields(root, 'format formatVersion exportedAt metadata decks entries practiceEvents learnProgress settings reviewCards reviewEvents schedulerConfig')
   const meta = object(root.metadata)
   fields(meta, 'scope')
@@ -63,6 +65,7 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
   requireValid(meta.scope !== 'deck' || decks.length === 1, 'A deck backup must contain exactly one deck.')
   const activeTerms = new Set<string>()
   const entries = rows<Entry>(root.entries, 'entries', (entry) => {
+    requireValid(version !== 4 || entry.dictionaryMeaning === undefined, 'Full dictionary meanings require backup format v5.')
     const id = validateEntity(entry, 'entry')
     requireValid(deckIds.has(entry.deckId as string), 'An entry refers to a missing deck.')
     if (entry.deletedAt === undefined) {

@@ -1,5 +1,5 @@
 import type { Locator, Page } from '@playwright/test'
-import { expect, test } from './fixtures'
+import { expect, fillMeaning, test } from './fixtures'
 
 async function fits(page: Page, width: number) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
@@ -22,7 +22,7 @@ for (const [width, height, touch] of [[320, 740, true], [375, 812, true], [768, 
       await fits(page, width)
       await activate(page.getByRole('button', { name: 'Add word' }))
       await page.getByLabel('Term', { exact: true }).fill('deterministic')
-      await page.getByLabel('Meaning optional').fill('确定性')
+      await fillMeaning(page, '确定性', 'adj.')
       await activate(page.getByRole('button', { name: 'Save', exact: true }))
       await activate(page.getByRole('link', { name: 'Start learning' }))
       await activate(page.getByText('Dictation', { exact: true }))

@@ -4,6 +4,7 @@ import { bodyLimit } from 'hono/body-limit'
 import type { AuthEnv, createAuthApi } from '../auth/routes.ts'
 import { fields, integer, InvalidInput, isUuid, object, validateTimezone } from '../../shared/contracts/validation.ts'
 import { stableJson } from '../../shared/contracts/json.ts'
+import { cleanDictionaryMeaning, cleanDictionaryReference, cleanPhonetics } from '../../shared/domain/dictionary.ts'
 import { LibraryError, type DeckInput, type EntryInput } from '../../shared/domain/library.ts'
 import { importFields, parseImport, previewImport, type FieldMapping, type ImportCandidate } from '../../shared/domain/library-import.ts'
 import { reviewRatings } from '../../shared/domain/review.ts'
@@ -39,8 +40,8 @@ function deckInput(value: unknown): DeckInput {
 function wordFields(value: unknown, withMeaningMetadata = false) {
   const row = object(value)
   fields(row, 'term meaning explanation phonetic pronunciationOverride example note'
-    + (withMeaningMetadata ? ' meaningSource meaningNeedsReview' : ''))
-  return { term: text(240)(row.term), meaning: optional(text(2000))(row.meaning),
+    + (withMeaningMetadata ? ' meaningSource meaningNeedsReview dictionaryMeaning dictionaryReference phonetics' : ''))
+  return { term: text(240)(row.term), meaning: optional(text(40_000))(row.meaning),
     explanation: optional(text(200))(row.explanation),
     phonetic: optional(text(240))(row.phonetic), pronunciationOverride: optional(text(240))(row.pronunciationOverride),
     example: optional(text(4000))(row.example), note: optional(text(4000))(row.note) }
@@ -51,7 +52,12 @@ function entryInput(value: unknown): EntryInput {
   const meaningSource = optional(choice('manual', 'ai', 'dictionary'))(metadata.meaningSource)
   const meaningNeedsReview = optional(bool)(metadata.meaningNeedsReview)
   if (meaningNeedsReview && meaningSource !== 'ai' && meaningSource !== 'dictionary') return invalid()
-  return { ...row, meaning: row.meaning ?? '', meaningSource, meaningNeedsReview }
+  try {
+    const dictionaryMeaning = metadata.dictionaryMeaning === null ? null : cleanDictionaryMeaning(metadata.dictionaryMeaning)
+    const dictionaryReference = metadata.dictionaryReference === null ? null : cleanDictionaryReference(metadata.dictionaryReference)
+    const phonetics = metadata.phonetics === null ? null : cleanPhonetics(metadata.phonetics)
+    return { ...row, meaning: row.meaning ?? '', meaningSource, meaningNeedsReview, dictionaryMeaning, dictionaryReference, phonetics }
+  } catch { return invalid('Invalid dictionary meaning.') }
 }
 function importCandidate(value: unknown): ImportCandidate {
   const row = object(value)
@@ -89,7 +95,7 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
   const post = <T extends unknown[], R>(args: Validators<T>, run: (...args: T) => R) => endpoint('POST', args, run, true)
   return {
     'library/decks': get([offset, limit], library.listDecks),
-    'library/deck': get([id, text(240), choice('active', 'missing', 'review', 'removed', 'all'), offset, limit], library.getDeck),
+    'library/deck': get([id, text(240), choice('active', 'missing', 'dictionary', 'review', 'removed', 'all'), offset, limit], library.getDeck),
     'library/create-deck': post([deckInput], (input) => library.createDeck(input, clock())),
     'library/update-deck': post([id, deckInput, version], (id, input, revision) => library.updateDeck(id, input, revision, clock())),
     'library/archive-deck': post([id, bool, version], (id, archived, revision) => library.setDeckArchived(id, archived, revision, clock())),

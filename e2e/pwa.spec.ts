@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { serve } from '@hono/node-server'
 import type { Page } from '@playwright/test'
-import { expect, password, signIn, studyRequest, test, username } from './fixtures'
+import { expect, fillMeaning, password, signIn, studyRequest, test, username } from './fixtures'
 import { createApp } from '../server/app'
 import { initializeOwner } from '../server/auth/owner'
 import { openDatabase } from '../server/db/database'
@@ -19,7 +19,7 @@ async function createWord(page: Page, name: string) {
   await page.getByRole('link', { name, exact: true }).click()
   await page.getByRole('button', { name: 'Add word' }).click()
   await page.getByLabel('Term', { exact: true }).fill('resilience')
-  await page.getByLabel('Meaning optional').fill('韧性')
+  await fillMeaning(page, '韧性', 'n.')
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'resilience', exact: true })).toBeVisible()
   return new URL(page.url()).pathname

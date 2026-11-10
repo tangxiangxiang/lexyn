@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test'
-import { expect, test } from './fixtures'
+import { expect, test, writeStudy } from './fixtures'
 import type Database from 'better-sqlite3'
 import type { ReviewCard, ReviewEvent, ReviewSession } from '../shared/domain/review'
 import { createReviewScheduler, rebuildCardFromEvents, restoreCard, schedulerGrades } from '../shared/srs/scheduler'
@@ -12,6 +12,7 @@ interface WordInput {
   meaning: string
   explanation?: string
   example?: string
+  fullDefinition?: string
 }
 
 async function learnWords(page: Page, words: WordInput[]) {
@@ -21,15 +22,17 @@ async function learnWords(page: Page, words: WordInput[]) {
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   await page.getByRole('link', { name: 'Review Systems' }).click()
   const deckUrl = page.url()
-  for (const { term, meaning, explanation, example } of words) {
-    await page.getByRole('button', { name: 'Add word' }).click()
-    await page.getByLabel('Term', { exact: true }).fill(term)
-    await page.getByLabel('Meaning optional').fill(meaning)
-    if (explanation) await page.getByLabel('Explanation optional').fill(explanation)
-    if (example) await page.getByLabel('Example optional').fill(example)
-    await page.getByRole('button', { name: 'Save', exact: true }).click()
-    await expect(page.getByRole('heading', { name: term, exact: true })).toBeVisible()
+  const deckId = new URL(deckUrl).pathname.split('/').at(-1)!
+  for (const { term, meaning, explanation, example, fullDefinition } of words) {
+    const definitions = [meaning, ...(fullDefinition ? [fullDefinition] : [])]
+    const response = await writeStudy(page, 'library/create-entry', [deckId, {
+      term, meaning, dictionaryMeaning: { senses: [{ partOfSpeech: 'n.', definitions, source: 'manual' }] },
+      ...(explanation ? { explanation } : {}), ...(example ? { example } : {}),
+    }])
+    expect(response.ok()).toBe(true)
   }
+  await page.goto(deckUrl)
+  for (const { term } of words) await expect(page.getByRole('heading', { name: term, exact: true })).toBeVisible()
   await page.getByRole('link', { name: 'Start learning' }).click()
   await page.getByRole('button', { name: /Learn \d new word/ }).click()
   const pending = new Set(words.map(({ term }) => term))
@@ -38,6 +41,9 @@ async function learnWords(page: Page, words: WordInput[]) {
     await expect(heading).toBeVisible()
     const term = await heading.innerText()
     expect(pending.delete(term)).toBe(true)
+    const current = words.find((word) => word.term === term)
+    const definition = current?.fullDefinition
+    if (definition) await expect(page.locator('.learn-card .dictionary-definition')).toContainText([current!.meaning, definition])
     await page.getByRole('textbox', { name: 'Copy the word' }).fill(term)
     await page.getByRole('button', { name: 'Check spelling' }).click()
     await page.getByRole('button', { name: 'Next word' }).click()
@@ -67,8 +73,8 @@ test('learns from Library, restores a revealed answer and scores on the server w
   await trackPlayback(page)
   backend.advanceTo(originTime.getTime())
   await page.clock.setFixedTime(originTime)
-  const deckUrl = await learnWords(page, [{ term: 'concurrency', meaning: '并发（Concurrency）',
-    explanation: '多个任务在重叠的时间段内推进。', example: 'Concurrency matters.' }])
+  const deckUrl = await learnWords(page, [{ term: 'concurrency', meaning: '并发',
+    explanation: '多个任务在重叠的时间段内推进。', example: 'Concurrency matters.', fullDefinition: '并行性'  }])
   expect(readReview(backend.db).events).toEqual([])
   await page.goto('/review?deckId=' + new URL(deckUrl).pathname.split('/').at(-1))
   await expect(stat(page, 'Waiting for first recall')).toHaveText('1')
@@ -76,12 +82,15 @@ test('learns from Library, restores a revealed answer and scores on the server w
   await page.getByRole('button', { name: 'Start review' }).click()
   const recall = page.locator('.review-recall')
   await expect(recall).toContainText('并发')
+  await expect(page.locator('.dictionary-definition')).toHaveCount(0)
   await expect(page.getByText('多个任务在重叠的时间段内推进。')).toHaveCount(0)
   expect(await recall.innerHTML()).not.toMatch(/concurrency/i)
   await expect(page.getByRole('button', { name: 'Good' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Play pronunciation' })).toHaveCount(0)
   await page.getByRole('button', { name: 'Show answer' }).click()
-  await expect(page.getByText('多个任务在重叠的时间段内推进。')).toBeVisible()
+  await expect(page.locator('.dictionary-definition')).toHaveText(['并发', '并行性'])
+  await expect(page.getByText('多个任务在重叠的时间段内推进。')).toHaveCount(0)
+  await expect(page.getByText('Concurrency matters.')).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'concurrency', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Play pronunciation' }).click()
   await expect(page.getByRole('button', { name: 'Pause pronunciation' })).toBeVisible()
@@ -112,6 +121,13 @@ test('learns from Library, restores a revealed answer and scores on the server w
     ...expected, scheduledDays: expect.closeTo(expected.scheduledDays, 12),
   })
   expect(sessions).toMatchObject([{ status: 'completed', currentIndex: 1 }])
+  const entry = JSON.parse(backend.db.prepare('SELECT body FROM entries').pluck().get() as string)
+  expect((await writeStudy(page, 'library/update-entry', [entry.deckId, entry.id, {
+    term: entry.term, meaning: entry.meaning,
+    dictionaryMeaning: { senses: [{ partOfSpeech: 'n.', definitions: ['并行执行'], source: 'manual' }] },
+  }, entry.revision])).ok()).toBe(true)
+  expect(readReview(backend.db)).toEqual({ events, cards, sessions })
+  expect(backend.db.prepare('SELECT count(*) FROM practice_events').pluck().get()).toBe(1)
 
   await page.getByRole('link', { name: 'Progress', exact: true }).click()
   await expect(stat(page, 'Learned for the first time today')).toHaveText('1')
@@ -134,7 +150,7 @@ test('320px flip-card review becomes eligible at the SDK due time without a data
   await learnWords(page, [{ term: 'latch', meaning: '闩锁' }])
   await openReview(page)
   await page.getByRole('button', { name: 'Start review' }).click()
-  await expect(page.getByText('闩锁', { exact: true })).toBeVisible()
+  await expect(page.locator('.review-meaning')).toContainText('闩锁')
   await page.getByRole('button', { name: 'Show answer' }).click()
   await expect(page.getByRole('heading', { name: 'latch' })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320)
@@ -155,7 +171,7 @@ test('320px flip-card review becomes eligible at the SDK due time without a data
   await page.clock.fastForward(remaining + 1005)
   await expect(stat(page, 'Due reviews')).toHaveText('1')
   await page.getByRole('button', { name: 'Start review' }).click()
-  await expect(page.getByText('闩锁', { exact: true })).toBeVisible()
+  await expect(page.locator('.review-meaning')).toContainText('闩锁')
   await expect(page.getByRole('heading', { name: 'latch' })).toHaveCount(0)
   await page.getByRole('button', { name: 'Show answer' }).click()
   await page.getByRole('button', { name: 'Good', exact: true }).click()

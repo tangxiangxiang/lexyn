@@ -1,4 +1,5 @@
 import { stableJson } from './json.ts'
+import { cleanDictionaryMeaning, cleanDictionaryReference, cleanPhonetics } from '../domain/dictionary.ts'
 import { cleanDeck, cleanEntry, normalizeTerm } from '../domain/library.ts'
 import { REVIEW_DIRECTION, reviewCardId, type ReviewCardState, type ReviewSchedulerConfig } from '../domain/review.ts'
 import { isReviewRating, restoreCard } from '../srs/scheduler.ts'
@@ -62,7 +63,7 @@ export function validateEntity(payload: Record<string, unknown>, kind: 'deck' | 
     }
     return payload.id
   }
-  fields(payload, 'id deckId term meaning meaningSource meaningNeedsReview explanation phonetic pronunciationOverride example note normalizedTerm createdAt updatedAt revision deletedAt termChangedAt')
+  fields(payload, 'id deckId term meaning dictionaryMeaning dictionaryReference phonetics meaningSource meaningNeedsReview explanation phonetic pronunciationOverride example note normalizedTerm createdAt updatedAt revision deletedAt termChangedAt')
   const term = string(payload, 'term')!
   const meaning = string(payload, 'meaning')!
   if ((payload.meaningSource !== undefined && (!meaning || (payload.meaningSource !== 'manual' && payload.meaningSource !== 'ai' && payload.meaningSource !== 'dictionary')))
@@ -73,8 +74,21 @@ export function validateEntity(payload: Record<string, unknown>, kind: 'deck' | 
   const example = string(payload, 'example', true)
   const note = string(payload, 'note', true)
   const pronunciationOverride = string(payload, 'pronunciationOverride', true)
-  const clean = cleanEntry({ term, meaning, explanation, phonetic, pronunciationOverride, example, note })
+  let dictionaryMeaning
+  let dictionaryReference
+  let phonetics
+  try { dictionaryMeaning = cleanDictionaryMeaning(payload.dictionaryMeaning) }
+  catch { throw new InvalidInput('Invalid dictionary meaning.') }
+  try {
+    dictionaryReference = cleanDictionaryReference(payload.dictionaryReference)
+    phonetics = cleanPhonetics(payload.phonetics)
+  } catch { throw new InvalidInput('Invalid dictionary reference or phonetics.') }
+  const clean = cleanEntry({ term, meaning, explanation, phonetic, pronunciationOverride, example, note,
+    dictionaryMeaning, dictionaryReference, phonetics })
   if (term !== clean.term || meaning !== clean.meaning || explanation !== clean.explanation || phonetic !== clean.phonetic
+    || stableJson(payload.dictionaryMeaning) !== stableJson(clean.dictionaryMeaning)
+    || stableJson(payload.dictionaryReference) !== stableJson(clean.dictionaryReference)
+    || stableJson(payload.phonetics) !== stableJson(clean.phonetics)
     || pronunciationOverride !== clean.pronunciationOverride || example !== clean.example || note !== clean.note || !isUuid(payload.deckId)
     || payload.normalizedTerm !== normalizeTerm(term) || (payload.deletedAt !== undefined && !time(payload.deletedAt))
     || (payload.termChangedAt !== undefined && !time(payload.termChangedAt))) {

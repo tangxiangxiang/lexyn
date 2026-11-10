@@ -22,6 +22,19 @@ export async function signIn(page: Page) {
   await expect(page.locator('.service-status')).toHaveText('Connected')
 }
 
+/** Fill the current structured meaning editor without relying on the legacy short-meaning field. */
+export async function fillMeaning(page: Page, text: string, partOfSpeech = '') {
+  const definition = page.getByLabel('Definition 1', { exact: true }).first()
+  if (await definition.count()) {
+    await definition.fill(text)
+    if (partOfSpeech) await page.getByLabel('Part of speech', { exact: true }).first().fill(partOfSpeech)
+    return
+  }
+  await page.getByRole('button', { name: 'Add meaning group', exact: true }).click()
+  if (partOfSpeech) await page.getByLabel('Part of speech', { exact: true }).first().fill(partOfSpeech)
+  await page.getByLabel('Definition 1', { exact: true }).first().fill(text)
+}
+
 export async function studyRequest(page: Page, path: string, args: unknown[] = [], key?: string) {
   const headers = { 'X-Lexyn-Client': '1' }
   const response = await page.request.get('/api/auth/session', { headers })
@@ -51,7 +64,12 @@ async function startFixture(initialOwner: boolean, speechConfigured: boolean) {
   if (!address || typeof address === 'string') throw new Error('Missing test server address.')
   const origin = `http://127.0.0.1:${address.port}`
   const speech = { requests: [] as { text: string; voice_setting: { voice_id: string } }[], failNext: false }
-  const vocabulary = { requests: [] as string[][], beforeReply: undefined as (() => Promise<void>) | undefined }
+  const vocabulary = {
+    requests: [] as string[][],
+    inputs: [] as { ref: number; term: string; currentMeaning?: { text: string }; dictionaryReference?: unknown }[][],
+    responses: [] as string[][],
+    beforeReply: undefined as (() => Promise<void>) | undefined,
+  }
   app = createApp(db, resolve('dist'), origin, () => now ?? Date.now(),
     { bootstrap: setupToken ? createBootstrapState(setupToken) : undefined }, {
       dataDir: directory,
@@ -65,12 +83,25 @@ async function startFixture(initialOwner: boolean, speechConfigured: boolean) {
       },
     }, async (_url, init) => {
       const { messages } = JSON.parse(String(init?.body))
-      const { words } = JSON.parse(messages[1].content) as { words: { ref: number; term: string }[] }
+      const { words } = JSON.parse(messages[1].content) as {
+        words: { ref: number; term: string; currentMeaning?: { text: string }; dictionaryReference?: unknown }[]
+      }
       vocabulary.requests.push(words.map(({ term }) => term))
+      vocabulary.inputs.push(words)
       await vocabulary.beforeReply?.()
-      const results = words.filter(({ term }) => term !== 'missing').reverse().map((word) => ({
-        ...word, meaning: word.term === 'queue' ? '队列' : '线程',
-        explanation: '进程中的执行单元。', example: 'Start a worker thread.', needsReview: word.term === 'thread', warning: null,
+      vocabulary.responses.push(words.map(({ term }) => term))
+      const results = words.map((word) => ({
+        ref: word.ref,
+        term: word.term,
+        senses: ['missing', 'wal'].includes(word.term.toLowerCase()) ? [] : word.term.toLowerCase() === 'banana'
+          ? [{ partOfSpeech: 'n.', definitions: [word.currentMeaning ? '香蕉的迭代释义 C' : '香蕉', '热带水果'] }]
+          : [{ partOfSpeech: 'n.', definitions: [word.term.toLowerCase() === 'queue' ? '队列'
+            : word.term.toLowerCase() === 'thread' ? word.currentMeaning ? '线程的迭代释义 C' : '线程'
+              : word.term.toLowerCase() === 'concurrency' ? '并发' : word.term.toLowerCase() === 'deadlock' ? '死锁'
+                : word.term.toLowerCase() === 'latch' ? '闩锁' : word.term.toLowerCase() === 'cache' ? '缓存'
+                  : word.term.toLowerCase() === 'mutex' ? '互斥锁' : '确定性'] }],
+        needsReview: false,
+        warning: ['missing', 'wal'].includes(word.term.toLowerCase()) ? '无法确定可靠释义' : null,
       }))
       return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ results }) } }] })
     })

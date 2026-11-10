@@ -1,10 +1,13 @@
 <script setup lang="ts">
+import DictionaryMeaningView from '../dictionary/DictionaryMeaningView.vue'
+import PhoneticsView from '../dictionary/PhoneticsView.vue'
 import { t, translateError } from '../../i18n/useI18n'
 import { computed, nextTick, ref, watch } from 'vue'
 import { NAlert, NButton, NCard, NInput, NSelect } from 'naive-ui'
 import { useRoute, useRouter } from 'vue-router'
 import { isSpellingCorrect } from '../../../shared/domain/learning'
 import { reviewRatings, type ReviewRating } from '../../../shared/domain/review'
+import { hasFinalMeaning } from '../../../shared/domain/dictionary'
 import PronunciationButton from '../speech/PronunciationButton.vue'
 import { useLibraryQuery } from '../library/useLibraryQuery'
 import { review } from './api'
@@ -148,10 +151,9 @@ function selectDeck(id: string | null) {
         </template>
         <template v-else-if="round.word.answer">
           <h2 class="review-term">{{ round.word.answer.term }}</h2>
-          <p class="review-meaning" lang="zh">{{ round.word.answer.meaning }}</p>
-          <p v-if="round.word.answer.phonetic" class="library-muted">{{ round.word.answer.phonetic }}</p>
-          <p v-if="round.word.answer.explanation" class="library-muted library-preserve">{{ round.word.answer.explanation }}</p>
-          <blockquote v-if="round.word.answer.example" class="review-example">{{ round.word.answer.example }}</blockquote>
+          <DictionaryMeaningView v-if="hasFinalMeaning(round.word.answer.dictionaryMeaning)" :meaning="round.word.answer.dictionaryMeaning!" />
+          <p v-else class="review-meaning" lang="zh">{{ round.word.answer.meaning }}</p>
+          <PhoneticsView :phonetics="round.word.answer.phonetics" :legacy="round.word.answer.phonetic" />
           <PronunciationButton :entry-id="round.word.answer.id" :revision="round.word.answer.revision" label="Play pronunciation" />
           <p v-if="spellCheck !== undefined" role="status">
             {{ spellCheck ? t('Your spelling matches.') : t('Your spelling differs.') }} {{ t('Choose the rating that reflects your recall.') }}

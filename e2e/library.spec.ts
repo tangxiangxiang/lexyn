@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import type { Page } from '@playwright/test'
-import { expect, signIn, test } from './fixtures'
+import { expect, fillMeaning, signIn, test } from './fixtures'
 import type { LibraryExport } from '../shared/contracts/library'
 
 async function createDeck(page: Page, name: string) {
@@ -13,7 +13,7 @@ async function createDeck(page: Page, name: string) {
 async function addWord(page: Page, term: string, meaning = '') {
   await page.getByRole('button', { name: 'Add word' }).click()
   await page.getByLabel('Term', { exact: true }).fill(term)
-  await page.getByLabel('Meaning optional', { exact: true }).fill(meaning)
+  if (meaning) await fillMeaning(page, meaning)
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   await expect(page.getByRole('heading', { name: term, exact: true })).toBeVisible()
 }
@@ -26,7 +26,7 @@ async function expectNoOverflow(page: Page) {
   }
 }
 
-test('edits, searches, removes, restores and archives on a 320px viewport', async ({ page }) => {
+test('edits, searches, removes, restores and archives on a 320px viewport', async ({ page, backend }) => {
   await page.setViewportSize({ width: 320, height: 740 })
   await page.goto('/library')
   await createDeck(page, 'Computer English')
@@ -41,6 +41,8 @@ test('edits, searches, removes, restores and archives on a 320px viewport', asyn
   await expect(page.getByRole('heading', { level: 1, name: 'Systems English' })).toBeVisible()
   await addWord(page, 'Deadlock', '死锁')
   await addWord(page, 'WAL')
+  await expect.poll(() => backend.db.prepare("SELECT revision FROM entries WHERE active_term = 'deadlock'").pluck().get()).toBe(2)
+  await page.reload()
   await expectNoOverflow(page)
 
   const search = page.getByLabel('Search words or meanings')
@@ -60,7 +62,7 @@ test('edits, searches, removes, restores and archives on a 320px viewport', asyn
   const deadlock = page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'Deadlock', exact: true }) })
   await deadlock.getByRole('button', { name: 'Edit word' }).click()
   await expectNoOverflow(page)
-  await page.getByLabel('Meaning optional', { exact: true }).fill('死锁，循环等待')
+  await fillMeaning(page, '死锁，循环等待')
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   await expect(deadlock.getByText('死锁，循环等待')).toBeVisible()
   await deadlock.getByRole('button', { name: 'Remove word' }).click()
@@ -124,7 +126,7 @@ test('previews TXT and CSV, explicitly overwrites duplicates and downloads full 
   ])
   const exported: LibraryExport = JSON.parse(await readFile(await download.path(), 'utf8'))
   expect(exported).toMatchObject({
-    format: 'lexyn-library', formatVersion: 4, metadata: { scope: 'library' },
+    format: 'lexyn-library', formatVersion: 5, metadata: { scope: 'library' },
     settings: { dailyNewWords: 10, timezone: 'UTC' },
     decks: [{ name: 'Computer English', archivedAt: expect.any(Number), revision: 2 }],
   })

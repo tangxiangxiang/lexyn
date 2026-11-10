@@ -103,7 +103,7 @@ function stop() {
           <p>{{ t('Saved {saved} · failed {failed} · skipped {skipped} · suggested checks {checks}', {
             saved: job.succeeded, failed: job.failed, skipped: job.skipped, checks: job.needsReview,
           }) }}</p>
-          <p v-if="job.dictionarySaved !== undefined">{{ t('ECDICT saved {dictionary} · AI saved {ai} · not found {missing}', {
+          <p v-if="job.dictionarySaved !== undefined">{{ t('AI optimized {ai} · ECDICT reference {dictionary} · not found {missing}', {
             dictionary: job.dictionarySaved, ai: job.aiSaved ?? 0, missing: job.notFound ?? 0,
           }) }}</p>
           <p v-if="job.conflicts">{{ t('{count} skipped because the words changed', { count: job.conflicts }) }}</p>
@@ -111,10 +111,10 @@ function stop() {
           <NButton v-if="running" :disabled="busy" @click="stop">{{ t('Stop AI task') }}</NButton>
         </template>
         <template v-if="!running && !loadError">
-          <p>{{ t('ECDICT first; MiniMax AI when necessary. Existing meanings are never replaced.') }}</p>
+          <p>{{ t('Every selected word is optimized by MiniMax using its latest saved meaning and ECDICT as reference when available.') }}</p>
           <p>{{ t('Text model: {model}', { model: plan.model }) }}</p>
           <p v-if="count">
-            {{ t('{missing} words need a meaning in this deck. This task will process up to {count}, with a limit of {limit} per task. Generation may use MiniMax credits.',
+            {{ t('{missing} words need a structured meaning in this deck. This task will process up to {count}, with a limit of {limit} per task. Generation may use MiniMax credits.',
               { missing: plan.missing, count, limit: plan.limit }) }}
           </p>
           <p v-else>{{ t('No words need a meaning') }}</p>

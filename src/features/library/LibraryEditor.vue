@@ -1,159 +1,130 @@
 <script setup lang="ts">
+import { computed, reactive, ref, watch } from 'vue'
+import { NAlert, NButton, NInput } from 'naive-ui'
 import { t, translateError } from '../../i18n/useI18n'
-import { computed, onScopeDispose, reactive, ref, watch } from 'vue'
-import { NAlert, NButton, NInput, NTag } from 'naive-ui'
-import { entryLimits, normalizeTerm, type Deck, type Entry } from '../../../shared/domain/library'
+import { meaningFromSenses, type DictionaryMeaning, type PhoneticVariants } from '../../../shared/domain/dictionary'
+import { normalizeTerm, type Deck, type Entry } from '../../../shared/domain/library'
+import { refreshStudy } from '../../api/client'
+import DictionaryMeaningEditor from '../dictionary/DictionaryMeaningEditor.vue'
 import LibraryDialog from './LibraryDialog.vue'
 import { useLibraryAction } from './library-ui'
 import { library } from './api'
-import { vocabularyLimits } from '../../../shared/contracts/vocabulary'
 import { vocabulary } from './vocabulary-api'
-import { dictionary } from './dictionary-api'
-import type { DictionaryLookup } from '../../../shared/contracts/dictionary'
 
 const props = defineProps<{ editor: { type: 'deck'; deck?: Deck } | { type: 'entry'; deckId: string; entry?: Entry } }>()
 const emit = defineEmits<{ close: []; saved: [message: string] }>()
-const { editor } = props
+const editor = props.editor
 const deck = editor.type === 'deck' ? editor.deck : undefined
 const entry = editor.type === 'entry' ? editor.entry : undefined
 const title = editor.type === 'deck' ? (deck ? 'Edit deck' : 'New deck') : (entry ? 'Edit word' : 'Add word')
 const deckForm = reactive({ name: deck?.name ?? '', description: deck?.description ?? '' })
-const entryForm = reactive({
-  term: entry?.term ?? '', meaning: entry?.meaning ?? '', phonetic: entry?.phonetic ?? '',
-  pronunciationOverride: entry?.pronunciationOverride ?? '',
-  explanation: entry?.explanation ?? '',
-  example: entry?.example ?? '', note: entry?.note ?? '',
+const legacyMeaning: DictionaryMeaning | undefined = entry?.meaning.trim()
+  ? { senses: [{ partOfSpeech: '', definitions: [entry.meaning], source: 'manual' }] }
+  : undefined
+const initialMeaning = entry?.dictionaryMeaning?.senses.some(({ source }) => source !== 'ecdict')
+  ? entry.dictionaryMeaning : legacyMeaning
+const fullMeaning = ref<DictionaryMeaning | undefined>(initialMeaning)
+const phonetics = reactive({
+  british: entry?.phonetics?.british ?? '',
+  american: entry?.phonetics?.american ?? '',
+  unspecified: entry?.phonetics?.unspecified ?? entry?.phonetic ?? '',
 })
-const changedTerm = computed(() => !!entry && normalizeTerm(entryForm.term) !== entry.normalizedTerm)
-const fields = [
-  { key: 'term', label: 'Term', multiline: false, optional: false },
-  { key: 'meaning', label: 'Meaning', multiline: true, optional: true },
-  { key: 'explanation', label: 'Explanation', multiline: true, optional: true },
-  { key: 'phonetic', label: 'Phonetic', multiline: false, optional: true },
-  { key: 'pronunciationOverride', label: 'Pronunciation override', multiline: false, optional: true },
-  { key: 'example', label: 'Example', multiline: true, optional: true },
-  { key: 'note', label: 'Note', multiline: true, optional: true },
-] as const
+const entryForm = reactive({ term: entry?.term ?? '' })
+const hint = ref('')
+const entryRevision = ref(entry?.revision ?? 0)
+const meaningText = computed(() => meaningFromSenses(fullMeaning.value?.senses ?? []))
 const { busy, error, run } = useLibraryAction()
 const ai = useLibraryAction()
 const aiBusy = ai.busy
 const aiError = ai.error
-const hint = ref('')
-const generatedFields = ['meaning', 'explanation', 'example'] as const
-const edits = { meaning: 0, explanation: 0, example: 0 }
-const generatedMeaning = ref<{ needsReview: boolean; warning: string | null }>()
-const meaningOrigin = ref<'ai' | 'dictionary'>()
-const dictionaryLoading = ref(false)
-const dictionaryError = ref('')
-const dictionaryResult = ref<DictionaryLookup>()
-const dictionaryChoice = ref('')
-let dictionaryRequest: AbortController | undefined
-let pending: AbortController | undefined
+const snapshot = () => JSON.stringify({ term: entryForm.term, phonetics, senses: fullMeaning.value?.senses ?? [] })
+let savedSnapshot = snapshot()
+const dirty = computed(() => snapshot() !== savedSnapshot)
 
-function stopGeneration() {
-  pending?.abort()
-  pending = undefined
-  aiError.value = ''
-}
-watch(() => entryForm.term, () => {
-  stopGeneration()
-  generatedMeaning.value = undefined
-  meaningOrigin.value = undefined
-  dictionaryRequest?.abort()
-  dictionaryResult.value = undefined
-  dictionaryChoice.value = ''
+watch(() => entryForm.term, (term) => {
+  if (!entry || normalizeTerm(term) === entry.normalizedTerm) return
+  fullMeaning.value = undefined
+  phonetics.british = ''
+  phonetics.american = ''
+  phonetics.unspecified = ''
 }, { flush: 'sync' })
-for (const field of generatedFields) {
-  watch(() => entryForm[field], () => {
-    edits[field]++
-    if (field === 'meaning') { generatedMeaning.value = undefined; meaningOrigin.value = undefined }
-  }, { flush: 'sync' })
-}
-onScopeDispose(() => { stopGeneration(); dictionaryRequest?.abort() })
 
-async function generate() {
-  if (editor.type !== 'entry' || aiBusy.value || !entryForm.term.trim()) return
-  stopGeneration()
-  const controller = new AbortController()
-  pending = controller
-  const before = { ...edits }
+function normalizedPhonetics(): PhoneticVariants | undefined {
+  const result = Object.fromEntries(Object.entries(phonetics).map(([key, value]) => [key, value.trim()]).filter(([, value]) => value))
+  return Object.keys(result).length ? result as PhoneticVariants : undefined
+}
+
+function payload() {
+  const senses = (fullMeaning.value?.senses ?? []).map((sense) => ({ ...sense,
+    partOfSpeech: sense.partOfSpeech.trim(), domain: sense.domain?.trim() || undefined,
+    definitions: [...new Set(sense.definitions.map((text) => text.trim()).filter(Boolean))],
+  })).filter((sense) => sense.definitions.length)
+  const dictionaryMeaning = senses.length ? { ...fullMeaning.value, senses } as DictionaryMeaning : undefined
+  return {
+    term: entryForm.term,
+    meaning: dictionaryMeaning ? meaningFromSenses(dictionaryMeaning.senses) : '',
+    dictionaryMeaning: dictionaryMeaning ?? null,
+    phonetics: normalizedPhonetics() ?? null,
+    // Retain the historical generic phonetic field for existing speech clients and backups.
+    phonetic: phonetics.unspecified.trim(),
+    meaningSource: senses.some(({ source }) => source === 'manual') ? 'manual' as const : 'ai' as const,
+  }
+}
+
+function applyEntry(value: Entry) {
+  entryRevision.value = value.revision
+  entryForm.term = value.term
+  fullMeaning.value = value.dictionaryMeaning?.senses.some(({ source }) => source !== 'ecdict')
+    ? value.dictionaryMeaning
+    : value.meaning.trim() ? { senses: [{ partOfSpeech: '', definitions: [value.meaning], source: 'manual' }] } : undefined
+  phonetics.british = value.phonetics?.british ?? ''
+  phonetics.american = value.phonetics?.american ?? ''
+  phonetics.unspecified = value.phonetics?.unspecified ?? value.phonetic ?? ''
+  savedSnapshot = snapshot()
+}
+
+async function optimize() {
+  if (editor.type !== 'entry' || !entry || aiBusy.value) return
   await ai.run(async () => {
-    try {
-      const generated = await vocabulary.generate({ deckId: editor.deckId, term: entryForm.term,
-        hint: hint.value.trim() || undefined, entryId: entry?.id, revision: entry?.revision }, controller.signal)
-      if (controller.signal.aborted) return
-      for (const field of generatedFields) {
-        if (edits[field] !== before[field] || !generated[field]) continue
-        entryForm[field] = generated[field]
-        if (field === 'meaning') {
-          generatedMeaning.value = { needsReview: generated.needsReview, warning: generated.warning }
-          meaningOrigin.value = 'ai'
-        }
-      }
-    } catch (error) {
-      if (!controller.signal.aborted) throw error
-    } finally {
-      if (pending === controller) pending = undefined
+    let revision = entryRevision.value
+    if (dirty.value) {
+      const saved = await library.updateEntry(editor.deckId, entry.id, payload(), revision)
+      applyEntry(saved)
+      revision = saved.revision
     }
+    const before = snapshot()
+    const updated = await vocabulary.optimize({ entryId: entry.id, revision, hint: hint.value.trim() || undefined })
+    if (snapshot() !== before) throw new Error('Your edits changed while AI was working. Save them and retry.')
+    applyEntry(updated)
+    await refreshStudy()
   })
-}
-
-async function lookUpDictionary() {
-  if (editor.type !== 'entry' || !entryForm.term.trim() || dictionaryLoading.value) return
-  dictionaryRequest?.abort()
-  const controller = new AbortController()
-  dictionaryRequest = controller
-  const queried = entryForm.term
-  dictionaryError.value = ''
-  dictionaryResult.value = undefined
-  dictionaryChoice.value = ''
-  dictionaryLoading.value = true
-  try {
-    const status = await dictionary.status(controller.signal)
-    if (!status.installed) throw new Error('ECDICT is not installed on this server.')
-    const found = await dictionary.lookup(queried, controller.signal)
-    if (controller.signal.aborted || entryForm.term !== queried) return
-    dictionaryResult.value = found
-    dictionaryChoice.value = found.suggestedMeaning ?? ''
-  } catch (cause) {
-    if (!controller.signal.aborted) dictionaryError.value = cause instanceof Error ? cause.message : 'Dictionary lookup failed.'
-  } finally {
-    if (dictionaryRequest === controller) { dictionaryRequest = undefined; dictionaryLoading.value = false }
-  }
-}
-
-function useDictionaryMeaning() {
-  const found = dictionaryResult.value
-  const meaning = dictionaryChoice.value.trim()
-  if (!found?.found || !meaning || meaning.length > vocabularyLimits.meaning || entryForm.term !== found.query) return
-  entryForm.meaning = meaning
-  meaningOrigin.value = 'dictionary'
-  generatedMeaning.value = { needsReview: found.needsReview || meaning !== found.suggestedMeaning, warning: null }
-  if (!entryForm.phonetic.trim() && found.entries[0]?.phonetic) {
-    entryForm.phonetic = found.entries[0].phonetic.slice(0, entryLimits.phonetic)
-  }
 }
 
 async function save() {
-  stopGeneration()
-  const result = await run(async () => {
+  if (aiBusy.value) return
+  const saved = await run(async () => {
     if (editor.type === 'deck') {
       if (deck) await library.updateDeck(deck.id, deckForm, deck.revision)
       else await library.createDeck(deckForm)
-      return deck ? 'Deck updated.' : 'Deck created.'
+      return { message: deck ? 'Deck updated.' : 'Deck created.' }
     }
-    const input = { ...entryForm, meaningSource: meaningOrigin.value,
-      meaningNeedsReview: generatedMeaning.value?.needsReview || undefined }
-    if (entry) await library.updateEntry(editor.deckId, entry.id, input, entry.revision)
-    else await library.createEntry(editor.deckId, input)
-    return entry ? 'Word updated.' : 'Word added.'
+    if (entry) {
+      const updated = await library.updateEntry(editor.deckId, entry.id, payload(), entryRevision.value)
+      applyEntry(updated)
+      return { message: 'Word updated.' }
+    }
+    const created = await library.createEntry(editor.deckId, payload())
+    // Save first and let the server start AI work asynchronously. Missing credentials or an AI outage
+    // never undo the word the user just added.
+    void vocabulary.auto(created.id, created.revision).catch(() => undefined).finally(() => refreshStudy())
+    return { message: 'Word added.' }
   })
-  if (result) emit('saved', result)
+  if (saved) emit('saved', saved.message)
 }
 </script>
 
 <template>
-  <LibraryDialog :title="t(title)" :busy="busy" @close="emit('close')">
+  <LibraryDialog :title="t(title)" :busy="busy || aiBusy" @close="emit('close')">
     <form class="library-form" @submit.prevent="save">
       <template v-if="editor.type === 'deck'">
         <label for="library-deck-name">{{ t('Deck name') }}</label>
@@ -164,51 +135,52 @@ async function save() {
           :input-props="{ id: 'library-deck-description' }" />
       </template>
       <template v-else>
-        <template v-for="field in fields" :key="field.key">
-          <label :for="`library-word-${field.key}`">{{ t(field.label) }} <small v-if="field.optional">{{ t('optional') }}</small></label>
-          <NInput v-model:value="entryForm[field.key]" :type="field.multiline ? 'textarea' : 'text'" :rows="2"
-            :maxlength="entryLimits[field.key]" :disabled="busy"
-            :input-props="{ id: `library-word-${field.key}`, required: !field.optional }"
-            :placeholder="field.key === 'pronunciationOverride' ? t('For example: J V M') : undefined" />
-          <div v-if="field.key === 'meaning'" class="library-form">
-            <NInput v-model:value="hint" :maxlength="vocabularyLimits.context" :disabled="busy || aiBusy"
-              :placeholder="t('Context hint (optional)')" :input-props="{ 'aria-label': t('Context hint (optional)') }" />
-            <div class="library-actions">
-              <NButton :loading="dictionaryLoading" :disabled="busy || dictionaryLoading || !entryForm.term.trim()" @click="lookUpDictionary">
-                {{ t('Look up in ECDICT') }}
-              </NButton>
-              <NButton :loading="aiBusy" :disabled="busy || aiBusy || !entryForm.term.trim()" @click="generate">
-                {{ t(entry ? 'Regenerate with AI' : 'Fill with AI') }}
-              </NButton>
-              <NTag v-if="generatedMeaning?.needsReview" size="small">{{ t('Suggested check') }}</NTag>
-            </div>
-            <NAlert v-if="dictionaryError" type="error" role="alert">{{ translateError(dictionaryError) }}</NAlert>
-            <div v-if="dictionaryResult" class="library-form">
-              <p v-if="!dictionaryResult.found" class="library-muted">{{ t('Not found in ECDICT') }}</p>
-              <template v-else>
-                <p class="library-muted">{{ t('Dictionary meanings (select a concise sense):') }}</p>
-                <p v-for="row in dictionaryResult.entries" :key="row.word" class="library-muted library-preserve">{{ row.word }} · {{ row.translation }}</p>
-                <label for="dictionary-meaning-choice">{{ t('Selected dictionary meaning') }}</label>
-                <NInput v-model:value="dictionaryChoice" :maxlength="vocabularyLimits.meaning"
-                  :input-props="{ id: 'dictionary-meaning-choice' }" :disabled="busy" />
-                <NButton :disabled="busy || !dictionaryChoice.trim()" @click="useDictionaryMeaning">
-                  {{ t('Use dictionary meaning') }}
-                </NButton>
-              </template>
-            </div>
-            <NAlert v-if="aiError" type="error" role="alert">{{ translateError(aiError) }}</NAlert>
-            <p v-if="generatedMeaning?.warning" class="library-muted">{{ generatedMeaning.warning }}</p>
-          </div>
-        </template>
+        <label for="library-word-term">{{ t('Term') }}</label>
+        <NInput v-model:value="entryForm.term" :maxlength="240" :disabled="busy || aiBusy"
+          :input-props="{ id: 'library-word-term', required: true }" />
+
+        <fieldset class="phonetic-set" :disabled="busy || aiBusy">
+          <legend>{{ t('Phonetic') }} <small>{{ t('optional') }}</small></legend>
+          <label for="library-phonetic-british">{{ t('British') }}</label>
+          <NInput v-model:value="phonetics.british" :maxlength="240"
+            :input-props="{ id: 'library-phonetic-british', 'aria-label': t('British phonetic') }" />
+          <label for="library-phonetic-american">{{ t('American') }}</label>
+          <NInput v-model:value="phonetics.american" :maxlength="240"
+            :input-props="{ id: 'library-phonetic-american', 'aria-label': t('American phonetic') }" />
+          <label for="library-phonetic-unspecified">{{ t('Unspecified') }}</label>
+          <NInput v-model:value="phonetics.unspecified" :maxlength="240"
+            :input-props="{ id: 'library-phonetic-unspecified', 'aria-label': t('Unspecified phonetic') }" />
+        </fieldset>
+
+        <label>{{ t('Meaning') }}</label>
+        <DictionaryMeaningEditor :meaning="fullMeaning" :disabled="busy || aiBusy" @change="fullMeaning = $event" />
+        <p v-if="!meaningText" class="library-muted">{{ t('No meaning saved yet. The word will be kept if generation fails.') }}</p>
+        <NInput v-if="entry" v-model:value="hint" :maxlength="240" :disabled="busy || aiBusy"
+          :placeholder="t('Context hint (optional)')" :input-props="{ 'aria-label': t('Context hint (optional)') }" />
+        <NAlert v-if="aiError" type="error" role="alert">
+          {{ translateError(aiError) }}
+          <NButton text :disabled="busy || aiBusy" @click="optimize">{{ t('Retry AI optimization') }}</NButton>
+        </NAlert>
+        <div v-if="entry" class="library-actions">
+          <NButton :loading="aiBusy" :disabled="busy || aiBusy" @click="optimize">
+            {{ t(dirty ? 'Save and optimize with AI' : 'Optimize with AI') }}
+          </NButton>
+        </div>
       </template>
-      <NAlert v-if="changedTerm" type="warning">
-        {{ t('Changing the spelling keeps this word’s existing review history and schedule. Add a separate word if it has a different meaning.') }}
-      </NAlert>
       <NAlert v-if="error" type="error" role="alert">{{ translateError(error) }}</NAlert>
-      <div class="library-dialog-actions">
-        <NButton :disabled="busy" @click="emit('close')">{{ t('Cancel') }}</NButton>
-        <NButton type="primary" attr-type="submit" :loading="busy">{{ t('Save') }}</NButton>
+      <div class="library-actions">
+        <NButton :disabled="busy || aiBusy" @click="emit('close')">{{ t('Cancel') }}</NButton>
+        <NButton type="primary" attr-type="submit" :loading="busy" :disabled="busy || aiBusy">{{ t('Save') }}</NButton>
       </div>
     </form>
   </LibraryDialog>
 </template>
+
+<style scoped>
+.phonetic-set { display: grid; grid-template-columns: minmax(6rem, .35fr) minmax(0, 1fr); align-items: center; gap: .5rem .75rem; min-width: 0; margin: 0; border: 1px solid var(--border); border-radius: .5rem; }
+.phonetic-set legend { padding: 0 .35rem; font-weight: 600; }
+.phonetic-set label { color: var(--muted); }
+@media (max-width: 520px) {
+  .phonetic-set { grid-template-columns: minmax(0, 1fr); }
+}
+</style>

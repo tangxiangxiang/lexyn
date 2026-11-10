@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test'
-import { expect, test } from './fixtures'
+import { expect, fillMeaning, test, writeStudy } from './fixtures'
 import type { LearnSession, PracticeEvent } from '../shared/domain/learning'
 import type Database from 'better-sqlite3'
 
@@ -23,10 +23,9 @@ async function makeDeckWithWords(page: Page, spellingHints = false) {
   for (const [term, meaning] of [['concurrency', '并发'], ['deadlock', '死锁']]) {
     await page.getByRole('button', { name: 'Add word' }).click()
     await page.getByLabel('Term', { exact: true }).fill(term)
-    await page.getByLabel('Meaning optional', { exact: true }).fill(spellingHints ? term + ' ' + meaning : meaning)
+    await fillMeaning(page, spellingHints ? term + ' ' + meaning : meaning)
     if (spellingHints) {
-      await page.getByLabel('Phonetic optional', { exact: true }).fill(term)
-      await page.getByLabel('Example optional', { exact: true }).fill('An example with ' + term)
+      await page.getByLabel('Unspecified phonetic', { exact: true }).fill(term)
     }
     await page.getByRole('button', { name: 'Save', exact: true }).click()
     await expect(page.getByRole('heading', { name: term })).toBeVisible()
@@ -101,6 +100,13 @@ test('keeps dictation hints out of the DOM until submission or reveal and restor
   await trackPlayback(page)
   await page.reload()
   await makeDeckWithWords(page, true)
+  const deckId = new URL(page.url()).pathname.split('/').at(-1)!
+  const entry = JSON.parse(backend.db.prepare("SELECT body FROM entries WHERE active_term = 'concurrency'").pluck().get() as string)
+  const dictionaryMeaning = { senses: [{ partOfSpeech: 'n.', definitions: ['并行推进 concurrency'], source: 'manual' }] }
+  expect((await writeStudy(page, 'library/update-entry', [deckId, entry.id, {
+    term: entry.term, meaning: entry.meaning, phonetic: entry.phonetic,
+    example: 'An example with concurrency', dictionaryMeaning,
+  }, entry.revision])).ok()).toBe(true)
   await page.getByRole('link', { name: 'Start learning' }).click()
   await page.getByText('Dictation', { exact: true }).click()
   await page.getByRole('button', { name: 'Learn 2 new words' }).click()
@@ -131,6 +137,7 @@ test('keeps dictation hints out of the DOM until submission or reveal and restor
   const reveal = page.getByRole('button', { name: 'Reveal answer' })
   await reveal.dblclick()
   await expect(card.getByRole('heading', { name: 'concurrency' })).toBeVisible()
+  await expect(card.locator('.dictionary-definition')).toHaveText('并行推进 concurrency')
   await expect(reveal).toHaveCount(0)
   await expect(page.locator('.learn-practice-area [role="alert"]')).toContainText('Answer revealed')
   expect(records(backend.db, 'practice_events')).toEqual([])
@@ -241,7 +248,7 @@ test('retries speech and releases audio on word and route changes', async ({ pag
   await answer.fill('concurrency')
   await answer.press('Enter')
   await page.getByRole('button', { name: 'Next word' }).click()
-  await expect(page.getByText('死锁', { exact: true })).toBeVisible()
+  await expect(page.locator('.learn-meaning')).toContainText('死锁')
   expect(await page.evaluate(() => window.lexynAudio.revoked)).toHaveLength(1)
 
   await play.click()

@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import DictionaryMeaningView from '../dictionary/DictionaryMeaningView.vue'
+import PhoneticsView from '../dictionary/PhoneticsView.vue'
 import { t, translateError } from '../../i18n/useI18n'
 import { computed, nextTick, ref, watch } from 'vue'
 import { NAlert, NButton, NCard, NEmpty, NInput, NInputNumber, NProgress, NRadioButton, NRadioGroup, NSelect } from 'naive-ui'
 import { useRoute, useRouter } from 'vue-router'
 import type { Entry as EntryRecord } from '../../../shared/domain/library'
+import { hasFinalMeaning } from '../../../shared/domain/dictionary'
 import type { LearnMode } from '../../../shared/domain/learning'
 import { compareSpelling, isSpellingCorrect, normalizeSpelling } from '../../../shared/domain/learning'
 import { writeDailyNewWords } from '../../api/client'
@@ -317,20 +320,17 @@ async function saveDailyWords(value: number | null) {
           <span>{{ current.session.currentIndex + 1 }} / {{ current.session.entryIds.length }}</span>
         </div>
         <NProgress type="line" :percentage="progressValue" :show-indicator="false" :aria-label="t('Session progress')" />
-        <p v-if="meaning" class="learn-meaning">{{ meaning }}</p>
+        <DictionaryMeaningView v-if="answerVisible && hasFinalMeaning(current.entry.dictionaryMeaning)" :meaning="current.entry.dictionaryMeaning!" />
+        <p v-else-if="meaning" class="learn-meaning">{{ meaning }}</p>
         <p v-else-if="!current.entry.meaning" class="learn-meaning learn-muted">{{ t('Meaning not added yet') }}</p>
-        <p v-if="answerVisible && current.entry.phonetic" class="learn-phonetic">{{ current.entry.phonetic }}</p>
+        <PhoneticsView v-if="answerVisible" :phonetics="current.entry.phonetics" :legacy="current.entry.phonetic" />
         <p v-if="!isCopy && answerVisible" class="learn-overline">{{ t('Answer revealed') }}</p>
         <h2 v-if="answerVisible" class="learn-term">{{ current.entry.term }}</h2>
-        <p v-if="answerVisible && current.entry.explanation" class="library-muted library-preserve">{{ current.entry.explanation }}</p>
         <PronunciationButton :entry-id="activeWord.id" :revision="activeWord.revision" :scope="wordKey + '/' + current.session.mode"
           :disabled="busy" :preload="!isCopy" :label="isCopy ? 'Play pronunciation' : 'Play English pronunciation'" />
         <p v-if="current.session.mode === 'dictation'" class="library-muted">
-          {{ t('Listen to the word. The English example stays hidden during dictation.') }}
+          {{ t('Listen to the word. The English spelling stays hidden during dictation.') }}
         </p>
-        <blockquote v-if="current.session.mode === 'copy' && current.entry.example" class="learn-example">
-          {{ current.entry.example }}
-        </blockquote>
         <div class="learn-practice-area">
           <NButton v-if="!isCopy" text :disabled="busy" @click="switchToCopy(current.session)">{{ t('Switch to Copy') }}</NButton>
           <NInput ref="inputElement" v-model:value="input" :readonly="busy" :disabled="submittedCorrectly" :input-props="{

@@ -6,6 +6,7 @@ import { expect, test } from 'vitest'
 import { prepareLibraryRestore } from '../../shared/backup/library.ts'
 import type { LibraryExport } from '../../shared/contracts/library.ts'
 import { REVIEW_DIRECTION, reviewCardId, type ReviewEvent } from '../../shared/domain/review.ts'
+import { meaningFromSenses } from '../../shared/domain/dictionary.ts'
 import { createReviewScheduler, schedulerConfigSnapshot, schedulerGrades, serializeCard, serializeRevlog } from '../../shared/srs/scheduler.ts'
 import { createApp } from '../app.ts'
 import { initializeOwner, createAuth } from '../auth/owner.ts'
@@ -53,7 +54,7 @@ test('rejects corrupted or incomplete v4 JSON without accepting partial history'
   expect(result.reviewChanges[0].card.schedulerState).toEqual(good.reviewCards[0].schedulerState)
   expect(result.reviewChanges[0].card.dueAt).toBeGreaterThan(good.reviewEvents[0].reviewedAt)
   await expect(prepareLibraryRestore('{')).rejects.toThrow('not valid JSON')
-  await expect(parse({ ...good, formatVersion: 2 })).rejects.toThrow('format v4')
+  await expect(parse({ ...good, formatVersion: 2 })).rejects.toThrow('formats v4 and v5')
   await expect(parse({ ...good, entries: [] })).rejects.toThrow('missing entry')
   await expect(parse({ ...good, reviewEvents: [] })).rejects.toThrow('incomplete')
   await expect(parse({ ...good, reviewEvents: [...good.reviewEvents, ...good.reviewEvents] })).rejects.toThrow('Duplicate ID')
@@ -70,7 +71,19 @@ test('rolls back JSON restore including library and history and retries into the
   const db = openDatabase(directory)
   try {
     await initializeOwner(db, 'test-admin', 'test-owner-password')
-    const plan = await parse(await fixture())
+    const backup = await fixture()
+    const dictionaryMeaning = { sourceWord: 'audit', sourceRevision: 'fixture', rawTranslation: 'n. 审计\\n[计] 审核',
+      senses: [{ partOfSpeech: 'n.', definitions: ['审计'], source: 'ecdict' as const },
+        { partOfSpeech: 'vt.', definitions: ['检查'], domain: '财务', source: 'manual' as const }] }
+    backup.entries[0].dictionaryMeaning = dictionaryMeaning
+    backup.entries[0].dictionaryReference = { sourceWord: 'audit', sourceRevision: 'fixture',
+      translation: dictionaryMeaning.rawTranslation, definition: 'to examine records', partOfSpeech: 'n. vt.', phonetic: 'ˈɔːdɪt' }
+    backup.entries[0].meaning = meaningFromSenses(dictionaryMeaning.senses)
+    await expect(parse(backup)).rejects.toThrow('require backup format v5')
+    backup.formatVersion = 5
+    const plan = await parse(backup)
+    const broken = { ...dictionaryMeaning, senses: [{ partOfSpeech: 'n.', definitions: ['x'.repeat(1001)], source: 'ai' }] }
+    await expect(parse({ ...backup, entries: [{ ...backup.entries[0], dictionaryMeaning: broken }] })).rejects.toThrow('Invalid dictionary meaning')
     db.exec("CREATE TRIGGER fail_restore BEFORE INSERT ON review_events BEGIN SELECT RAISE(ABORT, 'restore fault'); END")
     expect(() => restoreLibrary(db, plan)).toThrow('restore fault')
     for (const table of ['decks', 'entries', 'practice_events', 'review_events', 'review_cards', 'learn_progress', 'owner_settings']) {
@@ -79,6 +92,10 @@ test('rolls back JSON restore including library and history and retries into the
     db.exec('DROP TRIGGER fail_restore')
     restoreLibrary(db, plan)
     expect(db.prepare('SELECT count(*) FROM review_events').pluck().get()).toBe(1)
+    expect(JSON.parse(db.prepare("SELECT json_extract(body, '$.dictionaryMeaning') FROM entries").pluck().get() as string))
+      .toEqual(dictionaryMeaning)
+    expect(JSON.parse(db.prepare("SELECT json_extract(body, '$.dictionaryReference') FROM entries").pluck().get() as string))
+      .toEqual(backup.entries[0].dictionaryReference)
     expect(db.prepare("SELECT json_extract(body, '$.pronunciationOverride') FROM entries").pluck().get()).toBe('aw dit')
     expect(db.prepare("SELECT json_extract(body, '$.explanation') FROM entries").pluck().get()).toBe('系统化地检查记录。')
     expect(db.prepare("SELECT json_extract(body, '$.meaningSource'), json_extract(body, '$.meaningNeedsReview') FROM entries").raw().get())

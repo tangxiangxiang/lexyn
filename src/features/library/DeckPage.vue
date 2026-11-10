@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import DictionaryMeaningView from '../dictionary/DictionaryMeaningView.vue'
+import PhoneticsView from '../dictionary/PhoneticsView.vue'
 import { t, translateError } from '../../i18n/useI18n'
 import { computed, ref, watch } from 'vue'
 import { NAlert, NButton, NCard, NEmpty, NInput, NTag } from 'naive-ui'
 import { RouterLink } from 'vue-router'
 import { hasRecallPrompt, type Entry } from '../../../shared/domain/library'
+import { hasFinalMeaning } from '../../../shared/domain/dictionary'
 import LibraryConfirm from './LibraryConfirm.vue'
 import LibraryEditor from './LibraryEditor.vue'
 import LibraryImport from './LibraryImport.vue'
@@ -15,10 +18,11 @@ import { useLibraryQuery } from './useLibraryQuery'
 
 const props = defineProps<{ deckId: string }>()
 const { busy, error, run } = useLibraryAction()
-const filter = ref<'active' | 'missing' | 'review' | 'removed'>('active')
+const filter = ref<'active' | 'missing' | 'dictionary' | 'review' | 'removed'>('active')
 const filters = [
   { value: 'active', label: 'All words' },
   { value: 'missing', label: 'Needs meaning' },
+  { value: 'dictionary', label: 'Needs full meanings' },
   { value: 'review', label: 'Suggested check' },
   { value: 'removed', label: 'Removed' },
 ] as const
@@ -116,12 +120,13 @@ function exportDeck() {
       <div class="library-toolbar" :aria-label="t('Word filters')">
         <NButton v-for="option in filters" :key="option.value" secondary :aria-pressed="filter === option.value"
           :type="filter === option.value ? 'primary' : 'default'" @click="filter = option.value">{{ t(option.label) }}</NButton>
-        <VocabularyBatch v-if="!archived" :key="deckId" :deck-id="deckId" :show-entry="filter === 'missing'" />
+        <VocabularyBatch v-if="!archived" :key="deckId" :deck-id="deckId" :show-entry="filter === 'missing' || filter === 'dictionary'" />
       </div>
       <NCard v-if="!visible.length">
         <NEmpty :description="query.trim() ? t('No words match this search')
           : filter === 'removed' ? t('No removed words')
           : filter === 'review' ? t('No words suggested for checking')
+          : filter === 'dictionary' ? t('No words need full meanings')
           : filter === 'missing' ? t('No words need a meaning') : t('This deck has no words yet')" />
       </NCard>
       <ul v-else class="library-list" :aria-label="t('Words')">
@@ -133,13 +138,10 @@ function exportDeck() {
                 <p v-if="entry.termChangedAt !== undefined" class="library-muted">
                   {{ t('Spelling changed. Existing review history and schedule are retained.') }}
                 </p>
-                <p v-if="entry.phonetic" class="library-muted">{{ entry.phonetic }}</p>
-                <p v-if="hasRecallPrompt(entry)" class="library-preserve">{{ entry.meaning }}</p>
-                <NTag v-else size="small" type="warning">{{ t('Needs meaning') }}</NTag>
-                <NTag v-if="entry.meaningNeedsReview" size="small">{{ t('Suggested check') }}</NTag>
-                <p v-if="entry.explanation" class="library-muted library-preserve">{{ entry.explanation }}</p>
-                <p v-if="entry.example" class="library-muted library-preserve">{{ entry.example }}</p>
-                <p v-if="entry.note" class="library-muted library-preserve">{{ t('Note: {note}', { note: entry.note }) }}</p>
+                <PhoneticsView :phonetics="entry.phonetics" :legacy="entry.phonetic" />
+                <DictionaryMeaningView v-if="hasFinalMeaning(entry.dictionaryMeaning)" :meaning="entry.dictionaryMeaning!" />
+                <p v-else-if="hasRecallPrompt(entry)" class="library-preserve">{{ entry.meaning }}</p>
+                <NTag v-if="!hasRecallPrompt(entry)" size="small" type="warning">{{ t('Needs meaning') }}</NTag>
               </div>
               <div v-if="!archived" class="library-actions">
                 <NButton v-if="filter === 'removed'" secondary :disabled="busy" @click="restoreWord(entry)">{{ t('Restore word') }}</NButton>

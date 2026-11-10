@@ -1,12 +1,10 @@
-export const vocabularyTaskLimit = 1000
-export const vocabularyLimits = { meaning: 80, explanation: 200, example: 240, warning: 160, context: 240 }
+import type { DictionarySense } from '../domain/dictionary.ts'
 
-export interface VocabularyFields {
-  meaning: string
-  explanation: string
-  example: string
-}
-export interface VocabularyCandidate extends VocabularyFields {
+export const vocabularyTaskLimit = 1000
+export const vocabularyLimits = { warning: 160, context: 240 }
+
+export interface VocabularyCandidate {
+  senses: DictionarySense[]
   needsReview: boolean
   warning: string | null
 }

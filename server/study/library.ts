@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import type { LibraryExport } from '../../shared/contracts/library.ts'
+import { stableJson } from '../../shared/contracts/json.ts'
+import { hasFinalMeaning } from '../../shared/domain/dictionary.ts'
+import { libraryFormatVersion, type LibraryExport } from '../../shared/contracts/library.ts'
 import { cleanDeck, cleanEntry, normalizeTerm, type Deck, type DeckInput, type Entry, type EntryInput } from '../../shared/domain/library.ts'
 import type { LearnProgress, PracticeEvent } from '../../shared/domain/learning.ts'
 import type { ReviewEvent, ReviewSchedulerConfig } from '../../shared/domain/review.ts'
@@ -9,6 +11,13 @@ import { checkRevision, StudyError, type StudyStore } from './store.ts'
 const newEntity = (now: number) => ({ id: randomUUID(), createdAt: now, updatedAt: now, revision: 1 })
 const revise = <T extends Deck | Entry>(value: T, now: number) =>
   ({ ...value, updatedAt: Math.max(value.updatedAt, now), revision: value.revision + 1 })
+
+function legacyDictionaryReference(entry?: Entry) {
+  const meaning = entry?.dictionaryMeaning
+  if (!meaning?.sourceWord || meaning.rawTranslation === undefined) return undefined
+  return { sourceWord: meaning.sourceWord, sourceRevision: meaning.sourceRevision, translation: meaning.rawTranslation,
+    definition: '', partOfSpeech: '', phonetic: '' }
+}
 
 export function createLibraryService(store: StudyStore, config: ReviewSchedulerConfig) {
   function requireDeck(id: string, active = true) {
@@ -28,14 +37,32 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
     if (entry && entry.id !== except) throw new StudyError('This deck already has an active word with that term.', 409)
   }
   function makeEntry(deckId: string, input: EntryInput, now: number, previous?: Entry): Entry {
-    const fields = cleanEntry(input)
+    const sameTerm = previous !== undefined && normalizeTerm(previous.term) === normalizeTerm(input.term)
+    const supplied = input.dictionaryMeaning
+    const legacyChanged = sameTerm && supplied === undefined && previous.meaning !== input.meaning && hasFinalMeaning(previous.dictionaryMeaning)
+    const legacyEdit = legacyChanged && input.meaning.trim() && input.meaning.length <= 1000
+      ? { senses: [{ partOfSpeech: '', definitions: [input.meaning], source: 'manual' as const }] } : undefined
+    const dictionaryMeaning = supplied === undefined && sameTerm ? (legacyChanged ? legacyEdit : previous?.dictionaryMeaning)
+      : !sameTerm && previous?.dictionaryMeaning && supplied && stableJson(supplied) === stableJson(previous.dictionaryMeaning)
+        ? undefined : supplied
+    const dictionaryReference = input.dictionaryReference === undefined && sameTerm
+      ? previous?.dictionaryReference ?? legacyDictionaryReference(previous) : input.dictionaryReference
+    const phonetics = input.phonetics === undefined && sameTerm ? previous?.phonetics : input.phonetics
+    const fields = cleanEntry({ ...input,
+      explanation: input.explanation ?? previous?.explanation,
+      example: input.example ?? previous?.example,
+      note: input.note ?? previous?.note,
+      pronunciationOverride: input.pronunciationOverride ?? previous?.pronunciationOverride,
+      phonetic: input.phonetic ?? previous?.phonetic,
+      dictionaryMeaning, dictionaryReference, phonetics })
     const normalizedTerm = normalizeTerm(fields.term)
     const sameMeaning = previous?.meaning === fields.meaning
     const meaningSource = fields.meaning ? (sameMeaning ? previous.meaningSource : input.meaningSource ?? 'manual') : undefined
     const needsReview = sameMeaning ? previous.meaningNeedsReview : input.meaningNeedsReview
     return {
       ...(previous ? revise(previous, now) : { ...newEntity(now), deckId }),
-      ...fields, normalizedTerm,
+      ...fields, dictionaryMeaning: fields.dictionaryMeaning ?? undefined,
+      dictionaryReference: fields.dictionaryReference ?? undefined, phonetics: fields.phonetics ?? undefined, normalizedTerm,
       meaningSource, meaningNeedsReview: (meaningSource === 'ai' || meaningSource === 'dictionary') && needsReview ? true : undefined,
       termChangedAt: previous && previous.normalizedTerm !== normalizedTerm ? now : previous?.termChangedAt,
     }
@@ -52,7 +79,7 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       return [...summaries.values()].sort((a, b) => b.modifiedAt - a.modifiedAt || a.deck.id.localeCompare(b.deck.id))
         .slice(offset, offset + limit)
     },
-    getDeck(id: string, query: string, filter: 'active' | 'missing' | 'review' | 'removed' | 'all', offset: number, limit: number) {
+    getDeck(id: string, query: string, filter: 'active' | 'missing' | 'dictionary' | 'review' | 'removed' | 'all', offset: number, limit: number) {
       const deck = store.deck(id)
       if (!deck) return null
       const words = store.entries(id)
@@ -60,8 +87,10 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       const matches = words.filter((word) => {
         if (filter !== 'all' && (word.deletedAt !== undefined) !== (filter === 'removed')) return false
         if (filter === 'missing' && word.meaning.trim()) return false
+        if (filter === 'dictionary' && hasFinalMeaning(word.dictionaryMeaning)) return false
         if (filter === 'review' && !word.meaningNeedsReview) return false
         return !text || word.normalizedTerm.includes(text) || normalizeTerm(word.meaning).includes(text)
+          || !!word.dictionaryMeaning?.senses.some(({ definitions }) => definitions.some((meaning) => normalizeTerm(meaning).includes(text)))
       }).sort((a, b) => a.normalizedTerm.localeCompare(b.normalizedTerm) || a.id.localeCompare(b.id))
       return { deck, entries: matches.slice(offset, offset + limit), total: matches.length,
         activeCount: words.filter((word) => word.deletedAt === undefined).length }
@@ -100,6 +129,7 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       const entry = makeEntry(deckId, { ...input, explanation: input.explanation ?? previous.explanation }, now, previous)
       unique(deckId, entry.normalizedTerm, id)
       store.saveEntry(entry)
+      return entry
     },
     setEntryRemoved(deckId: string, id: string, removed: boolean, revision: number, now: number) {
       const entry = requireEntry(deckId, id)
@@ -135,7 +165,7 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       const entries = store.entries(deckId)
       const ids = new Set(entries.map(({ id }) => id))
       return {
-        format: 'lexyn-library', formatVersion: 4, exportedAt: new Date().toISOString(),
+        format: 'lexyn-library', formatVersion: libraryFormatVersion, exportedAt: new Date().toISOString(),
         metadata: { scope: deckId ? 'deck' : 'library' },
         decks, entries,
         practiceEvents: store.all<PracticeEvent>('SELECT body FROM practice_events').filter(({ entryId }) => ids.has(entryId)),

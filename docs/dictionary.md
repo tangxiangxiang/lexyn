@@ -21,7 +21,7 @@ npm run dictionary:import -- /absolute/path/to/ecdict.csv <ECDICT-commit-SHA>
 
 导入工具流式解析 CSV，支持带引号字段与多行译文；按批次事务写入独立临时 SQLite，创建查询索引，运行 integrity_check，再替换词典文件。失败不会删除或修改 Lexyn 用户词库。已经打开的只读词典连接需要重启 Lexyn 才会重新读取新的词典文件。
 
-在 Settings → Dictionary 可查看安装状态、词条数和来源版本；在 Library 的新增或编辑词条界面点击 Look up in ECDICT（查询 ECDICT）进行查询。
+在 **Settings → Dictionary** 可查看安装状态、词条数和来源版本。业务页面只使用按单词匹配的服务器参考，不提供原始词典浏览器。
 
 ## Docker / NAS（以后部署使用）
 
@@ -39,17 +39,17 @@ node dist-server/server/dictionary/cli.js /import/ecdict.csv <ECDICT-commit-SHA>
 
 应使用 docker compose run --rm 或等价方式，确保同一个 lexyn-data 卷可写且主应用未占用维护锁。不要把约 66MB CSV 复制进容器内只有 32MB 的 /tmp tmpfs。导入完成后重启 Lexyn。
 
-SQLite Online Backup 只备份 lexyn.sqlite，不自动包含 dictionaries/ecdict.sqlite。可在 NAS 上单独备份该词典文件，或者保存官方 CSV 与 SHA-256，以便重新生成。词条已保存的释义与来源标签仍会进入 Lexyn JSON v4。
+SQLite Online Backup 只备份 lexyn.sqlite，不自动包含 dictionaries/ecdict.sqlite。可在 NAS 上单独备份该词典文件，或者保存官方 CSV 与 SHA-256，以便重新生成。词条已保存的释义与来源标签仍会进入 Lexyn JSON v5。
 
-## 释义选择策略
+## ECDICT 与最终释义
 
-1. 单词编辑器可以查询词典原始翻译及音标，选择或编辑简短候选，再通过 Save 保存，不会自动覆盖现有手工释义。
-2. 在缺少释义筛选中启动批量补全，优先使用 ECDICT 单行、简短且明显无歧义的中文释义，记为 meaningSource: dictionary。
-3. 未收录、复杂多义词或 Core Java 等专业语境下风险较高的词会交给 MiniMax，并只提交单词相关的有限词典参考，生成结果记为 meaningSource: ai。
-4. 未配置 MiniMax 时，明确词义仍可由 ECDICT 独立补全；其余词保留未补全状态，绝不猜测用户要记忆的词义。
-5. ECDICT 与独立的 MiniMax TTS 不相互依赖。查询词典不会自动修改 ReviewEvent、PracticeEvent 或 FSRS。
-
-本地 CSV 原始翻译可能包含大量多义、词性和网络释义，不应直接复制成长篇 Review 提示。词库一律以最终保存到 Entry.meaning 的简短释义为学习依据。
+- ECDICT 是可选、只读的生成参考。日常 Library、Learn、Review 和词条编辑器不直接展示原始词典内容，也不会把解析后的 ECDICT 内容直接当作最终释义。
+- 新词保存后，服务器异步调用 MiniMax。词典已安装时，请求同时包含该词的 ECDICT 原文；未安装或未收录时，MiniMax 可独立生成。词典导入、查询和 AI 释义都不会改写 ECDICT 数据库。
+- 词条保存的 `Entry.meaning` 是结构化释义的完整文本投影。`Entry.dictionaryMeaning` 保存最终的词性、完整义项、来源和生成元信息；`Entry.dictionaryReference` 保存用于该词的 ECDICT 原文快照及版本。两者随 JSON v5 导出和恢复。
+- ECDICT 解析依据显式词性与领域标记，兼容 CSV 中实际换行和字面 `\\n`。标准列表中的逗号可拆为多个义项；括号、引号和有歧义的子句保留为原始片段。解析结果只作为 AI 输入，最终结构由模型生成并经服务端校验。
+- 再次优化释义时，服务端读取当前最新保存的完整释义作为主要输入，并附上 ECDICT 原文作为辅助依据。人工修改与 AI 生成没有来源优先级；每次保存递增 Entry revision。若 AI 响应返回时 revision 已变化，会拒绝写入并保留较新的释义。
+- Library、Learn 和 Review 读取最终完整释义；Review 正面显示完整中文释义，揭晓后显示英文答案和完整释义。旧 `explanation`、`example`、`note` 字段仍可兼容保存，但不在日常学习界面展示。
+- ECDICT 通用音标只写入未区分音标字段，不推断英音或美音。英美音标由词条数据明确提供时分别显示；没有可靠音标时隐藏音标区域。MiniMax TTS 与音标数据完全独立。
 
 ## 验证
 
@@ -62,4 +62,4 @@ npm run build
 npm run test:e2e
 ~~~
 
-完整 CSV 的真实导入耗时、磁盘空间占用和释义质量需要在手动安装之后验收。
+CI 使用符合 ECDICT CSV 格式的小型 Fixture 验证导入、解析、只读参考、生成及备份往返，不下载完整词典，也不调用真实付费 API。完整 ECDICT 的安装耗时、磁盘占用和不同词条的释义质量需在目标服务器安装后抽样核对。
