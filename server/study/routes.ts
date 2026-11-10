@@ -48,9 +48,9 @@ function wordFields(value: unknown, withMeaningMetadata = false) {
 function entryInput(value: unknown): EntryInput {
   const row = wordFields(value, true)
   const metadata = object(value)
-  const meaningSource = optional(choice('manual', 'ai'))(metadata.meaningSource)
+  const meaningSource = optional(choice('manual', 'ai', 'dictionary'))(metadata.meaningSource)
   const meaningNeedsReview = optional(bool)(metadata.meaningNeedsReview)
-  if (meaningNeedsReview && meaningSource !== 'ai') return invalid()
+  if (meaningNeedsReview && meaningSource !== 'ai' && meaningSource !== 'dictionary') return invalid()
   return { ...row, meaning: row.meaning ?? '', meaningSource, meaningNeedsReview }
 }
 function importCandidate(value: unknown): ImportCandidate {

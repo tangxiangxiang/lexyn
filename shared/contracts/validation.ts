@@ -65,9 +65,9 @@ export function validateEntity(payload: Record<string, unknown>, kind: 'deck' | 
   fields(payload, 'id deckId term meaning meaningSource meaningNeedsReview explanation phonetic pronunciationOverride example note normalizedTerm createdAt updatedAt revision deletedAt termChangedAt')
   const term = string(payload, 'term')!
   const meaning = string(payload, 'meaning')!
-  if ((payload.meaningSource !== undefined && (!meaning || (payload.meaningSource !== 'manual' && payload.meaningSource !== 'ai')))
+  if ((payload.meaningSource !== undefined && (!meaning || (payload.meaningSource !== 'manual' && payload.meaningSource !== 'ai' && payload.meaningSource !== 'dictionary')))
     || (payload.meaningNeedsReview !== undefined && (typeof payload.meaningNeedsReview !== 'boolean'
-      || (payload.meaningNeedsReview && payload.meaningSource !== 'ai')))) throw new InvalidInput('Invalid meaning metadata.')
+      || (payload.meaningNeedsReview && payload.meaningSource !== 'ai' && payload.meaningSource !== 'dictionary')))) throw new InvalidInput('Invalid meaning metadata.')
   const explanation = string(payload, 'explanation', true)
   const phonetic = string(payload, 'phonetic', true)
   const example = string(payload, 'example', true)

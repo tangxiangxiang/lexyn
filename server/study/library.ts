@@ -36,7 +36,7 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
     return {
       ...(previous ? revise(previous, now) : { ...newEntity(now), deckId }),
       ...fields, normalizedTerm,
-      meaningSource, meaningNeedsReview: meaningSource === 'ai' && needsReview ? true : undefined,
+      meaningSource, meaningNeedsReview: (meaningSource === 'ai' || meaningSource === 'dictionary') && needsReview ? true : undefined,
       termChangedAt: previous && previous.normalizedTerm !== normalizedTerm ? now : previous?.termChangedAt,
     }
   }

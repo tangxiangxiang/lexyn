@@ -20,6 +20,7 @@
     "backup:verify": "node --env-file-if-exists=.env dist-server/server/backup/cli.js verify",
     "backup:restore": "node --env-file-if-exists=.env dist-server/server/backup/cli.js restore",
     "backup:restore-json": "node --env-file-if-exists=.env dist-server/server/backup/cli.js restore-json",
+    "dictionary:import": "node --env-file-if-exists=.env server/dictionary/cli.ts",
     "owner:init:production": "node dist-server/server/auth/init-owner.js"
   },
   "dependencies": {

@@ -17,7 +17,7 @@ export interface Deck extends LocalEntity, DeckInput {
 export interface EntryInput {
   term: string
   meaning: string
-  meaningSource?: 'manual' | 'ai'
+  meaningSource?: 'manual' | 'ai' | 'dictionary'
   meaningNeedsReview?: boolean
   phonetic?: string
   explanation?: string

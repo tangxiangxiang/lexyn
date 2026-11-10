@@ -22,6 +22,9 @@ export interface VocabularyJob {
   skipped: number
   conflicts: number
   needsReview: number
+  dictionarySaved?: number
+  aiSaved?: number
+  notFound?: number
   createdAt: number
   updatedAt: number
   error?: string
