@@ -283,6 +283,7 @@ test('batch saves clear ECDICT meanings and sends only contextual words to MiniM
   const path = 'vocabulary/batch/' + deckId
   expect((await start(path, 2)).status).toBe(202)
   await vi.waitFor(async () => expect((await readJob(path)).status).toBe('completed'))
+  expect((await readJob(path)).error).toBeUndefined()
   expect(await readJob(path)).toMatchObject({
     processed: 2, succeeded: 2, dictionarySaved: 1, aiSaved: 1, failed: 0, notFound: 0,
   })
