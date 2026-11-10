@@ -10,7 +10,7 @@ import { writeDailyNewWords } from '../../api/client'
 import { useLibraryQuery } from '../library/useLibraryQuery'
 import { useLibraryAction } from '../library/library-ui'
 import { learn, type LearnSessionRecord } from './api'
-import { useSpeech } from './speech'
+import PronunciationButton from '../speech/PronunciationButton.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -43,8 +43,6 @@ const meaning = computed(() => {
   if (!hint || answerVisible.value) return hint
   return normalizeSpelling(hint).includes(normalizeSpelling(expected.value)) ? undefined : hint
 })
-const { available: speechAvailable, canPlay, message: speechMessage, speaking: speechSpeaking, speak } =
-  useSpeech(() => isCopy.value ? '' : expected.value)
 const feedback = computed(() => {
   const answer = isCopy.value ? input.value : lastSubmitted.value
   return answer ? compareSpelling(expected.value, answer) : []
@@ -260,16 +258,11 @@ async function saveDailyWords(value: number | null) {
               <NRadioButton value="dictation">{{ t('Dictation') }}</NRadioButton>
             </NRadioGroup>
           </div>
-          <NAlert v-if="mode === 'dictation' && !speechAvailable" type="warning">
-            {{ t('Dictation needs an English voice on this device.') }} {{ t(speechMessage) }} {{ t('Choose Copy to continue without speech.') }}
-          </NAlert>
           <div class="learn-actions">
-            <NButton type="primary" :disabled="!selectedDeckId || !eligibleCount || !dailyRemaining
-              || (mode === 'dictation' && !speechAvailable)" @click="beginNewWords(mode)">
+            <NButton type="primary" :disabled="!selectedDeckId || !eligibleCount || !dailyRemaining" @click="beginNewWords(mode)">
               {{ t(newWordCount === 1 ? 'Learn {count} new word' : 'Learn {count} new words', { count: newWordCount }) }}
             </NButton>
-            <NButton v-if="selectedDeckId && repeatCount" secondary
-              :disabled="mode === 'dictation' && !speechAvailable" @click="beginPractice(mode)">
+            <NButton v-if="selectedDeckId && repeatCount" secondary @click="beginPractice(mode)">
               {{ t(repeatCount === 1 ? 'Practice {count} learned word' : 'Practice {count} learned words', { count: repeatCount }) }}
             </NButton>
           </div>
@@ -329,6 +322,8 @@ async function saveDailyWords(value: number | null) {
         <p v-if="answerVisible && current.entry.phonetic" class="learn-phonetic">{{ current.entry.phonetic }}</p>
         <p v-if="!isCopy && answerVisible" class="learn-overline">{{ t('Answer revealed') }}</p>
         <h2 v-if="answerVisible" class="learn-term">{{ current.entry.term }}</h2>
+        <PronunciationButton :entry-id="activeWord.id" :revision="activeWord.revision" :scope="wordKey + '/' + current.session.mode"
+          :disabled="busy" :label="isCopy ? 'Play pronunciation' : 'Play English pronunciation'" />
         <p v-if="current.session.mode === 'dictation'" class="library-muted">
           {{ t('Listen to the word. The English example stays hidden during dictation.') }}
         </p>
@@ -336,12 +331,7 @@ async function saveDailyWords(value: number | null) {
           {{ current.entry.example }}
         </blockquote>
         <div class="learn-practice-area">
-          <NButton v-if="current.session.mode === 'dictation'" :disabled="!canPlay || busy"
-            @click="speak">{{ speechSpeaking ? t('Playing…') : t('Play English pronunciation') }}</NButton>
-          <p v-if="current.session.mode === 'dictation' && !speechAvailable" class="learn-voice-message">
-            {{ t(speechMessage) }}
-            <NButton text :disabled="busy" @click="switchToCopy(current.session)">{{ t('Switch to Copy') }}</NButton>
-          </p>
+          <NButton v-if="!isCopy" text :disabled="busy" @click="switchToCopy(current.session)">{{ t('Switch to Copy') }}</NButton>
           <NInput ref="inputElement" v-model:value="input" :readonly="busy" :disabled="submittedCorrectly" :input-props="{
               'aria-label': isCopy ? t('Copy the word') : t('Type the dictated word'),
               autocomplete: 'off', autocapitalize: 'off', spellcheck: false, enterkeyhint: 'done',

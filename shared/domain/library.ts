@@ -18,6 +18,7 @@ export interface EntryInput {
   term: string
   meaning: string
   phonetic?: string
+  pronunciationOverride?: string
   example?: string
   note?: string
 }
@@ -29,7 +30,7 @@ export interface Entry extends LocalEntity, EntryInput {
   termChangedAt?: number
 }
 
-export const entryLimits = { term: 240, meaning: 2000, phonetic: 240, example: 4000, note: 4000 }
+export const entryLimits = { term: 240, meaning: 2000, phonetic: 240, pronunciationOverride: 240, example: 4000, note: 4000 }
 
 export function normalizeTerm(term: string) {
   return term.trim().normalize('NFC').toLowerCase().normalize('NFC')
@@ -57,10 +58,13 @@ export function cleanEntry(input: EntryInput): EntryInput {
   const term = clean(input.term, entryLimits.term, 'Term')
   if (!term) throw new LibraryError('Enter a term.')
   if (/[\r\n\t]/.test(term)) throw new LibraryError('A term must fit on one line and contain no tabs.')
+  const pronunciationOverride = clean(input.pronunciationOverride, entryLimits.pronunciationOverride, 'Pronunciation override')
+  if (/[\r\n\t]|<#/.test(pronunciationOverride)) throw new LibraryError('Use a single line of pronunciation text without pause markers.')
   return {
     term,
     meaning: clean(input.meaning, entryLimits.meaning, 'Meaning'),
     phonetic: clean(input.phonetic, entryLimits.phonetic, 'Phonetic') || undefined,
+    pronunciationOverride: pronunciationOverride || undefined,
     example: clean(input.example, entryLimits.example, 'Example') || undefined,
     note: clean(input.note, entryLimits.note, 'Note') || undefined,
   }

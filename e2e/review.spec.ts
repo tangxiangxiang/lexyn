@@ -3,6 +3,7 @@ import { expect, test } from './fixtures'
 import type Database from 'better-sqlite3'
 import type { ReviewCard, ReviewEvent, ReviewSession } from '../shared/domain/review'
 import { createReviewScheduler, rebuildCardFromEvents, restoreCard, schedulerGrades } from '../shared/srs/scheduler'
+import { trackPlayback } from './mock-speech'
 
 const originTime = new Date('2026-10-01T12:00:00.000Z')
 
@@ -61,6 +62,7 @@ function stat(page: Page, label: string) {
 }
 
 test('learns from Library, restores a revealed answer and scores on the server with real Progress data', async ({ page, backend }) => {
+  await trackPlayback(page)
   backend.advanceTo(originTime.getTime())
   await page.clock.setFixedTime(originTime)
   const deckUrl = await learnWords(page, [{ term: 'concurrency', meaning: '并发（Concurrency）', example: 'Concurrency matters.' }])
@@ -73,14 +75,21 @@ test('learns from Library, restores a revealed answer and scores on the server w
   await expect(recall).toContainText('并发')
   expect(await recall.innerHTML()).not.toMatch(/concurrency/i)
   await expect(page.getByRole('button', { name: 'Good' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Play pronunciation' })).toHaveCount(0)
   await page.getByRole('button', { name: 'Show answer' }).click()
   await expect(page.getByRole('heading', { name: 'concurrency', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Play pronunciation' }).click()
+  await expect(page.getByRole('button', { name: 'Pause pronunciation' })).toBeVisible()
+  expect(readReview(backend.db).events).toEqual([])
 
   await page.getByRole('button', { name: 'Pause', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Review paused' })).toBeVisible()
   await page.reload()
   await page.getByRole('button', { name: 'Resume review' }).click()
   await expect(page.getByRole('heading', { name: 'concurrency', exact: true })).toBeVisible()
+  await page.route('**/api/speech/audio/*', (route) => route.abort())
+  await page.getByRole('button', { name: 'Play pronunciation' }).click()
+  await expect(page.getByText('Could not reach the server.', { exact: false })).toBeVisible()
   await page.getByRole('button', { name: 'Good' }).click()
   await expect(page.getByRole('heading', { name: 'Review round complete' })).toBeVisible()
 

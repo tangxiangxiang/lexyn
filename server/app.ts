@@ -6,9 +6,10 @@ import { Hono } from 'hono'
 import { createAuthApi, type AuthOptions } from './auth/routes.ts'
 import { studyRoutes } from './study/routes.ts'
 import { healthRoutes } from './routes/health.ts'
+import { speechRoutes, type SpeechOptions } from './speech/routes.ts'
 
 export function createApp(db: Database.Database, webRoot?: string, publicOrigin = 'http://127.0.0.1:3000',
-  clock = Date.now, authOptions?: AuthOptions) {
+  clock = Date.now, authOptions?: AuthOptions, speechOptions?: SpeechOptions) {
   const app = new Hono()
   app.onError((_error, c) => {
     console.error('Request failed')
@@ -18,6 +19,7 @@ export function createApp(db: Database.Database, webRoot?: string, publicOrigin 
 
   const auth = createAuthApi(db, publicOrigin, authOptions)
   app.route('/api/auth', auth.routes)
+  app.route('/api/speech', speechRoutes(db, auth, speechOptions))
   app.route('/api', healthRoutes(db))
   app.route('/api', studyRoutes(db, auth, clock))
   app.all('/api/*', (c) => {

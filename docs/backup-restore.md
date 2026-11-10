@@ -29,6 +29,10 @@ npm run backup:verify -- /absolute/path/to/backups/lexyn-...
 
 生产容器中可用 `docker compose -f compose.production.yml exec lexyn npm run backup:create`，默认使用镜像配置的备份目录。在线备份使用 SQLite Backup API，包含已提交的 WAL 数据。校验会核对 SHA-256、文件大小、SQLite Schema、引用和完整性。
 
+SQLite 备份包含发音偏好与音频索引，MP3 文件单独存放在 `${LEXYN_DATA_DIR}/media/tts/`。如需完整保留音频，请将该目录随 SQLite 备份一起复制到备份位置（仅需正式的 `*.mp3`，保留原文件名）。恢复时把 MP3 复制回相同相对路径，保留已有音频。缺失或损坏的文件会在下次播放时按需重新生成。JSON 词库备份包含词条发音修正，跨设备发音偏好由 SQLite 备份保留。
+
+SQLite 备份也包含 MiniMax API 密钥密文。要在新数据卷恢复该密钥，请单独备份并还原对应的 `${LEXYN_DATA_DIR}/.lexyn-speech-master-key`，保留服务用户所有权和 `0600` 权限。主密钥和 SQLite 备份分开保管。如果主密钥遗失，可在设置页移除旧凭据后重新录入 API 密钥。词库 JSON 不包含凭据。
+
 ## SQLite 恢复
 
 1. 停止目标实例，确认目标数据目录和备份目录。

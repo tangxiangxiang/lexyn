@@ -3,66 +3,7 @@ import { expect, test } from './fixtures'
 import type { LearnSession, PracticeEvent } from '../shared/domain/learning'
 import type Database from 'better-sqlite3'
 
-interface SpeechMock {
-  spoken: string[]
-  cancels: number
-  listeners: number
-  failNext: boolean
-  setEnglish: (available: boolean) => void
-}
-
-declare global {
-  interface Window { lexynSpeechMock: SpeechMock }
-}
-
-async function mockSpeech(page: Page, initiallyReady: boolean) {
-  await page.addInitScript((ready) => {
-    const voice = { name: 'Mock English', lang: 'en-US', default: true, localService: true, voiceURI: 'mock-en' }
-    const events = new EventTarget()
-    let english = ready
-    class Utterance {
-      onstart?: () => void
-      onerror?: () => void
-      constructor(public text: string) {}
-    }
-    let active: Utterance | undefined
-    const mock: SpeechMock = {
-      spoken: [], cancels: 0, listeners: 0, failNext: false,
-      setEnglish(available) {
-        english = available
-        events.dispatchEvent(new Event('voiceschanged'))
-      },
-    }
-    window.lexynSpeechMock = mock
-    Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: {
-      getVoices: () => english ? [voice] : [],
-      addEventListener(type: string, listener: EventListener) {
-        mock.listeners++
-        events.addEventListener(type, listener)
-      },
-      removeEventListener(type: string, listener: EventListener) {
-        mock.listeners--
-        events.removeEventListener(type, listener)
-      },
-      cancel() {
-        mock.cancels++
-        active?.onerror?.()
-        active = undefined
-      },
-      speak(utterance: Utterance) {
-        mock.spoken.push(utterance.text)
-        if (mock.failNext) {
-          mock.failNext = false
-          utterance.onerror?.()
-          return
-        }
-        active = utterance
-        utterance.onstart?.()
-      },
-    } })
-    Object.defineProperty(window, 'SpeechSynthesisUtterance', { configurable: true, value: Utterance })
-  }, initiallyReady)
-}
+import { trackPlayback } from './mock-speech'
 
 interface PracticeRecords {
   practice_events: PracticeEvent
@@ -141,22 +82,25 @@ test('IME composition does not submit and 320px layout has no horizontal overflo
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320)
 })
 
-test('disables dictation cleanly when the browser has no speech synthesis and allows Copy', async ({ page }) => {
-  await page.addInitScript(() => {
-    Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: undefined })
-    Object.defineProperty(window, 'SpeechSynthesisUtterance', { configurable: true, value: undefined })
+test.describe('without a MiniMax key', () => {
+  test.use({ speechConfigured: false })
+  test('keeps dictation recoverable', async ({ page, backend }) => {
+    await makeDeckWithWords(page)
+    await page.getByRole('link', { name: 'Start learning' }).click()
+    await page.getByText('Dictation', { exact: true }).click()
+    await page.getByRole('button', { name: 'Learn 2 new words' }).click()
+    await page.getByRole('button', { name: 'Play English pronunciation' }).click()
+    await expect(page.getByText('MiniMax speech is not configured on the server.')).toBeVisible()
+    await expect(page.locator('.learn-term')).toHaveCount(0)
+    expect(records(backend.db, 'practice_events')).toEqual([])
+    await page.getByRole('button', { name: 'Switch to Copy' }).click()
+    await expect(page.getByRole('heading', { name: 'concurrency' })).toBeVisible()
   })
-  await makeDeckWithWords(page)
-  await page.getByRole('link', { name: 'Start learning' }).click()
-  await page.getByText('Dictation', { exact: true }).click()
-  await expect(page.getByText('Dictation needs an English voice on this device.', { exact: false })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Learn 2 new words' })).toBeDisabled()
-  await page.getByText('Copy', { exact: true }).click()
-  await expect(page.getByRole('button', { name: 'Learn 2 new words' })).toBeEnabled()
 })
 
 test('keeps dictation hints out of the DOM until submission or reveal and restores an assisted word', async ({ page, backend }) => {
-  await mockSpeech(page, true)
+  await trackPlayback(page)
+  await page.reload()
   await makeDeckWithWords(page, true)
   await page.getByRole('link', { name: 'Start learning' }).click()
   await page.getByText('Dictation', { exact: true }).click()
@@ -177,9 +121,11 @@ test('keeps dictation hints out of the DOM until submission or reveal and restor
   await expect(page.locator('.learn-spelling .letter-missing')).toHaveText('e')
 
   await page.getByRole('button', { name: 'Play English pronunciation' }).click()
-  await expect.poll(() => page.evaluate(() => window.lexynSpeechMock.spoken)).toEqual(['concurrency'])
-  await page.getByRole('button', { name: 'Playing…' }).click()
-  expect(await page.evaluate(() => window.lexynSpeechMock.cancels)).toBe(1)
+  await expect(page.getByRole('button', { name: 'Pause pronunciation' })).toBeVisible()
+  expect(backend.speech.requests.map(({ text }) => text)).toEqual(['concurrency'])
+  await page.getByRole('button', { name: 'Pause pronunciation' }).click()
+  expect(await page.evaluate(() => window.lexynAudio.pauses)).toBe(1)
+  expect(await card.innerHTML()).not.toContain('concurrency')
 
   const reveal = page.getByRole('button', { name: 'Reveal answer' })
   await reveal.dblclick()
@@ -273,44 +219,37 @@ test('automatically skips removed words and completes the remaining queue withou
   expect(records(backend.db, 'learn_sessions')).toMatchObject([{ status: 'completed', currentIndex: 0 }])
 })
 
-test('recovers dictation after a voice timeout, survives playback errors and stops speech on word and route changes', async ({ page, backend }) => {
-  await mockSpeech(page, false)
+test('retries speech and releases audio on word and route changes', async ({ page, backend }) => {
+  await trackPlayback(page)
+  await page.reload()
   await makeDeckWithWords(page)
   await page.getByRole('link', { name: 'Start learning' }).click()
   await page.getByText('Dictation', { exact: true }).click()
-  const start = page.getByRole('button', { name: 'Learn 2 new words' })
-  await expect(page.getByText('Waiting for an English voice…', { exact: false })).toBeVisible()
-  await expect(start).toBeDisabled()
-  await expect(page.getByText('No English voice is available on this device.', { exact: false })).toBeVisible()
-  await page.evaluate(() => window.lexynSpeechMock.setEnglish(true))
-  await expect(start).toBeEnabled()
-  await start.click()
-
+  await page.getByRole('button', { name: 'Learn 2 new words' }).click()
   const play = page.getByRole('button', { name: 'Play English pronunciation' })
-  await page.evaluate(() => { window.lexynSpeechMock.failNext = true })
+  backend.speech.failNext = true
   await play.click()
-  await expect(page.getByText('Speech could not be played.', { exact: false })).toBeVisible()
+  await expect(page.getByText('The speech provider is unavailable. Try again.')).toBeVisible()
   expect(records(backend.db, 'practice_events')).toHaveLength(0)
   await play.click()
-  await expect(page.getByRole('button', { name: 'Playing…' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Pause pronunciation' })).toBeVisible()
+  await page.reload()
+  await play.click()
+  await expect(page.getByRole('button', { name: 'Pause pronunciation' })).toBeVisible()
+  expect(backend.speech.requests.map(({ text }) => text)).toEqual(['concurrency', 'concurrency'])
   const answer = page.getByRole('textbox', { name: 'Type the dictated word' })
   await answer.fill('concurrency')
   await answer.press('Enter')
   await page.getByRole('button', { name: 'Next word' }).click()
   await expect(page.getByText('死锁', { exact: true })).toBeVisible()
-  expect(await page.evaluate(() => window.lexynSpeechMock.cancels)).toBe(1)
+  expect(await page.evaluate(() => window.lexynAudio.revoked)).toHaveLength(1)
 
-  await page.evaluate(() => window.lexynSpeechMock.setEnglish(false))
-  await expect(play).toBeDisabled()
-  await expect(page.getByRole('button', { name: 'Switch to Copy' })).toBeEnabled()
-  await page.evaluate(() => window.lexynSpeechMock.setEnglish(true))
   await play.click()
-  await expect.poll(() => page.evaluate(() => window.lexynSpeechMock.spoken)).toEqual(['concurrency', 'concurrency', 'deadlock'])
+  await expect(page.getByRole('button', { name: 'Pause pronunciation' })).toBeVisible()
+  expect(backend.speech.requests.map(({ text }) => text)).toEqual(['concurrency', 'concurrency', 'deadlock'])
   await page.getByRole('link', { name: 'Review', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Review', exact: true })).toBeVisible()
-  expect(await page.evaluate(() => ({
-    cancels: window.lexynSpeechMock.cancels, listeners: window.lexynSpeechMock.listeners,
-  }))).toEqual({ cancels: 2, listeners: 0 })
+  expect(await page.evaluate(() => window.lexynAudio.revoked)).toHaveLength(2)
   expect(records(backend.db, 'practice_events')).toMatchObject([{ mode: 'dictation', outcome: 'completed', attempts: 1 }])
 })
 
@@ -342,19 +281,32 @@ test('pauses when the deck is archived and resumes with the same answer after re
   expect(records(backend.db, 'practice_events')).toEqual([])
 })
 
-test('enables dictation on voiceschanged while loading and switches to Copy if English disappears', async ({ page, backend }) => {
-  await mockSpeech(page, false)
+test('cancels a pending dictation download on switch to Copy and still plays the cached MP3', async ({ page, backend }) => {
+  await trackPlayback(page)
+  await page.reload()
   await makeDeckWithWords(page)
   await page.getByRole('link', { name: 'Start learning' }).click()
   await page.getByText('Dictation', { exact: true }).click()
-  await expect(page.getByText('Waiting for an English voice…', { exact: false })).toBeVisible()
-  await page.evaluate(() => window.lexynSpeechMock.setEnglish(true))
   await page.getByRole('button', { name: 'Learn 2 new words' }).click()
+  const audioPath = '**/api/speech/audio/*'
+  let release!: () => void
+  const hold = new Promise<void>((resolve) => { release = resolve })
+  await page.route(audioPath, async (route) => {
+    await hold
+    await route.continue().catch(() => {})
+  })
+  const requested = page.waitForRequest(audioPath)
   await page.getByRole('button', { name: 'Play English pronunciation' }).click()
-  await page.evaluate(() => window.lexynSpeechMock.setEnglish(false))
+  await requested
+  await expect(page.getByRole('button', { name: 'Loading pronunciation…' })).toBeDisabled()
   await page.getByRole('button', { name: 'Switch to Copy' }).click()
   await expect(page.getByRole('heading', { name: 'concurrency' })).toBeVisible()
-  expect(await page.evaluate(() => window.lexynSpeechMock.cancels)).toBe(1)
+  release()
+  await page.unroute(audioPath)
+  await page.getByRole('button', { name: 'Play pronunciation' }).click()
+  await expect(page.getByRole('button', { name: 'Pause pronunciation' })).toBeVisible()
+  expect(await page.evaluate(() => window.lexynAudio.plays)).toHaveLength(1)
+  expect(backend.speech.requests.map(({ text }) => text)).toEqual(['concurrency'])
   const answer = page.getByRole('textbox', { name: 'Copy the word' })
   await answer.fill('concurrency')
   await answer.press('Enter')

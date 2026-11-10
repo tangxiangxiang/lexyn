@@ -64,6 +64,9 @@ async function interimDatabase() {
   if (login.status !== 'ok') throw new Error('Test login failed.')
   createStudyStore(db, login.ownerId).saveSettings(24, 'Asia/Shanghai')
   db.exec(`
+    DROP TABLE speech_credentials;
+    DROP TABLE speech_settings;
+    DROP TABLE speech_assets;
     DROP TABLE review_events;
     DROP TABLE practice_events;
     CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT);

@@ -34,9 +34,11 @@ function setSession(value: OwnerSession | null) {
   session.value = value
 }
 
-async function request<T>(path: string, options: RequestInit = {}) {
+async function request<T>(path: string, options: RequestInit = {}, {
+  timeoutMs = 10_000, trackConnection = true, decode,
+}: { timeoutMs?: number; trackConnection?: boolean; decode?: (response: Response) => Promise<T> } = {}) {
   const { signal, ...init } = options
-  const signals = [AbortSignal.timeout(10_000), ...(signal ? [signal] : [])]
+  const signals = [AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]
   let response: Response
   try {
     response = await fetch('/api/' + path, {
@@ -45,13 +47,13 @@ async function request<T>(path: string, options: RequestInit = {}) {
     })
   } catch (error) {
     if (signal?.aborted) throw error
-    connection.value = 'unavailable'
+    if (trackConnection) connection.value = 'unavailable'
     throw new ApiError(0, 'CONNECTION', 'Could not reach the server. Check your connection and try again.')
   }
-  const body = await response.json().catch(() => null)
+  const body = await (response.ok && decode ? decode(response) : response.json().catch(() => null))
   if (signal?.aborted) throw signal.reason
   if (!response.ok || !body) {
-    if (response.status >= 500 || !body) connection.value = 'unavailable'
+    if (trackConnection && (response.status >= 500 || !body)) connection.value = 'unavailable'
     throw new ApiError(response.status, body?.error?.code ?? 'SERVER',
       body?.error?.message ?? 'The server did not return a usable response. Try again.',
       Number(response.headers.get('Retry-After')) || undefined)
@@ -150,3 +152,22 @@ export async function study<K extends Endpoint>(path: K, args: StudyEndpoints[K]
 }
 
 export const writeDailyNewWords = (value: number) => study('settings/daily', [value], { write: true })
+
+export async function requestSpeech<T>(path: string, method: 'GET' | 'POST' | 'PUT',
+  body?: object, caller?: AbortSignal, decode?: (response: Response) => Promise<T>) {
+  const owner = session.value
+  if (!owner) throw new ApiError(401, 'SESSION', 'Sign in to Lexyn.')
+  const signal = AbortSignal.any([sessionRequests.signal, ...(caller ? [caller] : [])])
+  try {
+    return await request<T>('speech/' + path, {
+      method, signal, body: body && JSON.stringify(body),
+      headers: { 'X-Lexyn-Owner': owner.ownerId, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    }, { timeoutMs: 20_000, trackConnection: false, decode })
+  } catch (error) {
+    if (!signal.aborted && error instanceof ApiError && (error.status === 401 || error.code === 'ACCOUNT')) {
+      setSession(null)
+      connection.value = 'expired'
+    }
+    throw error
+  }
+}

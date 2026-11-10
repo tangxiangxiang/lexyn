@@ -127,6 +127,32 @@ const migrations: ({ version: number; sql: string } | { version: number; apply: 
     `,
   },
   { version: 6, apply: repairInterimStudySchema },
+  {
+    version: 7,
+    sql: `
+      CREATE TABLE speech_settings (
+        owner_id TEXT PRIMARY KEY NOT NULL REFERENCES owner(id),
+        voice_id TEXT NOT NULL,
+        playback_rate REAL NOT NULL CHECK (playback_rate IN (0.8, 1, 1.2))
+      ) STRICT;
+      CREATE TABLE speech_assets (
+        cache_key TEXT PRIMARY KEY NOT NULL CHECK (length(cache_key) = 64 AND cache_key NOT GLOB '*[^a-f0-9]*'),
+        parameters TEXT NOT NULL CHECK (json_valid(parameters)),
+        content_hash TEXT NOT NULL,
+        byte_size INTEGER NOT NULL CHECK (byte_size BETWEEN 1 AND 2097152),
+        created_at INTEGER NOT NULL
+      ) STRICT;
+    `,
+  },
+  {
+    version: 8,
+    sql: `
+      CREATE TABLE speech_credentials (
+        owner_id TEXT PRIMARY KEY NOT NULL REFERENCES owner(id),
+        ciphertext TEXT NOT NULL
+      ) STRICT;
+    `,
+  },
 ]
 
 export const latestDatabaseVersion = migrations.at(-1)!.version

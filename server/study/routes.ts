@@ -38,9 +38,10 @@ function deckInput(value: unknown): DeckInput {
 }
 function wordFields(value: unknown) {
   const row = object(value)
-  fields(row, 'term meaning phonetic example note')
+  fields(row, 'term meaning phonetic pronunciationOverride example note')
   return { term: text(240)(row.term), meaning: optional(text(2000))(row.meaning),
-    phonetic: optional(text(240))(row.phonetic), example: optional(text(4000))(row.example), note: optional(text(4000))(row.note) }
+    phonetic: optional(text(240))(row.phonetic), pronunciationOverride: optional(text(240))(row.pronunciationOverride),
+    example: optional(text(4000))(row.example), note: optional(text(4000))(row.note) }
 }
 function entryInput(value: unknown): EntryInput {
   const row = wordFields(value)

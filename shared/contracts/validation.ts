@@ -62,15 +62,16 @@ export function validateEntity(payload: Record<string, unknown>, kind: 'deck' | 
     }
     return payload.id
   }
-  fields(payload, 'id deckId term meaning phonetic example note normalizedTerm createdAt updatedAt revision deletedAt termChangedAt')
+  fields(payload, 'id deckId term meaning phonetic pronunciationOverride example note normalizedTerm createdAt updatedAt revision deletedAt termChangedAt')
   const term = string(payload, 'term')!
   const meaning = string(payload, 'meaning')!
   const phonetic = string(payload, 'phonetic', true)
   const example = string(payload, 'example', true)
   const note = string(payload, 'note', true)
-  const clean = cleanEntry({ term, meaning, phonetic, example, note })
+  const pronunciationOverride = string(payload, 'pronunciationOverride', true)
+  const clean = cleanEntry({ term, meaning, phonetic, pronunciationOverride, example, note })
   if (term !== clean.term || meaning !== clean.meaning || phonetic !== clean.phonetic
-    || example !== clean.example || note !== clean.note || !isUuid(payload.deckId)
+    || pronunciationOverride !== clean.pronunciationOverride || example !== clean.example || note !== clean.note || !isUuid(payload.deckId)
     || payload.normalizedTerm !== normalizeTerm(term) || (payload.deletedAt !== undefined && !time(payload.deletedAt))
     || (payload.termChangedAt !== undefined && !time(payload.termChangedAt))) {
     throw new InvalidInput('Invalid entry fields.')

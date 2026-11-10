@@ -16,7 +16,7 @@
 .learn-term { color: var(--ink); font-size: clamp(2rem, 7vw, 3.5rem); line-height: 1.1; letter-spacing: -.045em; overflow-wrap: anywhere; }
 .learn-example { max-width: 54ch; border-inline-start: 2px solid var(--line); padding-inline-start: 16px; color: var(--muted); line-height: 1.65; white-space: pre-wrap; }
 .learn-practice-area { display: grid; gap: 12px; max-width: 600px; }
-.learn-keyboard-hint, .learn-voice-message, .learn-deck-name { color: var(--muted); font-size: .8rem; }
+.learn-keyboard-hint, .learn-deck-name { color: var(--muted); font-size: .8rem; }
 .learn-spelling { display: flex; flex-wrap: wrap; gap: .08em; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); font: 600 1.18rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
 .letter-correct { color: var(--accent); }
 .letter-incorrect, .letter-extra { color: var(--danger); text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }

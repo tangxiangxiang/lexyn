@@ -8,6 +8,8 @@ import { createApp } from '../server/app'
 import { createBootstrapState } from '../server/auth/bootstrap'
 import { initializeOwner } from '../server/auth/owner'
 import { openDatabase } from '../server/db/database'
+import { createSpeechCredentials } from '../server/speech/credentials'
+import { mockSpeechResponse } from './mock-speech'
 
 export const username = 'test-admin'
 export const password = process.env.LEXYN_TEST_OWNER_PASSWORD ??= randomBytes(24).toString('base64url')
@@ -32,11 +34,15 @@ export async function studyRequest(page: Page, path: string, args: unknown[] = [
 }
 export const writeStudy = (page: Page, path: string, args: unknown[], key: string = randomUUID()) => studyRequest(page, path, args, key)
 
-async function startFixture(initialOwner: boolean) {
+async function startFixture(initialOwner: boolean, speechConfigured: boolean) {
   const directory = mkdtempSync(join(tmpdir(), 'lexyn-e2e-'))
   const db = openDatabase(directory)
   const setupToken = initialOwner ? undefined : randomBytes(32).toString('base64url')
   if (initialOwner) await initializeOwner(db, username, password)
+  if (initialOwner && speechConfigured) {
+    const owner = db.prepare('SELECT id FROM owner').pluck().get() as string
+    createSpeechCredentials(db, directory).save(owner, 'mock-key')
+  }
   let now: number | undefined
   let app: ReturnType<typeof createApp>
   const server = serve({ fetch: (request) => app.fetch(request), hostname: '127.0.0.1', port: 0 })
@@ -44,20 +50,34 @@ async function startFixture(initialOwner: boolean) {
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('Missing test server address.')
   const origin = `http://127.0.0.1:${address.port}`
+  const speech = { requests: [] as { text: string; voice_setting: { voice_id: string } }[], failNext: false }
   app = createApp(db, resolve('dist'), origin, () => now ?? Date.now(),
-    { bootstrap: setupToken ? createBootstrapState(setupToken) : undefined })
-  return { origin, db, setupToken, advanceTo: (time: number) => { now = time }, close: async () => {
+    { bootstrap: setupToken ? createBootstrapState(setupToken) : undefined }, {
+      dataDir: directory,
+      fetch: async (_url, init) => {
+        speech.requests.push(JSON.parse(String(init?.body)))
+        if (speech.failNext) {
+          speech.failNext = false
+          return new Response(null, { status: 503 })
+        }
+        return mockSpeechResponse()
+      },
+    })
+  return { origin, db, setupToken, speech, advanceTo: (time: number) => { now = time }, close: async () => {
     await new Promise<void>((done) => { server.close(() => done()); if ('closeAllConnections' in server) server.closeAllConnections() })
     db.close()
     rmSync(directory, { recursive: true, force: true })
   } }
 }
 
-export const test = base.extend<{ backend: Awaited<ReturnType<typeof startFixture>>; initialOwner: boolean; englishUI: boolean }>({
+export const test = base.extend<{
+  backend: Awaited<ReturnType<typeof startFixture>>; initialOwner: boolean; englishUI: boolean; speechConfigured: boolean
+}>({
   initialOwner: [true, { option: true }],
   englishUI: [true, { option: true }],
-  backend: async ({ initialOwner }, use) => {
-    const fixture = await startFixture(initialOwner)
+  speechConfigured: [true, { option: true }],
+  backend: async ({ initialOwner, speechConfigured }, use) => {
+    const fixture = await startFixture(initialOwner, speechConfigured)
     try { await use(fixture) } finally { await fixture.close() }
   },
   baseURL: async ({ backend }, use) => { await use(backend.origin) },

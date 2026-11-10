@@ -11,7 +11,6 @@ for (const [width, height, touch] of [[320, 740, true], [375, 812, true], [768, 
     test('fits the study, account and backup screens and accepts touch or keyboard input', async ({ page }) => {
       const activate = (control: Locator) => touch ? control.tap() : control.click()
       const nav = (name: string) => activate(page.getByRole('navigation').getByRole('link', { name, exact: true }))
-      await page.addInitScript(() => Object.defineProperty(window, 'speechSynthesis', { value: undefined }))
       await page.goto('/library')
       await expect(page.getByRole('heading', { level: 1, name: 'Library' })).toBeVisible()
       await fits(page, width)
@@ -27,7 +26,7 @@ for (const [width, height, touch] of [[320, 740, true], [375, 812, true], [768, 
       await activate(page.getByRole('button', { name: 'Save', exact: true }))
       await activate(page.getByRole('link', { name: 'Start learning' }))
       await activate(page.getByText('Dictation', { exact: true }))
-      await expect(page.getByText('Dictation needs an English voice', { exact: false })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Learn 1 new word' })).toBeEnabled()
       await fits(page, width)
       await activate(page.getByText('Copy', { exact: true }))
       await activate(page.getByRole('button', { name: 'Learn 1 new word' }))

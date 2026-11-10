@@ -16,6 +16,7 @@ const title = editor.type === 'deck' ? (deck ? 'Edit deck' : 'New deck') : (entr
 const deckForm = reactive({ name: deck?.name ?? '', description: deck?.description ?? '' })
 const entryForm = reactive({
   term: entry?.term ?? '', meaning: entry?.meaning ?? '', phonetic: entry?.phonetic ?? '',
+  pronunciationOverride: entry?.pronunciationOverride ?? '',
   example: entry?.example ?? '', note: entry?.note ?? '',
 })
 const changedTerm = computed(() => !!entry && normalizeTerm(entryForm.term) !== entry.normalizedTerm)
@@ -23,6 +24,7 @@ const fields = [
   { key: 'term', label: 'Term', multiline: false, optional: false },
   { key: 'meaning', label: 'Meaning', multiline: true, optional: true },
   { key: 'phonetic', label: 'Phonetic', multiline: false, optional: true },
+  { key: 'pronunciationOverride', label: 'Pronunciation override', multiline: false, optional: true },
   { key: 'example', label: 'Example', multiline: true, optional: true },
   { key: 'note', label: 'Note', multiline: true, optional: true },
 ] as const
@@ -59,7 +61,8 @@ async function save() {
           <label :for="`library-word-${field.key}`">{{ t(field.label) }} <small v-if="field.optional">{{ t('optional') }}</small></label>
           <NInput v-model:value="entryForm[field.key]" :type="field.multiline ? 'textarea' : 'text'" :rows="2"
             :maxlength="entryLimits[field.key]" :disabled="busy"
-            :input-props="{ id: `library-word-${field.key}`, required: !field.optional }" />
+            :input-props="{ id: `library-word-${field.key}`, required: !field.optional }"
+            :placeholder="field.key === 'pronunciationOverride' ? t('For example: J V M') : undefined" />
         </template>
       </template>
       <NAlert v-if="changedTerm" type="warning">

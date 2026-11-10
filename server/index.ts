@@ -11,7 +11,8 @@ const unlock = lockDataDirectory(config.dataDir)
 const db = openDatabase(config.dataDir)
 const webRoot = import.meta.url.endsWith('.js') ? resolve('dist') : undefined
 const bootstrap = ownerSetupMode(db) ? createBootstrapState(process.env.LEXYN_SETUP_TOKEN) : undefined
-const app = createApp(db, webRoot, config.publicOrigin, Date.now, { bootstrap, additionalOrigins: config.additionalOrigins })
+const app = createApp(db, webRoot, config.publicOrigin, Date.now, { bootstrap, additionalOrigins: config.additionalOrigins },
+  { dataDir: config.dataDir })
 const server = serve({ fetch: app.fetch, hostname: config.host, port: config.port }, () => {
   console.log(`Lexyn API ready at ${config.origin}/api/health`)
 })

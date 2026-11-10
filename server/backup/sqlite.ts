@@ -23,6 +23,10 @@ function verifyDatabase(path: string) {
     if (!isSupportedSchema(version)) throw new Error('This SQLite schema is incompatible with this Lexyn build.')
     const tables = new Set(db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").pluck().all())
     if (!requiredTables.every((table) => tables.has(table))) throw new Error('The SQLite backup is missing required tables.')
+    if (version >= 7 && (!tables.has('speech_settings') || !tables.has('speech_assets'))) {
+      throw new Error('The SQLite backup is missing speech tables.')
+    }
+    if (version >= 8 && !tables.has('speech_credentials')) throw new Error('The SQLite backup is missing speech credentials.')
     const integrity = db.pragma('integrity_check') as { integrity_check: string }[]
     if (integrity.length !== 1 || integrity[0].integrity_check !== 'ok' || (db.pragma('foreign_key_check') as unknown[]).length) {
       throw new Error('The SQLite backup failed its integrity check.')

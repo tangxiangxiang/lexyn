@@ -123,7 +123,8 @@ test.each([
   const db = new Database(':memory:')
   try {
     migrate(db)
-    db.exec('ALTER TABLE owner DROP COLUMN username; PRAGMA user_version=3;')
+    db.exec(`DROP TABLE speech_credentials; DROP TABLE speech_settings; DROP TABLE speech_assets;
+      ALTER TABLE owner DROP COLUMN username; PRAGMA user_version=3;`)
     const id = randomUUID()
     const salt = randomBytes(32).toString('hex')
     const hash = scryptSync(password, salt, 64, { N: 32768, r: 8, p: 3, maxmem: 64 * 1024 * 1024 }).toString('hex')

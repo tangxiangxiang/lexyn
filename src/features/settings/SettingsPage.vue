@@ -4,6 +4,7 @@ import { ref, watch } from 'vue'
 import { NAlert, NButton, NCard, NInput, NInputNumber, NRadioButton, NRadioGroup } from 'naive-ui'
 import LanguagePicker from '../../i18n/LanguagePicker.vue'
 import BackupSettings from './BackupSettings.vue'
+import SpeechSettings from '../speech/SpeechSettings.vue'
 import AppIcon from '../../components/AppIcon.vue'
 import { useAppearance } from '../../ui/appearance'
 import { connection, signOut, study, writeDailyNewWords } from '../../api/client'
@@ -86,6 +87,7 @@ function saveDailyNewWords(value: number | null) {
         <NButton :disabled="accountBusy" @click="runAccount(signOut)">{{ t('Sign out') }}</NButton>
       </div>
     </NCard>
+    <SpeechSettings />
     <BackupSettings />
   </section>
 </template>

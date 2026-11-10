@@ -31,7 +31,8 @@ async function fixture(): Promise<LibraryExport> {
   return {
     format: 'lexyn-library', formatVersion: 4, exportedAt: date.toISOString(), metadata: { scope: 'library' },
     decks: [{ id: deckId, name: 'Archive', revision: 2, createdAt: now, updatedAt: now, archivedAt: now }],
-    entries: [{ id: entryId, deckId, term: 'audit', meaning: '审计', normalizedTerm: 'audit', revision: 2, createdAt: now, updatedAt: now, deletedAt: now }],
+    entries: [{ id: entryId, deckId, term: 'audit', meaning: '审计', pronunciationOverride: 'aw dit',
+      normalizedTerm: 'audit', revision: 2, createdAt: now, updatedAt: now, deletedAt: now }],
     practiceEvents: [{ id: randomUUID(), deckId, entryId, sessionId, mode: 'copy', outcome: 'completed', attempts: 1,
       firstTryCorrect: true, assisted: false, startedAt: now, completedAt: now }],
     learnProgress: [{ entryId, firstCompletedAt: now, lastPracticedAt: now, completedCount: 1 }],
@@ -77,6 +78,7 @@ test('rolls back JSON restore including library and history and retries into the
     db.exec('DROP TRIGGER fail_restore')
     restoreLibrary(db, plan)
     expect(db.prepare('SELECT count(*) FROM review_events').pluck().get()).toBe(1)
+    expect(db.prepare("SELECT json_extract(body, '$.pronunciationOverride') FROM entries").pluck().get()).toBe('aw dit')
     expect(() => restoreLibrary(db, plan)).toThrow('empty server')
   } finally { db.close(); await rm(directory, { recursive: true, force: true }) }
 })
