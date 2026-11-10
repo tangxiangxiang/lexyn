@@ -7,8 +7,19 @@ import { useLibraryAction } from '../library/library-ui'
 import { useLibraryQuery } from '../library/useLibraryQuery'
 import PronunciationButton from './PronunciationButton.vue'
 import { speechSettings } from './useSpeech'
+import { vocabulary } from '../library/vocabulary-api'
+import type { VocabularyStatus } from '../../../shared/contracts/vocabulary'
 
 const { data, error: loadError, reload } = useLibraryQuery(() => null, (_key, signal) => speechSettings.read(signal))
+const textAI = useLibraryQuery(() => null, (_key, signal) => vocabulary.status(signal))
+const textStatus: Record<VocabularyStatus['status'], string> = {
+  missing: 'Save a usable MiniMax key in Pronunciation before generating vocabulary.',
+  unavailable: 'The saved MiniMax key is unavailable.',
+  unverified: 'Key saved. Text access will be checked on the first generation.',
+  available: 'MiniMax text generation is available.',
+  auth: 'MiniMax rejected text access for the saved key. Check its text API permissions.',
+  quota: 'MiniMax text quota or balance is insufficient.',
+}
 const { busy, error, run } = useLibraryAction()
 const voiceId = ref<SpeechVoice>()
 const playbackRate = ref<PlaybackRate>(1)
@@ -29,7 +40,7 @@ function save() {
     await speechSettings.save(values)
     apiKey.value = ''
     clearKey.value = false
-    await reload()
+    await Promise.all([reload(), textAI.reload()])
     saved.value = true
   })
 }
@@ -63,5 +74,14 @@ function save() {
       <p v-if="saved" role="status">{{ t('Pronunciation settings saved.') }}</p>
       <NAlert v-if="error" type="error" role="alert">{{ translateError(error) }}</NAlert>
     </form>
+  </NCard>
+  <NCard class="settings-card" :title="t('AI Vocabulary')">
+    <NAlert v-if="textAI.error.value" type="error">
+      {{ translateError(textAI.error.value) }} <NButton text @click="textAI.reload">{{ t('Retry') }}</NButton>
+    </NAlert>
+    <template v-else-if="textAI.data.value">
+      <p>{{ t('Text model: {model}', { model: textAI.data.value.model }) }}</p>
+      <p>{{ t(textStatus[textAI.data.value.status]) }}</p>
+    </template>
   </NCard>
 </template>

@@ -9,16 +9,21 @@ export const speechSettings = {
   save: (values: SpeechSettingsUpdate) => requestSpeech<SpeechSettings>('settings', 'PUT', values),
 }
 
-export function useSpeech(target: () => Target, identity: () => string) {
+export function useSpeech(target: () => Target, identity: () => string, preload: () => boolean) {
   const state = ref<'idle' | 'loading' | 'ready' | 'playing' | 'error'>('idle')
   const error = ref('')
   let pending: AbortController | undefined
+  let preparation: { controller: AbortController; task: Promise<PreparedSpeech> } | undefined
+  let prepared: PreparedSpeech | undefined
   let player: HTMLAudioElement | undefined
   let url: string | undefined
 
   function release() {
     pending?.abort()
     pending = undefined
+    preparation?.controller.abort()
+    preparation = undefined
+    prepared = undefined
     if (player) {
       player.onended = null
       player.onerror = null
@@ -46,6 +51,21 @@ export function useSpeech(target: () => Target, identity: () => string) {
       }
     }
   }
+  function prepare() {
+    if (prepared) return Promise.resolve(prepared)
+    if (preparation) return preparation.task
+    const controller = new AbortController()
+    const source = target()
+    const task = requestSpeech<PreparedSpeech>('entryId' in source ? 'prepare' : 'preview', 'POST', source, controller.signal)
+      .then((value) => {
+        if (!controller.signal.aborted) prepared = value
+        return value
+      }).finally(() => {
+        if (preparation?.controller === controller) preparation = undefined
+      })
+    preparation = { controller, task }
+    return task
+  }
   async function toggle() {
     if (state.value === 'loading') return
     if (state.value === 'playing' && player) {
@@ -59,9 +79,8 @@ export function useSpeech(target: () => Target, identity: () => string) {
     pending = controller
     state.value = 'loading'
     try {
-      const source = target()
-      const { audioId, playbackRate } = await requestSpeech<PreparedSpeech>(
-        'entryId' in source ? 'prepare' : 'preview', 'POST', source, controller.signal)
+      const { audioId, playbackRate } = await prepare()
+      if (controller.signal.aborted) return
       if (!/^[a-f0-9]{64}$/.test(audioId)) throw new Error('Speech could not be played. Try again.')
       const blob = await requestSpeech<Blob>('audio/' + audioId, 'GET', undefined, controller.signal, async (response) => {
         if (response.headers.get('Content-Type') !== 'audio/mpeg') throw new Error('Speech could not be played. Try again.')
@@ -81,7 +100,17 @@ export function useSpeech(target: () => Target, identity: () => string) {
       if (pending === controller) pending = undefined
     }
   }
-  watch([identity, () => session.value?.ownerId], release, { flush: 'sync' })
+  watch([identity, preload, () => session.value?.ownerId], () => {
+    release()
+    if (!preload() || !session.value) return
+    const task = prepare()
+    const controller = preparation?.controller
+    void task.catch((reason) => {
+      if (!controller?.signal.aborted && state.value === 'idle') {
+        error.value = reason instanceof Error ? reason.message : 'Speech could not be played. Try again.'
+      }
+    })
+  }, { immediate: true })
   onScopeDispose(release)
   return { state, error, toggle }
 }

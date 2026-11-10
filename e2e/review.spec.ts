@@ -10,6 +10,7 @@ const originTime = new Date('2026-10-01T12:00:00.000Z')
 interface WordInput {
   term: string
   meaning: string
+  explanation?: string
   example?: string
 }
 
@@ -20,10 +21,11 @@ async function learnWords(page: Page, words: WordInput[]) {
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   await page.getByRole('link', { name: 'Review Systems' }).click()
   const deckUrl = page.url()
-  for (const { term, meaning, example } of words) {
+  for (const { term, meaning, explanation, example } of words) {
     await page.getByRole('button', { name: 'Add word' }).click()
     await page.getByLabel('Term', { exact: true }).fill(term)
     await page.getByLabel('Meaning optional').fill(meaning)
+    if (explanation) await page.getByLabel('Explanation optional').fill(explanation)
     if (example) await page.getByLabel('Example optional').fill(example)
     await page.getByRole('button', { name: 'Save', exact: true }).click()
     await expect(page.getByRole('heading', { name: term, exact: true })).toBeVisible()
@@ -65,7 +67,8 @@ test('learns from Library, restores a revealed answer and scores on the server w
   await trackPlayback(page)
   backend.advanceTo(originTime.getTime())
   await page.clock.setFixedTime(originTime)
-  const deckUrl = await learnWords(page, [{ term: 'concurrency', meaning: '并发（Concurrency）', example: 'Concurrency matters.' }])
+  const deckUrl = await learnWords(page, [{ term: 'concurrency', meaning: '并发（Concurrency）',
+    explanation: '多个任务在重叠的时间段内推进。', example: 'Concurrency matters.' }])
   expect(readReview(backend.db).events).toEqual([])
   await page.goto('/review?deckId=' + new URL(deckUrl).pathname.split('/').at(-1))
   await expect(stat(page, 'Waiting for first recall')).toHaveText('1')
@@ -73,10 +76,12 @@ test('learns from Library, restores a revealed answer and scores on the server w
   await page.getByRole('button', { name: 'Start review' }).click()
   const recall = page.locator('.review-recall')
   await expect(recall).toContainText('并发')
+  await expect(page.getByText('多个任务在重叠的时间段内推进。')).toHaveCount(0)
   expect(await recall.innerHTML()).not.toMatch(/concurrency/i)
   await expect(page.getByRole('button', { name: 'Good' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Play pronunciation' })).toHaveCount(0)
   await page.getByRole('button', { name: 'Show answer' }).click()
+  await expect(page.getByText('多个任务在重叠的时间段内推进。')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'concurrency', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Play pronunciation' }).click()
   await expect(page.getByRole('button', { name: 'Pause pronunciation' })).toBeVisible()

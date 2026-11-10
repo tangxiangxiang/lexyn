@@ -1,10 +1,11 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdtempSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { mockSpeechResponse, silentMp3 } from '../../e2e/mock-speech.ts'
 import { defaultSpeechVoice } from '../../shared/contracts/speech.ts'
+import { stableJson } from '../../shared/contracts/json.ts'
 import { createApp } from '../app.ts'
 import { initializeOwner } from '../auth/owner.ts'
 import { openDatabase } from '../db/database.ts'
@@ -128,7 +129,7 @@ test('validates authentication, origin, input and library eligibility without di
   expect(upstream).toHaveBeenCalledTimes(1)
 })
 
-test('keys voice, actual case, model and override independently of playback rate', async () => {
+test('keys voice, actual case and model independently of playback rate and text source', async () => {
   const word = await makeWord('US')
   const lower = await makeWord('us')
   const first = await prepare(word.id)
@@ -140,6 +141,8 @@ test('keys voice, actual case, model and override independently of playback rate
   const overridden = await prepare(word.id)
   expect(overridden.audioId).not.toBe(first.audioId)
   expect(JSON.parse(String(upstream.mock.lastCall?.[1]?.body)).text).toBe('U S')
+  expect(await prepare((await makeWord('U S')).id)).toEqual(overridden)
+  expect(await prepare((await makeWord('Different spelling', 'US')).id)).toEqual(first)
   await speech('settings', { voiceId: defaultSpeechVoice, playbackRate: 0.8 }, 'PUT')
   expect(await prepare(word.id)).toEqual({ ...overridden, playbackRate: 0.8 })
   expect(upstream).toHaveBeenCalledTimes(3)
@@ -147,7 +150,6 @@ test('keys voice, actual case, model and override independently of playback rate
   expect((await prepare(word.id)).audioId).not.toBe(overridden.audioId)
   expect(upstream).toHaveBeenCalledTimes(4)
   expect(speechIdentity(synthesisRequest('US', defaultSpeechVoice, 'other-model')).id).not.toBe(first.audioId)
-  expect(speechIdentity(synthesisRequest('US', defaultSpeechVoice), 'US').id).not.toBe(first.audioId)
 })
 
 test('does not serve a file from a failed index write and allows a retry', async () => {
@@ -160,6 +162,21 @@ test('does not serve a file from a failed index write and allows a retry', async
   db.exec('DROP TRIGGER reject_asset')
   expect((await prepare(word.id)).audioId).toBe(id)
   expect((await speech('audio/' + id)).status).toBe(200)
+})
+
+test('reuses an indexed Phase 7B MP3 regardless of where the same synthesis text came from', async () => {
+  const first = await makeWord('USA', 'U S')
+  const actual = await prepare(first.id)
+  const request = synthesisRequest('U S', defaultSpeechVoice)
+  const parameters = stableJson({ provider: 'minimax', version: 1, request, override: 'U S' })
+  const legacy = createHash('sha256').update(parameters).digest('hex')
+  const audioDir = join(dir, 'media', 'tts')
+  renameSync(join(audioDir, actual.audioId + '.mp3'), join(audioDir, legacy + '.mp3'))
+  db.prepare('UPDATE speech_assets SET cache_key = ?, parameters = ? WHERE cache_key = ?')
+    .run(legacy, parameters, actual.audioId)
+  expect((await prepare(first.id)).audioId).toBe(legacy)
+  expect((await prepare((await makeWord('U S')).id)).audioId).toBe(legacy)
+  expect(upstream).toHaveBeenCalledTimes(1)
 })
 
 test('persists only ciphertext, applies rotations to new synthesis and protects a credential if the master key is lost', async () => {

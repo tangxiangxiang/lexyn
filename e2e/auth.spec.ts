@@ -41,7 +41,8 @@ test('requires a chosen username for the old default account and keeps its libra
   if (previous.status !== 'ok') throw new Error('Could not prepare previous session.')
   const deck = { id: randomUUID(), name: 'Existing vocabulary', createdAt: Date.now(), updatedAt: Date.now(), revision: 1 }
   backend.db.prepare('INSERT INTO decks (id, body, revision) VALUES (?, ?, 1)').run(deck.id, JSON.stringify(deck))
-  backend.db.exec('DROP TABLE speech_credentials; DROP TABLE speech_settings; DROP TABLE speech_assets; PRAGMA user_version = 4;')
+  backend.db.exec(`DROP TABLE vocabulary_jobs; DROP TABLE speech_credentials;
+    DROP TABLE speech_settings; DROP TABLE speech_assets; PRAGMA user_version = 4;`)
   migrate(backend.db)
   expect(auth.session(previous.token)).toBeUndefined()
   expect((await auth.login('owner', password)).status).toBe('denied')

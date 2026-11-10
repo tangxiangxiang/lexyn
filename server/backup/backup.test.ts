@@ -31,7 +31,8 @@ async function fixture(): Promise<LibraryExport> {
   return {
     format: 'lexyn-library', formatVersion: 4, exportedAt: date.toISOString(), metadata: { scope: 'library' },
     decks: [{ id: deckId, name: 'Archive', revision: 2, createdAt: now, updatedAt: now, archivedAt: now }],
-    entries: [{ id: entryId, deckId, term: 'audit', meaning: '审计', pronunciationOverride: 'aw dit',
+    entries: [{ id: entryId, deckId, term: 'audit', meaning: '审计', meaningSource: 'ai', meaningNeedsReview: true,
+      explanation: '系统化地检查记录。', pronunciationOverride: 'aw dit',
       normalizedTerm: 'audit', revision: 2, createdAt: now, updatedAt: now, deletedAt: now }],
     practiceEvents: [{ id: randomUUID(), deckId, entryId, sessionId, mode: 'copy', outcome: 'completed', attempts: 1,
       firstTryCorrect: true, assisted: false, startedAt: now, completedAt: now }],
@@ -79,6 +80,9 @@ test('rolls back JSON restore including library and history and retries into the
     restoreLibrary(db, plan)
     expect(db.prepare('SELECT count(*) FROM review_events').pluck().get()).toBe(1)
     expect(db.prepare("SELECT json_extract(body, '$.pronunciationOverride') FROM entries").pluck().get()).toBe('aw dit')
+    expect(db.prepare("SELECT json_extract(body, '$.explanation') FROM entries").pluck().get()).toBe('系统化地检查记录。')
+    expect(db.prepare("SELECT json_extract(body, '$.meaningSource'), json_extract(body, '$.meaningNeedsReview') FROM entries").raw().get())
+      .toEqual(['ai', 1])
     expect(() => restoreLibrary(db, plan)).toThrow('empty server')
   } finally { db.close(); await rm(directory, { recursive: true, force: true }) }
 })

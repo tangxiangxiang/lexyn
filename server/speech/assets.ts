@@ -12,8 +12,8 @@ type Synthesis = ReturnType<typeof synthesisRequest>
 type ResolveProvider = () => (request: Synthesis) => Promise<Buffer>
 type Asset = { byte_size: number; content_hash: string }
 
-export function speechIdentity(request: Synthesis, override?: string) {
-  const parameters = stableJson({ provider: 'minimax', version: 1, request, override: override ?? null })
+export function speechIdentity(request: Synthesis) {
+  const parameters = stableJson({ provider: 'minimax', version: 2, request })
   return { parameters, id: hash(parameters) }
 }
 
@@ -57,6 +57,12 @@ export function createSpeechAssets(db: Database.Database, dataDir: string | unde
 
   async function generate(id: string, parameters: string, request: Synthesis, resolveProvider: ResolveProvider, preview: boolean) {
     if (await read(id)) return id
+    // Before v2 the override could only be absent or equal to the actual input.
+    // Probe both legacy keys in the same order for every source of that input.
+    for (const override of [null, request.text]) {
+      const legacy = hash(stableJson({ provider: 'minimax', version: 1, request, override }))
+      if (await read(legacy)) return legacy
+    }
     if (!directory) throw new SpeechError('TTS_NOT_CONFIGURED', 'MiniMax speech is not configured on the server.', 503)
     const synthesize = resolveProvider()
     if (generating >= 2) throw new SpeechError('TTS_BUSY', 'Speech generation is busy. Try again shortly.', 429, 2)
@@ -89,8 +95,8 @@ export function createSpeechAssets(db: Database.Database, dataDir: string | unde
 
   return {
     read,
-    prepare(request: Synthesis, resolveProvider: ResolveProvider, override?: string, preview = false) {
-      const { id, parameters } = speechIdentity(request, override)
+    prepare(request: Synthesis, resolveProvider: ResolveProvider, preview = false) {
+      const { id, parameters } = speechIdentity(request)
       const existing = inFlight.get(id)
       if (existing) return existing
       if (inFlight.size >= 16) throw new SpeechError('TTS_BUSY', 'Speech generation is busy. Try again shortly.', 429, 2)

@@ -93,13 +93,13 @@ export function speechRoutes(db: Database.Database, auth: ReturnType<typeof crea
     const text = entry.pronunciationOverride ?? entry.term
     if (!text.trim() || text.length > maxSpeechText || /<#/.test(text)) throw invalid()
     const { voiceId: voice, playbackRate } = preferences(owner)
-    const audioId = await assets.prepare(synthesisRequest(text, voice), provider(owner), entry.pronunciationOverride)
+    const audioId = await assets.prepare(synthesisRequest(text, voice), provider(owner))
     return c.json({ audioId, playbackRate })
   })
   app.post('/preview', async (c) => {
     const { voiceId: voice } = await body(c.req.raw, 'voiceId')
     const owner = c.get('ownerId')
-    const audioId = await assets.prepare(synthesisRequest(speechSample, voiceId(voice)), provider(owner), undefined, true)
+    const audioId = await assets.prepare(synthesisRequest(speechSample, voiceId(voice)), provider(owner), true)
     return c.json({ audioId, playbackRate: preferences(owner).playbackRate })
   })
   app.get('/audio/:audioId', async (c) => {

@@ -30,9 +30,13 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
   function makeEntry(deckId: string, input: EntryInput, now: number, previous?: Entry): Entry {
     const fields = cleanEntry(input)
     const normalizedTerm = normalizeTerm(fields.term)
+    const sameMeaning = previous?.meaning === fields.meaning
+    const meaningSource = fields.meaning ? (sameMeaning ? previous.meaningSource : input.meaningSource ?? 'manual') : undefined
+    const needsReview = sameMeaning ? previous.meaningNeedsReview : input.meaningNeedsReview
     return {
       ...(previous ? revise(previous, now) : { ...newEntity(now), deckId }),
       ...fields, normalizedTerm,
+      meaningSource, meaningNeedsReview: meaningSource === 'ai' && needsReview ? true : undefined,
       termChangedAt: previous && previous.normalizedTerm !== normalizedTerm ? now : previous?.termChangedAt,
     }
   }
@@ -48,7 +52,7 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       return [...summaries.values()].sort((a, b) => b.modifiedAt - a.modifiedAt || a.deck.id.localeCompare(b.deck.id))
         .slice(offset, offset + limit)
     },
-    getDeck(id: string, query: string, filter: 'active' | 'missing' | 'removed' | 'all', offset: number, limit: number) {
+    getDeck(id: string, query: string, filter: 'active' | 'missing' | 'review' | 'removed' | 'all', offset: number, limit: number) {
       const deck = store.deck(id)
       if (!deck) return null
       const words = store.entries(id)
@@ -56,6 +60,7 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       const matches = words.filter((word) => {
         if (filter !== 'all' && (word.deletedAt !== undefined) !== (filter === 'removed')) return false
         if (filter === 'missing' && word.meaning.trim()) return false
+        if (filter === 'review' && !word.meaningNeedsReview) return false
         return !text || word.normalizedTerm.includes(text) || normalizeTerm(word.meaning).includes(text)
       }).sort((a, b) => a.normalizedTerm.localeCompare(b.normalizedTerm) || a.id.localeCompare(b.id))
       return { deck, entries: matches.slice(offset, offset + limit), total: matches.length,
@@ -92,7 +97,7 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       const previous = requireEntry(deckId, id)
       checkRevision(previous, revision)
       if (previous.deletedAt !== undefined) throw new StudyError('Restore this word before editing it.', 409)
-      const entry = makeEntry(deckId, input, now, previous)
+      const entry = makeEntry(deckId, { ...input, explanation: input.explanation ?? previous.explanation }, now, previous)
       unique(deckId, entry.normalizedTerm, id)
       store.saveEntry(entry)
     },
@@ -118,7 +123,8 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
           throw new StudyError('The matching words changed. Review the updated preview and confirm again.', 409)
         }
         if (previous && mode === 'skip') { skipped++; continue }
-        store.saveEntry(makeEntry(deckId, { meaning: '', ...previous, ...candidate.input }, now, previous))
+        store.saveEntry(makeEntry(deckId, { meaning: '', ...previous, ...candidate.input,
+          meaningSource: undefined, meaningNeedsReview: undefined }, now, previous))
         if (previous) updated++
         else added++
       }

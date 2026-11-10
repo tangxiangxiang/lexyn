@@ -51,6 +51,7 @@ async function startFixture(initialOwner: boolean, speechConfigured: boolean) {
   if (!address || typeof address === 'string') throw new Error('Missing test server address.')
   const origin = `http://127.0.0.1:${address.port}`
   const speech = { requests: [] as { text: string; voice_setting: { voice_id: string } }[], failNext: false }
+  const vocabulary = { requests: [] as string[][], beforeReply: undefined as (() => Promise<void>) | undefined }
   app = createApp(db, resolve('dist'), origin, () => now ?? Date.now(),
     { bootstrap: setupToken ? createBootstrapState(setupToken) : undefined }, {
       dataDir: directory,
@@ -62,8 +63,18 @@ async function startFixture(initialOwner: boolean, speechConfigured: boolean) {
         }
         return mockSpeechResponse()
       },
+    }, async (_url, init) => {
+      const { messages } = JSON.parse(String(init?.body))
+      const { words } = JSON.parse(messages[1].content) as { words: { ref: number; term: string }[] }
+      vocabulary.requests.push(words.map(({ term }) => term))
+      await vocabulary.beforeReply?.()
+      const results = words.filter(({ term }) => term !== 'missing').reverse().map((word) => ({
+        ...word, meaning: word.term === 'queue' ? '队列' : '线程',
+        explanation: '进程中的执行单元。', example: 'Start a worker thread.', needsReview: word.term === 'thread', warning: null,
+      }))
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ results }) } }] })
     })
-  return { origin, db, setupToken, speech, advanceTo: (time: number) => { now = time }, close: async () => {
+  return { origin, db, setupToken, speech, vocabulary, advanceTo: (time: number) => { now = time }, close: async () => {
     await new Promise<void>((done) => { server.close(() => done()); if ('closeAllConnections' in server) server.closeAllConnections() })
     db.close()
     rmSync(directory, { recursive: true, force: true })

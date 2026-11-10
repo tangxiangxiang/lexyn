@@ -5,11 +5,12 @@ import { t, translateError } from '../../i18n/useI18n'
 import { useSpeech } from './useSpeech'
 
 const props = defineProps<{
-  entryId?: string; voiceId?: SpeechVoice; revision?: number; scope?: string; disabled?: boolean; label: string
+  entryId?: string; voiceId?: SpeechVoice; revision?: number; scope?: string; disabled?: boolean; label: string; preload?: boolean
 }>()
 const { state, error, toggle } = useSpeech(
   () => props.voiceId ? { voiceId: props.voiceId } : { entryId: props.entryId! },
   () => [props.entryId, props.revision, props.scope, props.voiceId].join('/'),
+  () => !!props.preload && !!props.entryId,
 )
 </script>
 

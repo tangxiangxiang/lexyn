@@ -155,14 +155,19 @@ export const writeDailyNewWords = (value: number) => study('settings/daily', [va
 
 export async function requestSpeech<T>(path: string, method: 'GET' | 'POST' | 'PUT',
   body?: object, caller?: AbortSignal, decode?: (response: Response) => Promise<T>) {
+  return ownerFeatureRequest<T>('speech/' + path, method, body, caller, 20_000, decode)
+}
+
+export async function ownerFeatureRequest<T>(path: string, method: 'GET' | 'POST' | 'PUT',
+  body?: object, caller?: AbortSignal, timeoutMs = 10_000, decode?: (response: Response) => Promise<T>) {
   const owner = session.value
   if (!owner) throw new ApiError(401, 'SESSION', 'Sign in to Lexyn.')
   const signal = AbortSignal.any([sessionRequests.signal, ...(caller ? [caller] : [])])
   try {
-    return await request<T>('speech/' + path, {
+    return await request<T>(path, {
       method, signal, body: body && JSON.stringify(body),
       headers: { 'X-Lexyn-Owner': owner.ownerId, ...(body ? { 'Content-Type': 'application/json' } : {}) },
-    }, { timeoutMs: 20_000, trackConnection: false, decode })
+    }, { timeoutMs, trackConnection: false, decode })
   } catch (error) {
     if (!signal.aborted && error instanceof ApiError && (error.status === 401 || error.code === 'ACCOUNT')) {
       setSession(null)

@@ -108,7 +108,7 @@ test('previews TXT and CSV, explicitly overwrites duplicates and downloads full 
   await expectNoOverflow(page)
   await page.getByText('Overwrite matching words in this deck').click()
   await page.getByRole('button', { name: 'Import 2 words' }).click()
-  await expect(page.getByText('日志, 持久化')).toBeVisible()
+  await expect(page.getByRole('list', { name: 'Words', exact: true }).getByText('日志, 持久化', { exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'lock-free queue' })).toBeVisible()
 
   await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'copy-on-write' }) })

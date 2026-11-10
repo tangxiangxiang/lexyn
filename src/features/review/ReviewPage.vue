@@ -150,6 +150,7 @@ function selectDeck(id: string | null) {
           <h2 class="review-term">{{ round.word.answer.term }}</h2>
           <p class="review-meaning" lang="zh">{{ round.word.answer.meaning }}</p>
           <p v-if="round.word.answer.phonetic" class="library-muted">{{ round.word.answer.phonetic }}</p>
+          <p v-if="round.word.answer.explanation" class="library-muted library-preserve">{{ round.word.answer.explanation }}</p>
           <blockquote v-if="round.word.answer.example" class="review-example">{{ round.word.answer.example }}</blockquote>
           <PronunciationButton :entry-id="round.word.answer.id" :revision="round.word.answer.revision" label="Play pronunciation" />
           <p v-if="spellCheck !== undefined" role="status">

@@ -17,7 +17,10 @@ export interface Deck extends LocalEntity, DeckInput {
 export interface EntryInput {
   term: string
   meaning: string
+  meaningSource?: 'manual' | 'ai'
+  meaningNeedsReview?: boolean
   phonetic?: string
+  explanation?: string
   pronunciationOverride?: string
   example?: string
   note?: string
@@ -30,7 +33,7 @@ export interface Entry extends LocalEntity, EntryInput {
   termChangedAt?: number
 }
 
-export const entryLimits = { term: 240, meaning: 2000, phonetic: 240, pronunciationOverride: 240, example: 4000, note: 4000 }
+export const entryLimits = { term: 240, meaning: 2000, explanation: 200, phonetic: 240, pronunciationOverride: 240, example: 4000, note: 4000 }
 
 export function normalizeTerm(term: string) {
   return term.trim().normalize('NFC').toLowerCase().normalize('NFC')
@@ -63,6 +66,7 @@ export function cleanEntry(input: EntryInput): EntryInput {
   return {
     term,
     meaning: clean(input.meaning, entryLimits.meaning, 'Meaning'),
+    explanation: clean(input.explanation, entryLimits.explanation, 'Explanation') || undefined,
     phonetic: clean(input.phonetic, entryLimits.phonetic, 'Phonetic') || undefined,
     pronunciationOverride: pronunciationOverride || undefined,
     example: clean(input.example, entryLimits.example, 'Example') || undefined,

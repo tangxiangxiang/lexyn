@@ -322,8 +322,9 @@ async function saveDailyWords(value: number | null) {
         <p v-if="answerVisible && current.entry.phonetic" class="learn-phonetic">{{ current.entry.phonetic }}</p>
         <p v-if="!isCopy && answerVisible" class="learn-overline">{{ t('Answer revealed') }}</p>
         <h2 v-if="answerVisible" class="learn-term">{{ current.entry.term }}</h2>
+        <p v-if="answerVisible && current.entry.explanation" class="library-muted library-preserve">{{ current.entry.explanation }}</p>
         <PronunciationButton :entry-id="activeWord.id" :revision="activeWord.revision" :scope="wordKey + '/' + current.session.mode"
-          :disabled="busy" :label="isCopy ? 'Play pronunciation' : 'Play English pronunciation'" />
+          :disabled="busy" :preload="!isCopy" :label="isCopy ? 'Play pronunciation' : 'Play English pronunciation'" />
         <p v-if="current.session.mode === 'dictation'" class="library-muted">
           {{ t('Listen to the word. The English example stays hidden during dictation.') }}
         </p>

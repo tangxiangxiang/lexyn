@@ -89,7 +89,6 @@ test.describe('without a MiniMax key', () => {
     await page.getByRole('link', { name: 'Start learning' }).click()
     await page.getByText('Dictation', { exact: true }).click()
     await page.getByRole('button', { name: 'Learn 2 new words' }).click()
-    await page.getByRole('button', { name: 'Play English pronunciation' }).click()
     await expect(page.getByText('MiniMax speech is not configured on the server.')).toBeVisible()
     await expect(page.locator('.learn-term')).toHaveCount(0)
     expect(records(backend.db, 'practice_events')).toEqual([])
@@ -109,6 +108,8 @@ test('keeps dictation hints out of the DOM until submission or reveal and restor
   const card = page.locator('.learn-card')
   const answer = page.getByRole('textbox', { name: 'Type the dictated word' })
   await expect(answer).toBeFocused()
+  await expect.poll(() => backend.speech.requests.map(({ text }) => text)).toEqual(['concurrency'])
+  expect(await page.evaluate(() => window.lexynAudio.plays)).toEqual([])
   expect(await card.innerHTML()).not.toContain('concurrency')
   await expect(page.locator('.learn-spelling')).toHaveCount(0)
   await answer.fill('concurrncy')
@@ -225,10 +226,9 @@ test('retries speech and releases audio on word and route changes', async ({ pag
   await makeDeckWithWords(page)
   await page.getByRole('link', { name: 'Start learning' }).click()
   await page.getByText('Dictation', { exact: true }).click()
+  backend.speech.failNext = true
   await page.getByRole('button', { name: 'Learn 2 new words' }).click()
   const play = page.getByRole('button', { name: 'Play English pronunciation' })
-  backend.speech.failNext = true
-  await play.click()
   await expect(page.getByText('The speech provider is unavailable. Try again.')).toBeVisible()
   expect(records(backend.db, 'practice_events')).toHaveLength(0)
   await play.click()

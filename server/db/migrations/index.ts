@@ -153,6 +153,18 @@ const migrations: ({ version: number; sql: string } | { version: number; apply: 
       ) STRICT;
     `,
   },
+  {
+    version: 9,
+    sql: `
+      CREATE TABLE vocabulary_jobs (
+        owner_id TEXT NOT NULL REFERENCES owner(id),
+        deck_id TEXT NOT NULL REFERENCES decks(id),
+        expires_at INTEGER NOT NULL,
+        body TEXT NOT NULL CHECK (json_valid(body)),
+        PRIMARY KEY (owner_id, deck_id)
+      ) STRICT;
+    `,
+  },
 ]
 
 export const latestDatabaseVersion = migrations.at(-1)!.version
