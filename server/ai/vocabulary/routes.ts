@@ -11,6 +11,8 @@ import { entryLimits, type Deck, type Entry } from '../../../shared/domain/libra
 import type { AuthEnv, createAuthApi } from '../../auth/routes.ts'
 import { createSpeechCredentials } from '../../speech/credentials.ts'
 import { createStudyStore, StudyError, type StudyStore } from '../../study/store.ts'
+import type { Ecdict } from '../../dictionary/ecdict.ts'
+import type { DictionaryLookup } from '../../../shared/contracts/dictionary.ts'
 import { generateVocabulary, vocabularyChunkSize, VocabularyError, vocabularyModel, vocabularyRateLimited } from './provider.ts'
 
 const ttl = 24 * 60 * 60_000
@@ -20,7 +22,15 @@ const invalid = () => new InvalidInput('Invalid vocabulary request.')
 const conflict = () => new VocabularyError('AI_CONFLICT', 409, 'This vocabulary task or word changed. Reload and try again.')
 const unavailable = () => new VocabularyError('AI_UNCONFIGURED', 503, 'Save a usable MiniMax key in Pronunciation before generating vocabulary.')
 const batchBusy = () => new VocabularyError('AI_BUSY', 429, 'A vocabulary batch is already running. Try again shortly.')
-const noResult = 'MiniMax did not return a valid candidate for this word.'
+const noResult = 'Neither ECDICT nor MiniMax returned a valid meaning for this word.'
+const contextualWords = new Set(['spring', 'volatile', 'thread', 'race', 'pool', 'class', 'object', 'interface', 'method', 'field', 'process', 'stream', 'map', 'set', 'heap', 'stack', 'bean', 'buffer', 'record', 'queue', 'cache', 'package'])
+function contextSensitive(deck: Deck, term: string) {
+  return contextualWords.has(term.toLowerCase()) && /java|spring|software|programming|computer|technical|backend|frontend|编程|计算机|程序|软件|开发|后端|前端/i.test(deck.name + ' ' + (deck.description ?? ''))
+}
+function hintFromDictionary(lookup: DictionaryLookup | undefined) {
+  const first = lookup?.entries[0]
+  return first ? { translation: first.translation.slice(0, 700), definition: first.definition.slice(0, 350), pos: first.pos.slice(0, 80) } : null
+}
 type StoredJob = VocabularyJob & { targets: VocabularyTarget[] }
 const inProgress = (job: VocabularyJob) => job.status === 'pending' || job.status === 'running'
 
@@ -47,7 +57,7 @@ function activeDeck(store: StudyStore, deckId: string) {
   return deck
 }
 
-export function vocabularyRoutes(db: Database.Database, auth: ReturnType<typeof createAuthApi>, dataDir?: string, send?: typeof fetch) {
+export function vocabularyRoutes(db: Database.Database, auth: ReturnType<typeof createAuthApi>, dataDir?: string, send?: typeof fetch, dictionary?: Ecdict) {
   const app = new Hono<AuthEnv>()
   const credentials = createSpeechCredentials(db, dataDir)
   const requestTimes: number[] = []
@@ -86,9 +96,15 @@ export function vocabularyRoutes(db: Database.Database, auth: ReturnType<typeof 
     }
     throw unavailable()
   }
+  const optionalKey = (owner: string) => {
+    try { return checkedKey(owner) } catch (error) {
+      if (error instanceof VocabularyError && error.code === 'AI_UNCONFIGURED') return undefined
+      throw error
+    }
+  }
   const keyHash = (key: string) => createHash('sha256').update(key).digest('hex')
 
-  async function call(key: string, deck: Deck, terms: string[], hint?: string, signal?: AbortSignal) {
+  async function call(key: string, deck: Deck, terms: string[], hint?: string, signal?: AbortSignal, dictionaryHints?: (ReturnType<typeof hintFromDictionary>)[]) {
     while (true) {
       signal?.throwIfAborted()
       const now = Date.now()
@@ -104,7 +120,7 @@ export function vocabularyRoutes(db: Database.Database, auth: ReturnType<typeof 
     }
     const hash = keyHash(key)
     try {
-      const result = await generateVocabulary(key, terms, { name: deck.name, description: deck.description, hint }, send, undefined, signal)
+      const result = await generateVocabulary(key, terms, { name: deck.name, description: deck.description, hint, dictionaryHints }, send, undefined, signal)
       lastAccess = { keyHash: hash, status: 'available' }
       return result
     } catch (error) {
@@ -115,7 +131,7 @@ export function vocabularyRoutes(db: Database.Database, auth: ReturnType<typeof 
     } finally { pendingCalls-- }
   }
 
-  async function runJob(owner: string, job: StoredJob, deck: Deck, key: string, controller: AbortController) {
+  async function runJob(owner: string, job: StoredJob, deck: Deck, key: string | undefined, controller: AbortController) {
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(taskTimeout)])
     const store = storeFor(owner)
     let progress: StoredJob = { ...job, status: 'running' }
@@ -127,51 +143,73 @@ export function vocabularyRoutes(db: Database.Database, auth: ReturnType<typeof 
       for (let offset = 0; offset < job.targets.length; offset += vocabularyChunkSize) {
         signal.throwIfAborted()
         const currentDeck = activeDeck(store, deck.id)
-        if (checkedKey(owner) !== key) throw unavailable()
+        if (key && checkedKey(owner) !== key) throw unavailable()
         const chunk = job.targets.slice(offset, offset + vocabularyChunkSize)
         const eligible = chunk.flatMap((row) => {
           const word = currentWord(store, deck.id, row)
           return word ? [{ row, term: word.term }] : []
         })
+        const lookedUp = eligible.map((item) => ({
+          ...item, dictionary: dictionary?.lookup(item.term),
+        }))
+        const dictCandidates = new Map<string, { meaning: string; phonetic: string; needsReview: boolean }>()
+        const needsAI = lookedUp.filter((item) => {
+          const lookup = item.dictionary
+          if (!lookup?.suggestedMeaning || lookup.needsReview || contextSensitive(currentDeck, item.term)) return true
+          dictCandidates.set(item.row.entryId, {
+            meaning: lookup.suggestedMeaning, phonetic: lookup.entries[0]?.phonetic ?? '', needsReview: false,
+          })
+          return false
+        })
         let results: Awaited<ReturnType<typeof generateVocabulary>> = []
         let problem: string | undefined
         let fatal = false
-        if (eligible.length) {
+        if (needsAI.length && key) {
           try {
-            results = await call(key, currentDeck, eligible.map(({ term }) => term), undefined, signal)
+            results = await call(key, currentDeck, needsAI.map(({ term }) => term), undefined, signal,
+              needsAI.map(({ dictionary: lookup }) => hintFromDictionary(lookup)))
           } catch (error) {
             signal.throwIfAborted()
             problem = error instanceof VocabularyError ? error.message : 'Vocabulary generation failed.'
             fatal = error instanceof VocabularyError && ['AI_AUTH', 'AI_QUOTA', 'AI_RATE_LIMIT'].includes(error.code)
           }
-        }
+        } else if (needsAI.length) problem = 'MiniMax text access is not configured. Some words need AI context.'
         signal.throwIfAborted()
-        const candidates = new Map(eligible.map(({ row }, index) => [row.entryId, results[index]]))
+        const aiCandidates = new Map(needsAI.map(({ row }, index) => [row.entryId, results[index]]))
+        const eligibleIds = new Set(eligible.map(({ row }) => row.entryId))
+        const lookups = new Map(lookedUp.map(({ row, dictionary: lookup }) => [row.entryId, lookup]))
         // The progress counters and all word writes for this chunk commit together.
         progress = db.transaction(() => {
           const next = { ...progress, processed: progress.processed + chunk.length, updatedAt: Date.now() }
           const stillActive = store.deck(deck.id)?.archivedAt === undefined
           for (const row of chunk) {
             const word = stillActive ? currentWord(store, deck.id, row) : undefined
-            if (!word || !candidates.has(row.entryId)) {
+            if (!word || !eligibleIds.has(row.entryId)) {
               next.skipped++
               next.conflicts++
               continue
             }
-            const candidate = candidates.get(row.entryId)
-            if (!candidate) {
+            const dictionaryCandidate = dictCandidates.get(row.entryId)
+            const aiCandidate = aiCandidates.get(row.entryId)
+            if (!dictionaryCandidate && !aiCandidate) {
               next.failed++
+              if (!lookups.get(row.entryId)?.found) next.notFound = (next.notFound ?? 0) + 1
               next.error = problem ?? noResult
               continue
             }
+            const candidate = dictionaryCandidate ?? aiCandidate!
+            const dictionaryPhonetic = lookups.get(row.entryId)?.entries[0]?.phonetic
             store.saveEntry({
-              ...word, meaning: candidate.meaning, meaningSource: 'ai',
+              ...word, meaning: candidate.meaning, meaningSource: dictionaryCandidate ? 'dictionary' : 'ai',
               meaningNeedsReview: candidate.needsReview || undefined,
-              explanation: word.explanation?.trim() ? word.explanation : candidate.explanation || undefined,
-              example: word.example?.trim() ? word.example : candidate.example || undefined,
+              phonetic: word.phonetic?.trim() ? word.phonetic : dictionaryPhonetic || undefined,
+              explanation: word.explanation?.trim() ? word.explanation : aiCandidate?.explanation || undefined,
+              example: word.example?.trim() ? word.example : aiCandidate?.example || undefined,
               revision: word.revision + 1, updatedAt: Math.max(word.updatedAt, Date.now()),
             })
             next.succeeded++
+            if (dictionaryCandidate) next.dictionarySaved = (next.dictionarySaved ?? 0) + 1
+            else next.aiSaved = (next.aiSaved ?? 0) + 1
             if (candidate.needsReview) next.needsReview++
           }
           saveJob(owner, next)
@@ -230,7 +268,7 @@ export function vocabularyRoutes(db: Database.Database, auth: ReturnType<typeof 
     const fingerprint = stableJson([owner, keyHash(key), deck.id, deck.revision, term, hint ?? ''])
     let task = singleflight.get(fingerprint)
     if (!task) {
-      task = call(key, deck, [term], hint).finally(() => { singleflight.delete(fingerprint) })
+      task = call(key, deck, [term], hint, undefined, [hintFromDictionary(dictionary?.lookup(term))]).finally(() => { singleflight.delete(fingerprint) })
       singleflight.set(fingerprint, task)
     }
     const [candidate] = await task
@@ -264,11 +302,12 @@ export function vocabularyRoutes(db: Database.Database, auth: ReturnType<typeof 
     const targets = store.all<Entry>('SELECT body ' + missingEntries + ' ORDER BY active_term, id LIMIT ?', deck.id, raw.count)
       .map(({ id: entryId, revision }) => ({ entryId, revision }))
     if (!targets.length) throw new VocabularyError('AI_EMPTY', 409, 'No words need a meaning.')
-    const key = checkedKey(owner)
+    const key = dictionary?.status().installed ? optionalKey(owner) : checkedKey(owner)
     db.prepare('DELETE FROM vocabulary_jobs WHERE expires_at <= ?').run(Date.now())
     const now = Date.now()
     const job: StoredJob = { id: requestId, deckId: deck.id, status: 'pending', targets, total: targets.length,
-      processed: 0, succeeded: 0, failed: 0, skipped: 0, conflicts: 0, needsReview: 0, createdAt: now, updatedAt: now }
+      processed: 0, succeeded: 0, failed: 0, skipped: 0, conflicts: 0, needsReview: 0,
+      dictionarySaved: 0, aiSaved: 0, notFound: 0, createdAt: now, updatedAt: now }
     saveJob(owner, job)
     const controller = new AbortController()
     active = { id: job.id, controller }
