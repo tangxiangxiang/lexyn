@@ -63,7 +63,7 @@ export function validateEntity(payload: Record<string, unknown>, kind: 'deck' | 
     }
     return payload.id
   }
-  fields(payload, 'id deckId term meaning dictionaryMeaning dictionaryReference phonetics meaningSource meaningNeedsReview explanation phonetic pronunciationOverride example note normalizedTerm createdAt updatedAt revision deletedAt termChangedAt')
+  fields(payload, 'id deckId term meaning dictionaryMeaning dictionaryReference phonetics phoneticsCleared phoneticsNeedsReview meaningSource meaningNeedsReview explanation phonetic pronunciationOverride example note normalizedTerm createdAt updatedAt revision deletedAt termChangedAt')
   const term = string(payload, 'term')!
   const meaning = string(payload, 'meaning')!
   if ((payload.meaningSource !== undefined && (!meaning || (payload.meaningSource !== 'manual' && payload.meaningSource !== 'ai' && payload.meaningSource !== 'dictionary')))
@@ -83,6 +83,11 @@ export function validateEntity(payload: Record<string, unknown>, kind: 'deck' | 
     dictionaryReference = cleanDictionaryReference(payload.dictionaryReference)
     phonetics = cleanPhonetics(payload.phonetics)
   } catch { throw new InvalidInput('Invalid dictionary reference or phonetics.') }
+  if ((payload.phoneticsCleared !== undefined && typeof payload.phoneticsCleared !== 'boolean')
+    || (payload.phoneticsNeedsReview !== undefined && typeof payload.phoneticsNeedsReview !== 'boolean')
+    || (payload.phoneticsCleared && (phonetics || phonetic || payload.phoneticsNeedsReview))) {
+    throw new InvalidInput('Invalid phonetics metadata.')
+  }
   const clean = cleanEntry({ term, meaning, explanation, phonetic, pronunciationOverride, example, note,
     dictionaryMeaning, dictionaryReference, phonetics })
   if (term !== clean.term || meaning !== clean.meaning || explanation !== clean.explanation || phonetic !== clean.phonetic

@@ -113,7 +113,8 @@ test('ECDICT original data stays immutable while each AI iteration uses the late
   const versionA = snapshot(entry.id)
   expect(versionA.dictionaryReference).toEqual({ sourceWord: 'thread', sourceRevision: 'test-ecdict-source',
     translation: 'n. 线\\nvt. 穿线', definition: 'a thin cord', partOfSpeech: 'v.', phonetic: 'θred' })
-  expect(versionA.phonetics).toBeUndefined()
+  expect(versionA.phonetics).toEqual({ unspecified: 'θred' })
+  expect(versionA.phoneticsCleared).toBeUndefined()
   const dictionary = createEcdict(directory)
   expect(dictionary.lookup('thread').entries[0]?.translation).toBe('n. 线\\nvt. 穿线')
   dictionary.close()
@@ -176,11 +177,24 @@ test('IPA optimization uses saved edits, preserves null accents and respects an 
   const cleared = await library<Entry>('update-entry', [deckId, entry.id, {
     term: 'thread', meaning: optimized.meaning, phonetics: null, phonetic: '',
   }, optimized.revision])
+  expect(cleared.phoneticsCleared).toBe(true)
   send.mockImplementationOnce(async (_url, init) => aiReply(init, { british: null, american: null }))
   expect((await api(`vocabulary/optimize/${entry.id}`, { revision: cleared.revision })).status).toBe(200)
   expect(snapshot(entry.id).phonetics).toBeUndefined()
   expect(snapshot(entry.id).phonetic).toBeUndefined()
   expect(snapshot(entry.id).dictionaryReference?.phonetic).toBe('θred')
+  const meaningEdit = await library<Entry>('update-entry', [deckId, entry.id, {
+    term: 'thread', meaning: '新的人工释义',
+  }, snapshot(entry.id).revision])
+  expect(meaningEdit.phoneticsCleared).toBe(true)
+  send.mockImplementationOnce(async (_url, init) => aiReply(init, { british: 'θred', american: 'θɹɛd' }))
+  expect((await api(`vocabulary/optimize/${entry.id}`, { revision: meaningEdit.revision })).status).toBe(200)
+  expect(snapshot(entry.id).phonetics).toBeUndefined()
+  expect((await plan(`vocabulary/batch/${deckId}`)).missingPhonetics).toBe(0)
+  const restored = await library<Entry>('update-entry', [deckId, entry.id, {
+    term: 'thread', meaning: optimized.meaning, phonetics: { american: 'θɹɛd' },
+  }, snapshot(entry.id).revision])
+  expect(restored.phoneticsCleared).toBeUndefined()
 })
 
 test('an older AI response cannot overwrite a newer revision', async () => {
@@ -325,11 +339,39 @@ test('IPA backfill keeps existing accents and excludes complete words from later
   expect(await readJob(path)).toMatchObject({ mode: 'phonetics', total: 1, succeeded: 1, needsReview: 1 })
   expect(snapshot(entry.id)).toMatchObject({
     dictionaryMeaning: entry.dictionaryMeaning, meaning: entry.meaning, meaningSource: entry.meaningSource,
-    phonetics: { ...entry.phonetics, american: 'kəˈmænd' }, revision: entry.revision + 1,
+    phonetics: { ...entry.phonetics, american: 'kəˈmænd' }, phoneticsNeedsReview: true, revision: entry.revision + 1,
   })
   expect(await plan(path)).toMatchObject({ missingPhonetics: 0 })
   expect((await api(path, { requestId: randomUUID(), count: 3, afterTaskId: requestId, mode: 'phonetics' })).status).toBe(409)
   expect(send).toHaveBeenCalledTimes(1)
+})
+
+test('IPA backfill persists a suggested check even when no accent passes validation', async () => {
+  await seedEcdict()
+  const { id: deckId } = await deck()
+  const entry = await word(deckId, 'thread', '最新释义')
+  const path = `vocabulary/batch/${deckId}`
+  send.mockImplementationOnce(async () => Response.json({ choices: [{ finish_reason: 'stop', message: {
+    content: JSON.stringify({ results: [{ ref: 0, term: 'thread',
+      phonetics: { british: '英音', american: null }, phoneticsNeedsReview: false, warning: null }] }),
+  } }] }))
+  expect((await api(path, { requestId: randomUUID(), count: 3, afterTaskId: null, mode: 'phonetics' })).status).toBe(202)
+  await vi.waitFor(async () => expect((await readJob(path)).status).toBe('completed'))
+  expect(await readJob(path)).toMatchObject({ succeeded: 0, failed: 1, needsReview: 1 })
+  expect(snapshot(entry.id)).toMatchObject({ meaning: '最新释义', meaningSource: 'manual',
+    phonetics: { unspecified: 'θred' }, phoneticsNeedsReview: true, revision: entry.revision + 1 })
+  expect(snapshot(entry.id).meaningNeedsReview).toBeUndefined()
+  const args = encodeURIComponent(JSON.stringify([deckId, '', 'review', 0, 50]))
+  const filtered = await api(`library/deck?args=${args}`)
+  expect(await filtered.json()).toMatchObject({ data: { entries: [{ id: entry.id }], total: 1 } })
+  const edited = await library<Entry>('update-entry', [deckId, entry.id, {
+    term: 'thread', meaning: '手动改释义',
+  }, snapshot(entry.id).revision])
+  expect(edited.phoneticsNeedsReview).toBe(true)
+  const corrected = await library<Entry>('update-entry', [deckId, entry.id, {
+    term: 'thread', meaning: edited.meaning, phonetics: { british: 'θred' },
+  }, edited.revision])
+  expect(corrected.phoneticsNeedsReview).toBeUndefined()
 })
 
 test('ECDICT API remains protected and lookup is read-only', async () => {

@@ -49,7 +49,7 @@ SQLite Online Backup 只备份 lexyn.sqlite，不自动包含 dictionaries/ecdic
 - ECDICT 解析依据显式词性与领域标记，兼容 CSV 中实际换行和字面 `\\n`。标准列表中的逗号可拆为多个义项；括号、引号和有歧义的子句保留为原始片段。解析结果只作为 AI 输入，最终结构由模型生成并经服务端校验。
 - 再次优化释义时，服务端读取当前最新保存的完整释义作为主要输入，并附上 ECDICT 原文作为辅助依据。人工修改与 AI 生成没有来源优先级；每次保存递增 Entry revision。若 AI 响应返回时 revision 已变化，会拒绝写入并保留较新的释义。
 - Library、Learn 和 Review 读取最终完整释义；Review 正面显示完整中文释义，揭晓后显示英文答案和完整释义。旧 `explanation`、`example`、`note` 字段仍可兼容保存，但不在日常学习界面展示。
-- ECDICT 通用音标是 MiniMax 生成英美 IPA 时的辅助参考。Library、Learn 和 Review 用斜杠显示音标。仅有旧通用音标时直接显示音标，没有音标时隐藏该区域。MiniMax TTS 独立使用语音合成服务。
+- ECDICT 通用音标是 MiniMax 生成英美 IPA 时的辅助参考。AI 未生成可用音标且词条没有已有音标时，可以使用 ECDICT 通用音标回退。Library、Learn 和 Review 为英美音标加上对应口音标签，通用音标仅显示带斜杠的音标。手动清空音标会阻止自动补回。
 
 ## 导入释义与拼写变更
 

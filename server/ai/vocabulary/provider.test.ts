@@ -79,7 +79,7 @@ test('requires useful definitions and rejects output truncation before any calle
   const empty = await generateVocabulary('key', ['unclear'], { name: 'Deck' },
     async () => results({ ref: 0, term: 'unclear', senses: [], needsReview: true, warning: '无法确定可靠释义' }))
   expect(empty[0]).toMatchObject({ senses: [], needsReview: true })
-  expect(vocabularyPromptVersion).toBe('lexyn-meaning-ipa-v3')
+  expect(vocabularyPromptVersion).toBe('lexyn-meaning-ipa-v4')
 })
 
 test.each([
@@ -95,19 +95,56 @@ test.each([
 ] as const)('validates IPA candidates without losing usable meanings or accents (%#)', async (phonetics, accepted, needsReview) => {
   const [candidate] = await generateVocabulary('key', ['record'], { name: 'Deck' },
     async () => results({ ...word(0, 'record'), phonetics }))
-  expect(candidate).toMatchObject({ phonetics: accepted, needsReview, senses: [{ definitions: ['线程'] }] })
+  expect(candidate).toMatchObject({ phonetics: accepted, needsReview: false, phoneticsNeedsReview: needsReview,
+    senses: [{ definitions: ['线程'] }] })
   expect(candidate?.phonetics).toEqual(accepted)
 })
 
 test('uses saved IPA as input and accepts an IPA-only response for backfill', async () => {
   const send = vi.fn<typeof fetch>(async () => results({
-    ref: 0, term: 'record', phonetics: { british: null, american: 'ˈrek.ɚd' }, needsReview: true, warning: null,
+    ref: 0, term: 'record', phonetics: { british: null, american: 'ˈrek.ɚd' }, phoneticsNeedsReview: true, warning: null,
   }))
   const [candidate] = await generateVocabulary('key', ['record'], { name: 'Deck', mode: 'phonetics',
     currentPhonetics: [{ british: '/ˈrekɔːd/', unspecified: 'rekɔːd' }],
   }, send)
-  expect(candidate).toEqual({ senses: [], phonetics: { american: 'ˈrek.ɚd' }, needsReview: true, warning: null })
+  expect(candidate).toEqual({ senses: [], phonetics: { american: 'ˈrek.ɚd' }, needsReview: false,
+    phoneticsNeedsReview: true, warning: null })
   const { messages } = JSON.parse(String(send.mock.calls[0][1]?.body))
   expect(messages[0].content).toContain('Do not generate meanings.')
   expect(JSON.parse(messages[1].content).words[0].currentPhonetics).toEqual({ british: '/ˈrekɔːd/', unspecified: 'rekɔːd' })
+})
+
+test('requests dictionary glosses, keeping common senses, established names, and necessary detail', async () => {
+  const send = vi.fn<typeof fetch>(async () => results(
+    word(0, 'Java', [{ partOfSpeech: 'n.', definitions: ['爪哇岛', '爪哇咖啡'] },
+      { partOfSpeech: 'N', domain: '【计算机】', definitions: ['[计算机] Java 编程语言', 'Java 编程语言'] }]),
+    word(1, 'command', [{ partOfSpeech: 'n.', definitions: ['命令', '指挥权'] },
+      { partOfSpeech: 'vt.', definitions: ['命令', '指挥'] }]),
+    word(2, 'file', [{ partOfSpeech: 'n.', definitions: ['文件夹', '锉刀'] },
+      { partOfSpeech: 'n.', domain: '计算机', definitions: ['文件'] },
+      { partOfSpeech: 'v.', definitions: ['归档', '提交'] }]),
+  ))
+  const [java, command, file] = await generateVocabulary('key', ['Java', 'command', 'file'], { name: 'CS' }, send)
+  expect(java?.senses).toMatchObject([
+    { partOfSpeech: 'n.', definitions: ['爪哇岛', '爪哇咖啡'] },
+    { partOfSpeech: 'n.', domain: '计算机', definitions: ['Java 编程语言'] },
+  ])
+  expect(command?.senses.map(({ definitions }) => definitions)).toEqual([['命令', '指挥权'], ['命令', '指挥']])
+  expect(file?.senses.map(({ partOfSpeech }) => partOfSpeech)).toEqual(['n.', 'n.', 'v.'])
+  const prompt = JSON.parse(String(send.mock.calls[0][1]?.body)).messages[0].content
+  expect(prompt).toContain('Prefer a word or short phrase to a full explanatory sentence')
+  expect(prompt).toContain('Omit examples, encyclopedic explanations, etymology, usage tutorials')
+  expect(prompt).toContain('Keep necessary detail when a shorter gloss would lose meaning')
+  expect(prompt).toContain('including ordinary meanings in technical decks')
+  expect(prompt).toContain('while keeping established names and acronyms where needed')
+})
+
+test('checks POS and placeholders, and keeps meaning uncertainty separate from IPA', async () => {
+  const result = await generateVocabulary('key', ['present', 'interface', 'process'], { name: 'CS' }, async () => results(
+    word(0, 'present', [{ partOfSpeech: 'n./v.', definitions: ['礼物'] }]),
+    word(1, 'interface', [{ partOfSpeech: 'n.', domain: '计算机', definitions: ['【计算机】待确认。'] }]),
+    { ...word(2, 'process', [{ partOfSpeech: 'n.', definitions: ['过程', '进程'] }]),
+      needsReview: true, warning: '专业义项待核对', phoneticsNeedsReview: false },
+  ))
+  expect(result).toMatchObject([undefined, undefined, { needsReview: true, phoneticsNeedsReview: false }])
 })

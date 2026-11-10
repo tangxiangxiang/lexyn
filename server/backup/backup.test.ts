@@ -53,6 +53,12 @@ test('rejects corrupted or incomplete v4 JSON without accepting partial history'
   expect(result.reviewChanges[0].event).toEqual(good.reviewEvents[0])
   expect(result.reviewChanges[0].card.schedulerState).toEqual(good.reviewCards[0].schedulerState)
   expect(result.reviewChanges[0].card.dueAt).toBeGreaterThan(good.reviewEvents[0].reviewedAt)
+  expect((await parse({ ...good, entries: [{ ...good.entries[0], phoneticsCleared: true }] }))
+    .backup.entries[0].phoneticsCleared).toBe(true)
+  expect((await parse({ ...good, entries: [{ ...good.entries[0], phoneticsNeedsReview: true }] }))
+    .backup.entries[0].phoneticsNeedsReview).toBe(true)
+  await expect(parse({ ...good, entries: [{ ...good.entries[0], phoneticsNeedsReview: 'true' }] }))
+    .rejects.toThrow('Invalid phonetics metadata')
   await expect(prepareLibraryRestore('{')).rejects.toThrow('not valid JSON')
   await expect(parse({ ...good, formatVersion: 2 })).rejects.toThrow('formats v4 and v5')
   await expect(parse({ ...good, entries: [] })).rejects.toThrow('missing entry')
@@ -79,6 +85,7 @@ test('rolls back JSON restore including library and history and retries into the
     backup.entries[0].dictionaryReference = { sourceWord: 'audit', sourceRevision: 'fixture',
       translation: dictionaryMeaning.rawTranslation, definition: 'to examine records', partOfSpeech: 'n. vt.', phonetic: 'ˈɔːdɪt' }
     backup.entries[0].phonetics = { british: 'ˈɔːdɪt', american: 'ˈɑdɪt', unspecified: '/ˈɔːdɪt/' }
+    backup.entries[0].phoneticsNeedsReview = true
     backup.entries[0].meaning = meaningFromSenses(dictionaryMeaning.senses)
     await expect(parse(backup)).rejects.toThrow('require backup format v5')
     backup.formatVersion = 5
@@ -99,6 +106,7 @@ test('rolls back JSON restore including library and history and retries into the
       .toEqual(backup.entries[0].dictionaryReference)
     expect(JSON.parse(db.prepare("SELECT json_extract(body, '$.phonetics') FROM entries").pluck().get() as string))
       .toEqual(backup.entries[0].phonetics)
+    expect(db.prepare("SELECT json_extract(body, '$.phoneticsNeedsReview') FROM entries").pluck().get()).toBe(1)
     expect(db.prepare("SELECT json_extract(body, '$.pronunciationOverride') FROM entries").pluck().get()).toBe('aw dit')
     expect(db.prepare("SELECT json_extract(body, '$.explanation') FROM entries").pluck().get()).toBe('系统化地检查记录。')
     expect(db.prepare("SELECT json_extract(body, '$.meaningSource'), json_extract(body, '$.meaningNeedsReview') FROM entries").raw().get())

@@ -22,5 +22,5 @@ const values = computed(() => {
 </template>
 
 <style scoped>
-.phonetics { display: flex; flex-wrap: wrap; gap: .25rem .8rem; color: var(--muted); }
+.phonetics { display: flex; flex-wrap: wrap; gap: .25rem .8rem; color: var(--muted); overflow-wrap: anywhere; }
 </style>

@@ -151,9 +151,9 @@ function selectDeck(id: string | null) {
         </template>
         <template v-else-if="round.word.answer">
           <h2 class="review-term">{{ round.word.answer.term }}</h2>
+          <PhoneticsView :phonetics="round.word.answer.phonetics" :legacy="round.word.answer.phonetic" />
           <DictionaryMeaningView v-if="hasFinalMeaning(round.word.answer.dictionaryMeaning)" :meaning="round.word.answer.dictionaryMeaning!" />
           <p v-else class="review-meaning" lang="zh">{{ round.word.answer.meaning }}</p>
-          <PhoneticsView :phonetics="round.word.answer.phonetics" :legacy="round.word.answer.phonetic" />
           <PronunciationButton :entry-id="round.word.answer.id" :revision="round.word.answer.revision" label="Play pronunciation" />
           <p v-if="spellCheck !== undefined" role="status">
             {{ spellCheck ? t('Your spelling matches.') : t('Your spelling differs.') }} {{ t('Choose the rating that reflects your recall.') }}

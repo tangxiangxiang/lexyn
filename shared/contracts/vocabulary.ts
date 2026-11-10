@@ -10,6 +10,7 @@ export interface VocabularyCandidate {
   senses: DictionarySense[]
   phonetics: AccentPhonetics
   needsReview: boolean
+  phoneticsNeedsReview: boolean
   warning: string | null
 }
 export interface VocabularyTarget { entryId: string; revision: number }

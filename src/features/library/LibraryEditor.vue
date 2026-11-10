@@ -41,6 +41,7 @@ const aiBusy = ai.busy
 const aiError = ai.error
 const snapshot = () => JSON.stringify({ term: entryForm.term, phonetics, senses: fullMeaning.value?.senses ?? [] })
 let savedSnapshot = snapshot()
+let savedPhonetics = JSON.stringify(normalizedPhonetics())
 const dirty = computed(() => snapshot() !== savedSnapshot)
 
 function normalizedPhonetics(): PhoneticVariants | undefined {
@@ -56,6 +57,8 @@ function payload() {
   const dictionaryMeaning = senses.length ? { ...fullMeaning.value, senses } as DictionaryMeaning : undefined
   const dictionaryMeaningInput = termChanged.value ? null : dictionaryMeaning
     ?? (entry && !hasFinalMeaning(entry.dictionaryMeaning) ? undefined : null)
+  const ipa = normalizedPhonetics()
+  const phoneticsChanged = JSON.stringify(ipa) !== savedPhonetics
   return {
     term: entryForm.term,
     // Keep the form intact while spelling is edited. The server clears term-bound
@@ -63,9 +66,8 @@ function payload() {
     meaning: termChanged.value ? '' : dictionaryMeaning ? meaningFromSenses(dictionaryMeaning.senses) : '',
     dictionaryMeaning: dictionaryMeaningInput,
     dictionaryReference: termChanged.value ? null : undefined,
-    phonetics: termChanged.value ? null : normalizedPhonetics() ?? null,
-    // Retain the historical generic phonetic field for existing speech clients and backups.
-    phonetic: termChanged.value ? '' : phonetics.unspecified.trim(),
+    phonetics: phoneticsChanged && !termChanged.value ? ipa ?? null : undefined,
+    phonetic: phoneticsChanged && !termChanged.value ? ipa?.unspecified ?? '' : undefined,
     pronunciationOverride: termChanged.value ? '' : undefined,
     meaningSource: termChanged.value ? undefined : senses.some(({ source }) => source === 'manual') ? 'manual' as const : 'ai' as const,
   }
@@ -81,6 +83,7 @@ function applyEntry(value: Entry) {
   phonetics.british = value.phonetics?.british ?? ''
   phonetics.american = value.phonetics?.american ?? ''
   phonetics.unspecified = value.phonetics?.unspecified ?? value.phonetic ?? ''
+  savedPhonetics = JSON.stringify(normalizedPhonetics())
   savedSnapshot = snapshot()
 }
 
@@ -151,9 +154,9 @@ async function save() {
           <label for="library-phonetic-american">{{ t('American') }}</label>
           <NInput v-model:value="phonetics.american" :maxlength="240"
             :input-props="{ id: 'library-phonetic-american', 'aria-label': t('American phonetic') }" />
-          <label for="library-phonetic-unspecified">{{ t('Unspecified') }}</label>
+          <label for="library-phonetic-unspecified">{{ t('Generic IPA') }}</label>
           <NInput v-model:value="phonetics.unspecified" :maxlength="240"
-            :input-props="{ id: 'library-phonetic-unspecified', 'aria-label': t('Unspecified phonetic') }" />
+            :input-props="{ id: 'library-phonetic-unspecified', 'aria-label': t('Generic IPA') }" />
         </fieldset>
 
         <label>{{ t('Meaning') }}</label>

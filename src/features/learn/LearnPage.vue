@@ -320,12 +320,12 @@ async function saveDailyWords(value: number | null) {
           <span>{{ current.session.currentIndex + 1 }} / {{ current.session.entryIds.length }}</span>
         </div>
         <NProgress type="line" :percentage="progressValue" :show-indicator="false" :aria-label="t('Session progress')" />
+        <p v-if="!isCopy && answerVisible" class="learn-overline">{{ t('Answer revealed') }}</p>
+        <h2 v-if="answerVisible" class="learn-term">{{ current.entry.term }}</h2>
+        <PhoneticsView v-if="answerVisible" :phonetics="current.entry.phonetics" :legacy="current.entry.phonetic" />
         <DictionaryMeaningView v-if="answerVisible && hasFinalMeaning(current.entry.dictionaryMeaning)" :meaning="current.entry.dictionaryMeaning!" />
         <p v-else-if="meaning" class="learn-meaning">{{ meaning }}</p>
         <p v-else-if="!current.entry.meaning" class="learn-meaning learn-muted">{{ t('Meaning not added yet') }}</p>
-        <PhoneticsView v-if="answerVisible" :phonetics="current.entry.phonetics" :legacy="current.entry.phonetic" />
-        <p v-if="!isCopy && answerVisible" class="learn-overline">{{ t('Answer revealed') }}</p>
-        <h2 v-if="answerVisible" class="learn-term">{{ current.entry.term }}</h2>
         <PronunciationButton :entry-id="activeWord.id" :revision="activeWord.revision" :scope="wordKey + '/' + current.session.mode"
           :disabled="busy" :preload="!isCopy" :label="isCopy ? 'Play pronunciation' : 'Play English pronunciation'" />
         <p v-if="current.session.mode === 'dictation'" class="library-muted">

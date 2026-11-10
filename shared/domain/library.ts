@@ -37,6 +37,9 @@ export interface Entry extends LocalEntity, Omit<EntryInput, 'dictionaryMeaning'
   dictionaryMeaning?: DictionaryMeaning
   dictionaryReference?: DictionaryReference
   phonetics?: PhoneticVariants
+  /** A manual clear suppresses automatic pronunciation updates until IPA is supplied again. */
+  phoneticsCleared?: boolean
+  phoneticsNeedsReview?: boolean
   normalizedTerm: string
   deletedAt?: number
   termChangedAt?: number

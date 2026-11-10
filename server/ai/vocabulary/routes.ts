@@ -6,8 +6,8 @@ import { bodyLimit } from 'hono/body-limit'
 import { stableJson } from '../../../shared/contracts/json.ts'
 import { fields, integer, InvalidInput, isUuid, object } from '../../../shared/contracts/validation.ts'
 import { vocabularyTaskLimit, type VocabularyCandidate, type VocabularyJob, type VocabularyMode, type VocabularyPlan, type VocabularyStatus, type VocabularyTarget } from '../../../shared/contracts/vocabulary.ts'
-import { cleanDictionaryMeaning, cleanDictionaryReference, cleanPhonetics, hasFinalMeaning, meaningFromSenses,
-  type DictionaryReference } from '../../../shared/domain/dictionary.ts'
+import { cleanDictionaryMeaning, cleanDictionaryReference, cleanPhonetics, formatPhonetic, hasFinalMeaning, meaningFromSenses,
+  type DictionaryReference, type PhoneticVariants } from '../../../shared/domain/dictionary.ts'
 import { entryLimits, hasRecallPrompt, type Deck, type Entry } from '../../../shared/domain/library.ts'
 import type { AuthEnv, createAuthApi } from '../../auth/routes.ts'
 import { createSpeechCredentials } from '../../speech/credentials.ts'
@@ -87,10 +87,23 @@ function dictionaryHint(reference?: DictionaryReference): DictionaryHint | null 
 function needsWork(entry: Entry, mode: VocabularyMode) {
   if (entry.deletedAt !== undefined) return false
   if (mode === 'meaning') return !hasFinalEntryMeaning(entry)
-  return hasRecallPrompt(entry) && (!entry.phonetics?.british || !entry.phonetics?.american)
+  return !entry.phoneticsCleared && hasRecallPrompt(entry) && (!entry.phonetics?.british || !entry.phonetics?.american)
 }
 
-function withMeaning(current: Entry, candidate: VocabularyCandidate, reference?: DictionaryReference): Entry | undefined {
+function withPhonetics(current: Entry, candidate: VocabularyCandidate, dictionaryPhonetic: string | undefined,
+  additions: PhoneticVariants = candidate.phonetics) {
+  if (current.phoneticsCleared) return {}
+  const unspecified = !Object.keys(additions).length && !current.phonetics && !current.phonetic
+    && formatPhonetic(dictionaryPhonetic) ? dictionaryPhonetic?.trim() : undefined
+  return {
+    phonetics: cleanPhonetics({ unspecified, ...current.phonetics, ...additions }),
+    phoneticsNeedsReview: candidate.phoneticsNeedsReview
+      || (!(additions.british && additions.american) && current.phoneticsNeedsReview) || undefined,
+  }
+}
+
+function withMeaning(current: Entry, candidate: VocabularyCandidate, reference?: DictionaryReference,
+  dictionaryPhonetic = reference?.phonetic): Entry | undefined {
   const meaning = meaningFromSenses(candidate.senses)
   if (!meaning || meaning.length > entryLimits.meaning) return
   const old = current.dictionaryMeaning
@@ -103,19 +116,24 @@ function withMeaning(current: Entry, candidate: VocabularyCandidate, reference?:
     senses: candidate.senses, model: vocabularyModel, promptVersion: vocabularyPromptVersion, optimizedAt: Date.now(),
   })
   return { ...current, dictionaryMeaning, dictionaryReference: cleanDictionaryReference(reference ?? current.dictionaryReference),
-    phonetics: cleanPhonetics({ ...current.phonetics, ...candidate.phonetics }),
+    ...withPhonetics(current, candidate, dictionaryPhonetic),
     meaning, meaningSource: 'ai', meaningNeedsReview: candidate.needsReview || undefined,
     revision: current.revision + 1, updatedAt: Math.max(current.updatedAt, Date.now()) }
 }
 
-function withMissingPhonetics(current: Entry, candidate: VocabularyCandidate, reference?: DictionaryReference): Entry | undefined {
+function withMissingPhonetics(current: Entry, candidate: VocabularyCandidate, reference?: DictionaryReference,
+  dictionaryPhonetic = reference?.phonetic) {
   const additions = { ...candidate.phonetics }
   if (current.phonetics?.british) delete additions.british
   if (current.phonetics?.american) delete additions.american
-  if (!Object.keys(additions).length) return
-  return { ...current, phonetics: { ...current.phonetics, ...additions },
+  const addedAccent = !!Object.keys(additions).length
+  const fields = withPhonetics(current, candidate, dictionaryPhonetic, additions)
+  const changed = stableJson(fields.phonetics) !== stableJson(current.phonetics)
+    || fields.phoneticsNeedsReview !== current.phoneticsNeedsReview
+  const updated: Entry | undefined = changed ? { ...current, ...fields,
     dictionaryReference: cleanDictionaryReference(reference ?? current.dictionaryReference),
-    revision: current.revision + 1, updatedAt: Math.max(current.updatedAt, Date.now()) }
+    revision: current.revision + 1, updatedAt: Math.max(current.updatedAt, Date.now()) } : undefined
+  return { updated, addedAccent }
 }
 
 export function vocabularyRoutes(db: Database.Database, auth: ReturnType<typeof createAuthApi>, dataDir?: string,
@@ -211,7 +229,7 @@ export function vocabularyRoutes(db: Database.Database, auth: ReturnType<typeof 
         const current = store.entry(entryId)
         if (!current || current.deletedAt !== undefined || current.deckId !== deck.id || current.revision !== expectedRevision
           || current.term !== word.term || store.deck(deck.id)?.archivedAt !== undefined) throw conflict()
-        const updated = withMeaning(current, candidate, reference)
+        const updated = withMeaning(current, candidate, reference, reference?.phonetic || exactDictionaryEntry(lookup)?.phonetic)
         if (!updated) throw new VocabularyError('AI_OUTPUT', 502, candidate.warning || noResult)
         store.saveEntry(updated)
         return updated
@@ -276,15 +294,18 @@ export function vocabularyRoutes(db: Database.Database, auth: ReturnType<typeof 
             }
             if (!item.lookup?.found) next.notFound = (next.notFound ?? 0) + 1
             const candidate = item.candidate
-            const updated = candidate && (mode === 'phonetics'
-              ? withMissingPhonetics(current, candidate, item.reference) : withMeaning(current, candidate, item.reference))
-            if (candidate?.needsReview && (updated || mode === 'phonetics')) next.needsReview++
-            if (!updated) {
+            const dictionaryPhonetic = item.reference?.phonetic || exactDictionaryEntry(item.lookup)?.phonetic
+            const ipaResult = candidate && mode === 'phonetics'
+              ? withMissingPhonetics(current, candidate, item.reference, dictionaryPhonetic) : undefined
+            const updated = mode === 'phonetics' ? ipaResult?.updated
+              : candidate && withMeaning(current, candidate, item.reference, dictionaryPhonetic)
+            if (candidate && (updated || mode === 'phonetics') && (candidate.needsReview || candidate.phoneticsNeedsReview)) next.needsReview++
+            if (updated) store.saveEntry(updated)
+            if (!updated || (mode === 'phonetics' && !ipaResult?.addedAccent)) {
               next.failed++
               next.error = problem ?? candidate?.warning ?? (mode === 'phonetics' ? noPhonetics : noResult)
               continue
             }
-            store.saveEntry(updated)
             next.succeeded++
             next.aiSaved = (next.aiSaved ?? 0) + 1
             if (item.lookup?.found) next.dictionarySaved = (next.dictionarySaved ?? 0) + 1

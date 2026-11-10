@@ -25,7 +25,7 @@ async function makeDeckWithWords(page: Page, spellingHints = false) {
     await page.getByLabel('Term', { exact: true }).fill(term)
     await fillMeaning(page, spellingHints ? term + ' ' + meaning : meaning)
     if (spellingHints) {
-      await page.getByLabel('Unspecified phonetic', { exact: true }).fill(term)
+      await page.getByLabel('Generic IPA', { exact: true }).fill(term)
     }
     await page.getByRole('button', { name: 'Save', exact: true }).click()
     await expect(page.getByRole('heading', { name: term })).toBeVisible()

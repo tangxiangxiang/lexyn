@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { hasFinalMeaning } from '../../shared/domain/dictionary.ts'
 import { libraryFormatVersion, type LibraryExport } from '../../shared/contracts/library.ts'
+import { stableJson } from '../../shared/contracts/json.ts'
 import { cleanDeck, cleanEntry, normalizeTerm, type Deck, type DeckInput, type Entry, type EntryInput } from '../../shared/domain/library.ts'
 import type { LearnProgress, PracticeEvent } from '../../shared/domain/learning.ts'
 import type { ReviewEvent, ReviewSchedulerConfig } from '../../shared/domain/review.ts'
@@ -53,8 +54,13 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       example: input.example ?? previous?.example,
       note: input.note ?? previous?.note,
       pronunciationOverride: termChanged ? '' : input.pronunciationOverride ?? previous?.pronunciationOverride,
-      phonetic: termChanged ? '' : input.phonetic ?? previous?.phonetic,
+      phonetic: termChanged || input.phonetics === null ? '' : input.phonetic ?? previous?.phonetic,
       dictionaryMeaning, dictionaryReference, phonetics })
+    const hasPhonetics = !!(fields.phonetics || fields.phonetic)
+    const phoneticsCleared = !termChanged && !hasPhonetics
+      && (input.phonetics === null || (sameTerm && (previous.phoneticsCleared || !!previous.phonetic)))
+    const phoneticsUnchanged = sameTerm && fields.phonetic === previous.phonetic
+      && stableJson(fields.phonetics) === stableJson(previous.phonetics)
     const normalizedTerm = normalizeTerm(fields.term)
     const sameMeaning = sameTerm && previous?.meaning === fields.meaning
     const meaningSource = fields.meaning ? (sameMeaning ? previous.meaningSource : input.meaningSource ?? 'manual') : undefined
@@ -63,6 +69,8 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       ...(previous ? revise(previous, now) : { ...newEntity(now), deckId }),
       ...fields, dictionaryMeaning: fields.dictionaryMeaning ?? undefined,
       dictionaryReference: fields.dictionaryReference ?? undefined, phonetics: fields.phonetics ?? undefined, normalizedTerm,
+      phoneticsCleared: phoneticsCleared || undefined,
+      phoneticsNeedsReview: phoneticsUnchanged && !phoneticsCleared ? previous.phoneticsNeedsReview : undefined,
       meaningSource, meaningNeedsReview: (meaningSource === 'ai' || meaningSource === 'dictionary') && needsReview ? true : undefined,
       termChangedAt: previous && previous.normalizedTerm !== normalizedTerm ? now : previous?.termChangedAt,
     }
@@ -88,7 +96,7 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
         if (filter !== 'all' && (word.deletedAt !== undefined) !== (filter === 'removed')) return false
         if (filter === 'missing' && word.meaning.trim()) return false
         if (filter === 'dictionary' && hasFinalMeaning(word.dictionaryMeaning)) return false
-        if (filter === 'review' && !word.meaningNeedsReview) return false
+        if (filter === 'review' && !word.meaningNeedsReview && !word.phoneticsNeedsReview) return false
         return !text || word.normalizedTerm.includes(text) || normalizeTerm(word.meaning).includes(text)
           || !!word.dictionaryMeaning?.senses.some(({ definitions }) => definitions.some((meaning) => normalizeTerm(meaning).includes(text)))
       }).sort((a, b) => a.normalizedTerm.localeCompare(b.normalizedTerm) || a.id.localeCompare(b.id))
