@@ -18,8 +18,8 @@ const key = 'fake-credential-for-tests'
 const send = vi.fn<typeof fetch>(async (_url, init) => {
   const { messages } = JSON.parse(String(init?.body))
   const { words } = JSON.parse(messages[1].content) as { words: { ref: number; term: string }[] }
-  const results = words.filter(({ term }) => term !== 'missing').reverse().map((word) => ({
-    ...word, meaning: '线程', explanation: '进程中的执行单元。', example: 'Start a worker thread.', needsReview: word.term === 'thread', warning: null,
+  const results = words.filter(({ term }) => term !== 'missing').reverse().map(({ ref, term }) => ({
+    ref, term, meaning: '线程', explanation: '进程中的执行单元。', example: 'Start a worker thread.', needsReview: term === 'thread', warning: null,
   }))
   return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ results }) } }] })
 })
