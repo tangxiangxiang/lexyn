@@ -50,7 +50,7 @@ export async function importEcdictCsv(dataDir: string, csvPath: string, sourceCo
     let buffer: CsvRow[] = []
     let headerChecked = false
     for await (const value of source) {
-      const row = value as CsvRow
+      const row = value as unknown as CsvRow
       if (!headerChecked) {
         const columns = Object.keys(row).map((s) => s.replace(/^\uFEFF/, ''))
         if (required.some((key) => !columns.includes(key))) throw new Error('Invalid ECDICT CSV header.')
