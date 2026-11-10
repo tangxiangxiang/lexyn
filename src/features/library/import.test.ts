@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import { hasRecallPrompt, normalizeTerm } from '../../../shared/domain/library'
-import { MAX_IMPORT_ROWS, parseImport, previewImport, suggestMapping } from './import'
+import { MAX_IMPORT_ROWS, manualMeaningFromImport, parseImport, previewImport, suggestMapping } from './import'
 
 describe('vocabulary import', () => {
   test('normalizes case and Unicode without stripping punctuation or internal spaces', () => {
@@ -25,14 +25,32 @@ describe('vocabulary import', () => {
   })
 
   test('maps CSV columns by index and preserves quoted commas, quotes and newlines', () => {
-    const csv = parseImport('\uFEFF描述,名称,句子,音标,备注\r\n"并发, 并行",Concurrency,"He said ""run"".\r\nAgain.",k,study\r\n', 'csv')
-    const result = previewImport(csv, { term: 1, meaning: 0, example: 2, phonetic: 3, note: 4 }, [])
-    expect(result.candidates[0].input).toEqual({
-      term: 'Concurrency', meaning: '并发, 并行', example: 'He said "run".\r\nAgain.', phonetic: 'k', note: 'study',
-    })
-    expect(() => previewImport(csv, { term: 1 }, [])).toThrow('Term and Meaning')
+    const csv = parseImport('\uFEFF释义,Word,Example,IPA,Note\r\n"并发, 并行",Concurrency,"He said ""run"".\r\nAgain.",k,study\r\n', 'csv')
+    const result = previewImport(csv, { term: 1, meaning: 0, phonetic: 3 }, [])
+    expect(result.candidates[0].input).toEqual({ term: 'Concurrency', meaning: '并发, 并行', phonetic: 'k' })
+    expect(suggestMapping(csv.headers)).toEqual({ term: 1, meaning: 0, phonetic: 3 })
+    expect(() => previewImport(csv, { term: 1, meaning: 0, example: 2 } as never, [])).toThrow('Only Term, Meaning and Phonetic')
     expect(() => previewImport(csv, { term: 1, meaning: 1 }, [])).toThrow('different source column')
     expect(suggestMapping(['Word', '释义', 'IPA'])).toEqual({ term: 0, meaning: 1, phonetic: 2 })
+  })
+
+  test('allows an unmapped CSV meaning and distinguishes it from an explicit blank', () => {
+    const noMeaning = parseImport('word,example,note\nthread,Old sentence,Keep this note\n', 'csv')
+    const unmapped = previewImport(noMeaning, suggestMapping(noMeaning.headers), [])
+    expect(unmapped.candidates[0].input).toEqual({ term: 'thread' })
+    expect(unmapped.missingMeaning).toBe(1)
+
+    const blankMeaning = parseImport('word,meaning\nthread,\n', 'csv')
+    expect(previewImport(blankMeaning, suggestMapping(blankMeaning.headers), []).candidates[0].input)
+      .toEqual({ term: 'thread', meaning: '' })
+  })
+
+  test('represents imported prose as an unlabelled manual sense only when lossless', () => {
+    expect(manualMeaningFromImport('线程；线索')).toEqual({
+      senses: [{ partOfSpeech: '', definitions: ['线程；线索'], source: 'manual' }],
+    })
+    expect(manualMeaningFromImport('first line\nsecond line')).toBeUndefined()
+    expect(manualMeaningFromImport('x'.repeat(1001))).toBeUndefined()
   })
 
   test('rejects malformed or oversized files and reports invalid individual records', () => {

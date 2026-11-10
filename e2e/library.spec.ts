@@ -1,7 +1,9 @@
 import { readFile } from 'node:fs/promises'
 import type { Page } from '@playwright/test'
-import { expect, fillMeaning, signIn, test } from './fixtures'
+import type Database from 'better-sqlite3'
+import { expect, fillMeaning, signIn, test, writeStudy } from './fixtures'
 import type { LibraryExport } from '../shared/contracts/library'
+import type { Entry } from '../shared/domain/library'
 
 async function createDeck(page: Page, name: string) {
   await page.getByRole('button', { name: 'New deck' }).click()
@@ -25,6 +27,130 @@ async function expectNoOverflow(page: Page) {
     expect(await dialog.evaluate((element) => element.scrollWidth)).toBeLessThanOrEqual(await dialog.evaluate((element) => element.clientWidth))
   }
 }
+
+function storedEntry(db: Database.Database, term: string) {
+  const row = db.prepare('SELECT body FROM entries WHERE active_term = ?').get(term.toLowerCase()) as { body: string } | undefined
+  return row ? JSON.parse(row.body) as Entry : undefined
+}
+
+test('keeps edit drafts through temporary spelling changes and clears word-bound data only on a real rename', async ({ page, backend }) => {
+  await page.goto('/library')
+  await createDeck(page, 'Term editing')
+  await page.getByRole('link', { name: 'Term editing', exact: true }).click()
+  const deckId = new URL(page.url()).pathname.split('/').at(-1)!
+  const dictionaryMeaning = { senses: [
+    { partOfSpeech: 'n.', definitions: ['线程', '线索'], source: 'manual' as const },
+    { partOfSpeech: 'vt.', definitions: ['穿线'], source: 'manual' as const },
+  ] }
+  const dictionaryReference = { sourceWord: 'thread', sourceRevision: 'fixture', translation: 'n. 原始词典释义',
+    definition: 'a thin cord', partOfSpeech: 'n.', phonetic: 'θred' }
+  const phonetics = { british: '/θred/', american: '/θrɛd/', unspecified: 'thred' }
+  const created = await writeStudy(page, 'library/create-entry', [deckId, {
+    term: 'thread', meaning: 'n. 线程；线索\nvt. 穿线', dictionaryMeaning, dictionaryReference, phonetics,
+    phonetic: 'thred', example: 'Legacy example.', note: 'Legacy note.', pronunciationOverride: 'th red',
+  }])
+  expect(created.ok()).toBe(true)
+  const entry = ((await created.json()).data) as Entry
+  await page.reload()
+
+  const article = () => page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'thread', exact: true }) })
+  await article().getByRole('button', { name: 'Edit word' }).click()
+  const term = page.getByLabel('Term', { exact: true })
+  const definition = page.getByLabel('Definition 1', { exact: true }).first()
+  await term.fill('threads')
+  await expect(definition).toHaveValue('线程')
+  await expect(page.getByLabel('British phonetic')).toHaveValue('/θred/')
+  await term.fill('thread')
+  await expect(definition).toHaveValue('线程')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect.poll(() => storedEntry(backend.db, 'thread')?.revision).toBe(entry.revision + 1)
+  const savedOriginal = storedEntry(backend.db, 'thread')!
+  expect(savedOriginal).toMatchObject({ meaning: entry.meaning, dictionaryMeaning, dictionaryReference, phonetics,
+    phonetic: 'thred', example: 'Legacy example.', note: 'Legacy note.', pronunciationOverride: 'th red' })
+
+  await article().getByRole('button', { name: 'Edit word' }).click()
+  await fillMeaning(page, '未保存的释义草稿')
+  await term.fill('threads')
+  await term.fill('thread')
+  await expect(definition).toHaveValue('未保存的释义草稿')
+  await expect(page.getByLabel('American phonetic')).toHaveValue('/θrɛd/')
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  expect(storedEntry(backend.db, 'thread')).toEqual(savedOriginal)
+
+  await article().getByRole('button', { name: 'Edit word' }).click()
+  await fillMeaning(page, '未保存的释义草稿')
+  await term.fill('threads')
+  await term.fill('thread')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect.poll(() => storedEntry(backend.db, 'thread')?.revision).toBe(savedOriginal.revision + 1)
+  const edited = storedEntry(backend.db, 'thread')!
+  expect(edited).toMatchObject({ meaning: 'n. 未保存的释义草稿；线索\nvt. 穿线', dictionaryReference, phonetics,
+    example: 'Legacy example.', note: 'Legacy note.' })
+
+  await article().getByRole('button', { name: 'Edit word' }).click()
+  await term.fill('queue')
+  await expect(page.getByText('Saving a different spelling clears its meaning and phonetics while keeping review history and schedule.'))
+    .toBeVisible()
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'queue', exact: true })).toBeVisible()
+  const renamed = storedEntry(backend.db, 'queue')!
+  expect(renamed).toMatchObject({ term: 'queue', meaning: '', revision: edited.revision + 1, termChangedAt: expect.any(Number) })
+  expect(renamed.dictionaryMeaning).toBeUndefined()
+  expect(renamed.dictionaryReference).toBeUndefined()
+  expect(renamed.phonetics).toBeUndefined()
+  expect(renamed.phonetic).toBeUndefined()
+  expect(renamed.pronunciationOverride).toBeUndefined()
+
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'queue', exact: true }) })
+    .getByRole('button', { name: 'Edit word' }).click()
+  await page.getByLabel('Term', { exact: true }).fill('queues')
+  await page.getByRole('button', { name: 'Save and optimize with AI', exact: true }).click()
+  await expect(page.getByLabel('Definition 1', { exact: true })).toHaveValue('队列')
+  await expect(page.getByText('Saving a different spelling clears its meaning and phonetics while keeping review history and schedule.'))
+    .toHaveCount(0)
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  expect(storedEntry(backend.db, 'queues')?.meaning).toBe('n. 队列')
+  const currentQueue = storedEntry(backend.db, 'queues')!
+
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'queues', exact: true }) })
+    .getByRole('button', { name: 'Edit word' }).click()
+  const newer = await writeStudy(page, 'library/update-entry', [deckId, currentQueue.id, {
+    term: 'queues', meaning: '远端释义', dictionaryMeaning: { senses: [
+      { partOfSpeech: '', definitions: ['远端释义'], source: 'manual' },
+    ] },
+  }, currentQueue.revision])
+  expect(newer.ok()).toBe(true)
+  await fillMeaning(page, '本地旧草稿')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.locator('.library-dialog').getByRole('alert')).toBeVisible()
+  expect(storedEntry(backend.db, 'queues')?.meaning).toBe('远端释义')
+})
+
+test('saving an ECDICT-only word without a final meaning preserves its immutable reference', async ({ page, backend }) => {
+  await page.goto('/library')
+  await createDeck(page, 'Dictionary reference')
+  await page.getByRole('link', { name: 'Dictionary reference', exact: true }).click()
+  const deckId = new URL(page.url()).pathname.split('/').at(-1)!
+  const dictionaryMeaning = { sourceWord: 'thread', sourceRevision: 'fixture', rawTranslation: 'n. 原始词典释义',
+    senses: [{ partOfSpeech: 'n.', definitions: ['线程'], source: 'ecdict' as const }] }
+  const dictionaryReference = { sourceWord: 'thread', sourceRevision: 'fixture', translation: 'n. 原始词典释义',
+    definition: 'a thin cord', partOfSpeech: 'n.', phonetic: 'θred' }
+  const response = await writeStudy(page, 'library/create-entry', [deckId, {
+    term: 'thread', meaning: '', dictionaryMeaning, dictionaryReference, phonetics: { unspecified: 'θred' },
+  }])
+  expect(response.ok()).toBe(true)
+  const entry = (await response.json()).data as Entry
+  await page.reload()
+  await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'thread', exact: true }) })
+    .getByRole('button', { name: 'Edit word' }).click()
+  await page.getByLabel('Term', { exact: true }).fill('threads')
+  await page.getByLabel('Term', { exact: true }).fill('thread')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect.poll(() => storedEntry(backend.db, 'thread')?.revision).toBe(entry.revision + 1)
+  expect(storedEntry(backend.db, 'thread')).toMatchObject({
+    meaning: '', dictionaryMeaning, dictionaryReference, phonetics: { unspecified: 'θred' },
+  })
+})
 
 test('edits, searches, removes, restores and archives on a 320px viewport', async ({ page, backend }) => {
   await page.setViewportSize({ width: 320, height: 740 })
@@ -85,7 +211,7 @@ test('edits, searches, removes, restores and archives on a 320px viewport', asyn
   await expectNoOverflow(page)
 })
 
-test('previews TXT and CSV, explicitly overwrites duplicates and downloads full JSON', async ({ page }) => {
+test('previews TXT and CSV, explicitly overwrites duplicates and downloads full JSON', async ({ page, backend }) => {
   await page.setViewportSize({ width: 320, height: 740 })
   await page.goto('/library')
   await createDeck(page, 'Computer English')
@@ -99,14 +225,22 @@ test('previews TXT and CSV, explicitly overwrites duplicates and downloads full 
   await expectNoOverflow(page)
   await page.getByRole('button', { name: 'Import 2 words' }).click()
   await expect(page.getByRole('heading', { name: 'copy-on-write' })).toBeVisible()
+  const deckId = new URL(page.url()).pathname.split('/').at(-1)!
+  const wal = storedEntry(backend.db, 'wal')!
+  const historicalFields = await writeStudy(page, 'library/update-entry', [deckId, wal.id, {
+    term: 'wal', meaning: wal.meaning, example: 'Historical example.', note: 'Historical note.',
+  }, wal.revision])
+  expect(historicalFields.ok()).toBe(true)
 
   await page.getByRole('button', { name: 'Import words' }).click()
   await upload.setInputFiles({
     name: 'systems.csv', mimeType: 'text/csv',
-    buffer: Buffer.from('term,meaning,example\nwal,"日志, 持久化","First line\nSecond line"\nlock-free queue,无锁队列,\n'),
+    buffer: Buffer.from('term,meaning,example,note\nwal,"日志, 持久化","First line\nSecond line",Do not import\nlock-free queue,无锁队列,,Do not import\n'),
   })
   await expect(page.getByText('Already in deck')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Import 1 word', exact: true })).toBeVisible()
+  await expect(page.locator('.library-dialog').getByText('Example', { exact: true })).toHaveCount(0)
+  await expect(page.locator('.library-dialog').getByText('Note', { exact: true })).toHaveCount(0)
   await expectNoOverflow(page)
   await page.getByText('Overwrite matching words in this deck').click()
   await page.getByRole('button', { name: 'Import 2 words' }).click()
@@ -132,7 +266,7 @@ test('previews TXT and CSV, explicitly overwrites duplicates and downloads full 
   })
   expect(exported.entries).toEqual(expect.arrayContaining([
     expect.objectContaining({ term: 'copy-on-write', deletedAt: expect.any(Number) }),
-    expect.objectContaining({ term: 'wal', meaning: '日志, 持久化', example: 'First line\nSecond line', revision: 2 }),
+    expect.objectContaining({ term: 'wal', meaning: '日志, 持久化', example: 'Historical example.', note: 'Historical note.', revision: 3 }),
   ]))
 })
 

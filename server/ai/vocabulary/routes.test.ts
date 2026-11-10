@@ -168,6 +168,32 @@ test('an older AI response cannot overwrite a newer revision', async () => {
   expect(snapshot(entry.id)).toMatchObject({ revision: newer.revision, meaning: '用户后来保存的版本 B' })
 })
 
+test('an in-flight result for the old spelling cannot attach to a renamed entry', async () => {
+  const { id: deckId } = await deck()
+  const entry = await word(deckId, 'thread', '线程')
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  send.mockImplementationOnce(async (_url, init) => { await gate; return aiReply(init) })
+  const pending = api(`vocabulary/optimize/${entry.id}`, { revision: entry.revision })
+  await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1))
+
+  const renamed = await library<Entry>('update-entry', [deckId, entry.id, {
+    term: 'queue', meaning: '线程',
+    dictionaryMeaning: { senses: [{ partOfSpeech: 'n.', definitions: ['线程'], source: 'manual' }] },
+    dictionaryReference: { sourceWord: 'thread', sourceRevision: 'fixture', translation: 'n. 线程',
+      definition: 'a thin cord', partOfSpeech: 'n.', phonetic: 'θred' },
+    phonetics: { british: '/θred/', american: '/θrɛd/' },
+  }, entry.revision])
+  expect(renamed).toMatchObject({ term: 'queue', meaning: '', revision: entry.revision + 1 })
+  expect(renamed.dictionaryMeaning).toBeUndefined()
+  expect(renamed.dictionaryReference).toBeUndefined()
+  expect(renamed.phonetics).toBeUndefined()
+
+  release()
+  expect((await pending).status).toBe(409)
+  expect(snapshot(entry.id)).toEqual(renamed)
+})
+
 test('repeated automatic requests share one AI call and keep a word saved if generation fails', async () => {
   const { id: deckId } = await deck()
   const entry = await word(deckId, 'thread')

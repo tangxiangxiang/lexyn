@@ -4,6 +4,7 @@ import type { Page } from '@playwright/test'
 import type Database from 'better-sqlite3'
 import { expect, fillMeaning, test, writeStudy } from './fixtures'
 import type { Entry } from '../shared/domain/library'
+import type { ImportCandidate } from '../shared/domain/library-import'
 import { createEcdict } from '../server/dictionary/ecdict'
 import { importEcdictCsv } from '../server/dictionary/import'
 
@@ -22,6 +23,15 @@ async function createBlankWords(page: Page, deckId: string, terms: string[]) {
     expect(response.ok()).toBe(true)
   }
   await page.goto('/library/' + deckId)
+}
+
+async function vocabularyRequest(page: Page, path: string, data: object) {
+  const sessionResponse = await page.request.get('/api/auth/session', { headers: { 'X-Lexyn-Client': '1' } })
+  const { session } = await sessionResponse.json()
+  return page.request.post('/api/' + path, {
+    headers: { 'X-Lexyn-Client': '1', 'X-Lexyn-Owner': session.ownerId,
+      Origin: new URL(page.url()).origin, 'Content-Type': 'application/json' }, data,
+  })
 }
 
 function savedEntry(db: Database.Database, term: string) {
@@ -87,6 +97,43 @@ test('saves a new word before AI, then iterates from the latest human meaning wi
   expect(dictionary.lookup('thread').entries[0]?.translation).toBe('n. 原始词典释义；织物纤维')
   expect(backend.vocabulary.requests).toEqual([['thread'], ['thread']])
   dictionary.close()
+})
+
+test('CSV meaning becomes the next AI iteration while the same-word ECDICT reference stays immutable', async ({ page, backend }) => {
+  await installEcdict(backend.directory, 'thread', 'n. 原始词典释义；织物纤维')
+  const deckId = await createDeck(page)
+  const created = await writeStudy(page, 'library/create-entry', [deckId, { term: 'thread', meaning: '' }])
+  expect(created.ok()).toBe(true)
+  const entry = (await created.json()).data as Entry
+
+  expect((await vocabularyRequest(page, `vocabulary/auto/${entry.id}`, { revision: entry.revision })).status()).toBe(202)
+  await expect.poll(() => savedEntry(backend.db, 'thread')?.revision).toBe(2)
+  const versionA = savedEntry(backend.db, 'thread')!
+  const referenceA = versionA.dictionaryReference
+
+  const previewResponse = await writeStudy(page, 'library/import-preview', [deckId,
+    'term,meaning\nthread,CSV 导入版本 B', 'csv', 'auto', { term: 0, meaning: 1 }])
+  expect(previewResponse.ok()).toBe(true)
+  const preview = (await previewResponse.json()).data as { candidates: ImportCandidate[] }
+  const imported = await writeStudy(page, 'library/import', [deckId, preview.candidates, 'overwrite'])
+  expect(imported.ok()).toBe(true)
+  const versionB = savedEntry(backend.db, 'thread')!
+  expect(versionB).toMatchObject({
+    revision: versionA.revision + 1,
+    meaning: 'CSV 导入版本 B', meaningSource: 'manual',
+    dictionaryMeaning: { senses: [{ partOfSpeech: '', definitions: ['CSV 导入版本 B'], source: 'manual' }] },
+    dictionaryReference: referenceA,
+  })
+
+  expect((await vocabularyRequest(page, `vocabulary/optimize/${entry.id}`, { revision: versionB.revision })).status()).toBe(200)
+  const prompt = backend.vocabulary.inputs.at(-1)?.[0]
+  expect(prompt?.currentMeaning?.text).toBe('CSV 导入版本 B')
+  expect(prompt?.dictionaryReference).toMatchObject({ translation: referenceA?.translation })
+  expect(savedEntry(backend.db, 'thread')).toMatchObject({
+    revision: versionB.revision + 1,
+    meaning: 'n. 线程的迭代释义 C',
+    dictionaryReference: referenceA,
+  })
 })
 
 test('batch completion persists task progress and sends every target through MiniMax', async ({ page, backend }) => {

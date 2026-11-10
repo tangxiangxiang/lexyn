@@ -6,7 +6,7 @@ import { fields, integer, InvalidInput, isUuid, object, validateTimezone } from 
 import { stableJson } from '../../shared/contracts/json.ts'
 import { cleanDictionaryMeaning, cleanDictionaryReference, cleanPhonetics } from '../../shared/domain/dictionary.ts'
 import { LibraryError, type DeckInput, type EntryInput } from '../../shared/domain/library.ts'
-import { importFields, parseImport, previewImport, type FieldMapping, type ImportCandidate } from '../../shared/domain/library-import.ts'
+import { importFields, parseImport, previewImport, type FieldMapping, type ImportCandidate, type ImportedInput } from '../../shared/domain/library-import.ts'
 import { reviewRatings } from '../../shared/domain/review.ts'
 import { createReviewScheduler, schedulerConfigSnapshot, type ReviewScheduler } from '../../shared/srs/scheduler.ts'
 import { createLearnService } from './learn.ts'
@@ -64,8 +64,12 @@ function importCandidate(value: unknown): ImportCandidate {
   fields(row, 'input normalizedTerm match')
   const match = row.match === undefined ? undefined : object(row.match)
   if (match) fields(match, 'id revision')
-  const { term, ...optionalFields } = wordFields(row.input)
-  const input = { term, ...Object.fromEntries(Object.entries(optionalFields).filter(([, field]) => field !== undefined)) }
+  const rawInput = object(row.input)
+  fields(rawInput, 'term meaning phonetic')
+  const parsed = wordFields(rawInput)
+  const input: ImportedInput = { term: parsed.term }
+  if (parsed.meaning !== undefined) input.meaning = parsed.meaning
+  if (parsed.phonetic !== undefined) input.phonetic = parsed.phonetic
   return { input, normalizedTerm: text(1000)(row.normalizedTerm),
     match: match && { id: id(match.id), revision: version(match.revision) } }
 }

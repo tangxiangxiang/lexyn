@@ -28,7 +28,7 @@ const columns = computed(() => [
   { value: -1, label: t('Choose a column') },
   ...(source.value?.headers.map((header, index) => ({ value: index, label: `${index + 1}. ${header || t('(blank header)')}` })) ?? []),
 ])
-const fieldLabels = { term: 'Term', meaning: 'Meaning', phonetic: 'Phonetic', example: 'Example', note: 'Note' }
+const fieldLabels = { term: 'Term', meaning: 'Meaning', phonetic: 'Phonetic' }
 const previewArgs = computed(() => file.value && source.value
   ? [props.deckId, file.value.text, file.value.format, textMode.value, { ...mapping.value }] as const : undefined)
 const loaded = useLibraryQuery(previewArgs, (args, signal) =>
@@ -128,6 +128,9 @@ async function confirm() {
           v-model:checked="overwrite" :disabled="busy">{{ t('Overwrite matching words in this deck') }}</NCheckbox>
         <p v-if="preview.result.invalid || preview.result.duplicates" class="library-dialog-copy">
           {{ t('Invalid records and later repeats in the file are skipped. Existing words are skipped unless overwrite is selected.') }}
+        </p>
+        <p v-if="overwrite" class="library-dialog-copy">
+          {{ t('Blank or unmapped meanings do not erase an existing meaning when overwriting.') }}
         </p>
       </template>
       <div class="library-dialog-actions">

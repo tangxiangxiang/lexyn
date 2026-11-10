@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { NAlert, NButton, NInput } from 'naive-ui'
 import { t, translateError } from '../../i18n/useI18n'
-import { meaningFromSenses, type DictionaryMeaning, type PhoneticVariants } from '../../../shared/domain/dictionary'
+import { hasFinalMeaning, meaningFromSenses, type DictionaryMeaning, type PhoneticVariants } from '../../../shared/domain/dictionary'
 import { normalizeTerm, type Deck, type Entry } from '../../../shared/domain/library'
 import { refreshStudy } from '../../api/client'
 import DictionaryMeaningEditor from '../dictionary/DictionaryMeaningEditor.vue'
@@ -30,6 +30,8 @@ const phonetics = reactive({
   unspecified: entry?.phonetics?.unspecified ?? entry?.phonetic ?? '',
 })
 const entryForm = reactive({ term: entry?.term ?? '' })
+const originalTerm = ref(entry?.term ?? '')
+const termChanged = computed(() => !!entry && normalizeTerm(entryForm.term) !== normalizeTerm(originalTerm.value))
 const hint = ref('')
 const entryRevision = ref(entry?.revision ?? 0)
 const meaningText = computed(() => meaningFromSenses(fullMeaning.value?.senses ?? []))
@@ -40,14 +42,6 @@ const aiError = ai.error
 const snapshot = () => JSON.stringify({ term: entryForm.term, phonetics, senses: fullMeaning.value?.senses ?? [] })
 let savedSnapshot = snapshot()
 const dirty = computed(() => snapshot() !== savedSnapshot)
-
-watch(() => entryForm.term, (term) => {
-  if (!entry || normalizeTerm(term) === entry.normalizedTerm) return
-  fullMeaning.value = undefined
-  phonetics.british = ''
-  phonetics.american = ''
-  phonetics.unspecified = ''
-}, { flush: 'sync' })
 
 function normalizedPhonetics(): PhoneticVariants | undefined {
   const result = Object.fromEntries(Object.entries(phonetics).map(([key, value]) => [key, value.trim()]).filter(([, value]) => value))
@@ -60,19 +54,26 @@ function payload() {
     definitions: [...new Set(sense.definitions.map((text) => text.trim()).filter(Boolean))],
   })).filter((sense) => sense.definitions.length)
   const dictionaryMeaning = senses.length ? { ...fullMeaning.value, senses } as DictionaryMeaning : undefined
+  const dictionaryMeaningInput = termChanged.value ? null : dictionaryMeaning
+    ?? (entry && !hasFinalMeaning(entry.dictionaryMeaning) ? undefined : null)
   return {
     term: entryForm.term,
-    meaning: dictionaryMeaning ? meaningFromSenses(dictionaryMeaning.senses) : '',
-    dictionaryMeaning: dictionaryMeaning ?? null,
-    phonetics: normalizedPhonetics() ?? null,
+    // Keep the form intact while spelling is edited. The server clears term-bound
+    // dictionary data only when a different spelling is actually saved.
+    meaning: termChanged.value ? '' : dictionaryMeaning ? meaningFromSenses(dictionaryMeaning.senses) : '',
+    dictionaryMeaning: dictionaryMeaningInput,
+    dictionaryReference: termChanged.value ? null : undefined,
+    phonetics: termChanged.value ? null : normalizedPhonetics() ?? null,
     // Retain the historical generic phonetic field for existing speech clients and backups.
-    phonetic: phonetics.unspecified.trim(),
-    meaningSource: senses.some(({ source }) => source === 'manual') ? 'manual' as const : 'ai' as const,
+    phonetic: termChanged.value ? '' : phonetics.unspecified.trim(),
+    pronunciationOverride: termChanged.value ? '' : undefined,
+    meaningSource: termChanged.value ? undefined : senses.some(({ source }) => source === 'manual') ? 'manual' as const : 'ai' as const,
   }
 }
 
 function applyEntry(value: Entry) {
   entryRevision.value = value.revision
+  originalTerm.value = value.term
   entryForm.term = value.term
   fullMeaning.value = value.dictionaryMeaning?.senses.some(({ source }) => source !== 'ecdict')
     ? value.dictionaryMeaning
@@ -138,8 +139,11 @@ async function save() {
         <label for="library-word-term">{{ t('Term') }}</label>
         <NInput v-model:value="entryForm.term" :maxlength="240" :disabled="busy || aiBusy"
           :input-props="{ id: 'library-word-term', required: true }" />
+        <NAlert v-if="termChanged" type="warning">
+          {{ t('Saving a different spelling clears its meaning and phonetics while keeping review history and schedule.') }}
+        </NAlert>
 
-        <fieldset class="phonetic-set" :disabled="busy || aiBusy">
+        <fieldset class="phonetic-set" :disabled="busy || aiBusy || termChanged">
           <legend>{{ t('Phonetic') }} <small>{{ t('optional') }}</small></legend>
           <label for="library-phonetic-british">{{ t('British') }}</label>
           <NInput v-model:value="phonetics.british" :maxlength="240"
@@ -153,7 +157,7 @@ async function save() {
         </fieldset>
 
         <label>{{ t('Meaning') }}</label>
-        <DictionaryMeaningEditor :meaning="fullMeaning" :disabled="busy || aiBusy" @change="fullMeaning = $event" />
+        <DictionaryMeaningEditor :meaning="fullMeaning" :disabled="busy || aiBusy || termChanged" @change="fullMeaning = $event" />
         <p v-if="!meaningText" class="library-muted">{{ t('No meaning saved yet. The word will be kept if generation fails.') }}</p>
         <NInput v-if="entry" v-model:value="hint" :maxlength="240" :disabled="busy || aiBusy"
           :placeholder="t('Context hint (optional)')" :input-props="{ 'aria-label': t('Context hint (optional)') }" />

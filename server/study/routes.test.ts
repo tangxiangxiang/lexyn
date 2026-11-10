@@ -98,6 +98,109 @@ test('normalizes unique spelling and rolls back a batch when a later preview mat
   expect((await data(get('library/deck', [deck.id, 'CAFÉ', 'active', 0, 1]))).entries).toMatchObject([entry])
 })
 
+test('CSV overwrite replaces a structured meaning only for non-empty changed text and preserves same-word data', async () => {
+  const deck = await data(post('library/create-deck', [{ name: 'Systems' }]))
+  const aiMeaning = { senses: [
+    { partOfSpeech: 'n.', definitions: ['线程', '线索'], source: 'ai' },
+    { partOfSpeech: 'vt.', definitions: ['穿线'], source: 'ai' },
+  ] }
+  const reference = { sourceWord: 'thread', sourceRevision: 'ecdict-fixture', translation: 'n. 原始词典释义',
+    definition: 'a thin cord', partOfSpeech: 'n.', phonetic: 'θred' }
+  const phonetics = { british: '/θred/', american: '/θrɛd/' }
+  const original = await data(post('library/create-entry', [deck.id, {
+    term: 'thread', meaning: 'n. 线程；线索\nvt. 穿线', dictionaryMeaning: aiMeaning,
+    dictionaryReference: reference, phonetics, phonetic: '/θred/', meaningSource: 'ai', meaningNeedsReview: true,
+    example: 'A legacy example.', note: 'A legacy note.', pronunciationOverride: 'th red',
+  }]))
+  const csv = 'term,meaning,example\nthread,螺纹；线,Do not import example columns'
+  const preview = await data(post('library/import-preview', [deck.id, csv, 'csv', 'auto', { term: 0, meaning: 1 }]))
+  expect(preview.candidates[0].input).toEqual({ term: 'thread', meaning: '螺纹；线' })
+  const result = await data(post('library/import', [deck.id, preview.candidates, 'overwrite']))
+  expect(result).toEqual({ added: 0, updated: 1, skipped: 0 })
+  let entry = (await data(get('library/deck', [deck.id, '', 'active', 0, 20]))).entries[0]
+  expect(entry).toMatchObject({
+    meaning: '螺纹；线', meaningSource: 'manual',
+    dictionaryMeaning: { senses: [{ partOfSpeech: '', definitions: ['螺纹；线'], source: 'manual' }] },
+    dictionaryReference: reference, phonetics, phonetic: '/θred/',
+    example: 'A legacy example.', note: 'A legacy note.', pronunciationOverride: 'th red', revision: original.revision + 1,
+  })
+  expect(entry.meaningNeedsReview).toBeUndefined()
+
+  const noMeaningSource = 'term,example,note\nthread,Ignored example,Ignored note'
+  const unmapped = await data(post('library/import-preview', [deck.id, noMeaningSource, 'csv', 'auto', { term: 0 }]))
+  expect(unmapped.candidates[0].input).toEqual({ term: 'thread' })
+  await data(post('library/import', [deck.id, unmapped.candidates, 'overwrite']))
+  entry = (await data(get('library/deck', [deck.id, '', 'active', 0, 20]))).entries[0]
+  expect(entry.meaning).toBe('螺纹；线')
+  expect(entry.dictionaryMeaning).toEqual({ senses: [{ partOfSpeech: '', definitions: ['螺纹；线'], source: 'manual' }] })
+  expect(entry.example).toBe('A legacy example.')
+  expect(entry.note).toBe('A legacy note.')
+
+  const blank = await data(post('library/import-preview', [deck.id, 'term,meaning\nthread,', 'csv', 'auto', { term: 0, meaning: 1 }]))
+  await data(post('library/import', [deck.id, blank.candidates, 'overwrite']))
+  const afterBlank = (await data(get('library/deck', [deck.id, '', 'active', 0, 20]))).entries[0]
+  expect(afterBlank.meaning).toBe('螺纹；线')
+  expect(afterBlank.dictionaryMeaning).toEqual(entry.dictionaryMeaning)
+
+  const sameText = await data(post('library/import-preview', [deck.id, 'term,meaning\nthread,螺纹；线', 'csv', 'auto', { term: 0, meaning: 1 }]))
+  await data(post('library/import', [deck.id, sameText.candidates, 'overwrite']))
+  const afterSame = (await data(get('library/deck', [deck.id, '', 'active', 0, 20]))).entries[0]
+  expect(afterSame.dictionaryMeaning).toEqual(entry.dictionaryMeaning)
+  const beforeSkip = afterSame
+  const skipPreview = await data(post('library/import-preview', [deck.id, 'term,meaning\nthread,螺纹；线', 'csv', 'auto', { term: 0, meaning: 1 }]))
+  await data(post('library/import', [deck.id, skipPreview.candidates, 'skip']))
+  const afterSkip = (await data(get('library/deck', [deck.id, '', 'active', 0, 20]))).entries[0]
+  expect(afterSkip).toEqual(beforeSkip)
+
+  const longText = 'definition '.repeat(110)
+  const longPreview = await data(post('library/import-preview', [deck.id,
+    `term,meaning\nlong-prose,"${longText.trim()}"`, 'csv', 'auto', { term: 0, meaning: 1 }]))
+  await data(post('library/import', [deck.id, longPreview.candidates, 'overwrite']))
+  const longEntry = (await data(get('library/deck', [deck.id, 'long-prose', 'active', 0, 20]))).entries[0]
+  expect(longEntry.meaning).toBe(longText.trim())
+  expect(longEntry.dictionaryMeaning).toBeUndefined()
+  expect(longEntry.meaningSource).toBe('manual')
+})
+
+test('saving a different spelling clears old term data but preserves FSRS history and enforces revision', async () => {
+  const deck = await data(post('library/create-deck', [{ name: 'Systems' }]))
+  const dictionaryMeaning = { senses: [{ partOfSpeech: 'n.', definitions: ['线程'], source: 'manual' }] }
+  const dictionaryReference = { sourceWord: 'thread', sourceRevision: 'ecdict-fixture', translation: 'n. 原始释义',
+    definition: 'a thin cord', partOfSpeech: 'n.', phonetic: 'θred' }
+  const phonetics = { british: '/θred/', american: '/θrɛd/', unspecified: 'thred' }
+  const entry = await data(post('library/create-entry', [deck.id, {
+    term: 'thread', meaning: 'n. 线程', dictionaryMeaning, dictionaryReference, phonetics, phonetic: 'thred',
+    pronunciationOverride: 'th red',
+  }]))
+  const learn = await data(post('learn/start', [deck.id, 'copy', [entry.id], true]))
+  await data(post('learn/attempt', [learn.sessionId, entry.id, 'thread', learn.revision]))
+  const attempted = (await data(get('learn/session', [learn.sessionId]))).session
+  await data(post('learn/finish', [learn.sessionId, entry.id, 'completed', attempted.revision]))
+  await data(post('review/start', [deck.id]))
+  const front = await data(get('review/session', [deck.id]))
+  await data(post('review/reveal', [front.session.sessionId, front.session.currentCardId, entry.revision, front.session.revision]))
+  const back = await data(get('review/session', [deck.id]))
+  await data(post('review/score', [back.session.sessionId, back.session.currentCardId, 'good', back.session.revision]))
+  const cardBefore = db.prepare('SELECT body FROM review_cards WHERE entry_id=?').pluck().get(entry.id)
+  expect(count('review_events')).toBe(1)
+
+  const changed = await data(post('library/update-entry', [deck.id, entry.id, {
+    term: 'queue', meaning: entry.meaning, dictionaryMeaning, dictionaryReference, phonetics,
+    phonetic: 'thred', pronunciationOverride: 'th red',
+  }, entry.revision]))
+  expect(changed).toMatchObject({ term: 'queue', meaning: '', revision: entry.revision + 1, termChangedAt: now })
+  expect(changed.dictionaryMeaning).toBeUndefined()
+  expect(changed.dictionaryReference).toBeUndefined()
+  expect(changed.phonetics).toBeUndefined()
+  expect(changed.phonetic).toBeUndefined()
+  expect(changed.pronunciationOverride).toBeUndefined()
+  expect(db.prepare('SELECT body FROM review_cards WHERE entry_id=?').pluck().get(entry.id)).toBe(cardBefore)
+  expect(count('review_events')).toBe(1)
+
+  expect((await post('library/update-entry', [deck.id, entry.id, { term: 'thread', meaning: '旧释义' }, entry.revision])).status).toBe(409)
+  expect((await data(get('library/deck', [deck.id, '', 'active', 0, 20]))).entries[0]).toEqual(changed)
+})
+
 test('commits PracticeEvent, progress, session and receipt together and enforces one shared quota', async () => {
   await data(post('settings/daily', [1]))
   await data(post('settings/timezone', ['Asia/Shanghai']))

@@ -1,11 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { stableJson } from '../../shared/contracts/json.ts'
 import { hasFinalMeaning } from '../../shared/domain/dictionary.ts'
 import { libraryFormatVersion, type LibraryExport } from '../../shared/contracts/library.ts'
 import { cleanDeck, cleanEntry, normalizeTerm, type Deck, type DeckInput, type Entry, type EntryInput } from '../../shared/domain/library.ts'
 import type { LearnProgress, PracticeEvent } from '../../shared/domain/learning.ts'
 import type { ReviewEvent, ReviewSchedulerConfig } from '../../shared/domain/review.ts'
-import type { DuplicateMode, ImportPreview } from '../../shared/domain/library-import.ts'
+import { manualMeaningFromImport, type DuplicateMode, type ImportPreview } from '../../shared/domain/library-import.ts'
 import { checkRevision, StudyError, type StudyStore } from './store.ts'
 
 const newEntity = (now: number) => ({ id: randomUUID(), createdAt: now, updatedAt: now, revision: 1 })
@@ -38,25 +37,26 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
   }
   function makeEntry(deckId: string, input: EntryInput, now: number, previous?: Entry): Entry {
     const sameTerm = previous !== undefined && normalizeTerm(previous.term) === normalizeTerm(input.term)
-    const supplied = input.dictionaryMeaning
+    const termChanged = previous !== undefined && !sameTerm
+    const supplied = termChanged ? null : input.dictionaryMeaning
     const legacyChanged = sameTerm && supplied === undefined && previous.meaning !== input.meaning && hasFinalMeaning(previous.dictionaryMeaning)
     const legacyEdit = legacyChanged && input.meaning.trim() && input.meaning.length <= 1000
       ? { senses: [{ partOfSpeech: '', definitions: [input.meaning], source: 'manual' as const }] } : undefined
-    const dictionaryMeaning = supplied === undefined && sameTerm ? (legacyChanged ? legacyEdit : previous?.dictionaryMeaning)
-      : !sameTerm && previous?.dictionaryMeaning && supplied && stableJson(supplied) === stableJson(previous.dictionaryMeaning)
-        ? undefined : supplied
-    const dictionaryReference = input.dictionaryReference === undefined && sameTerm
+    const dictionaryMeaning = termChanged ? undefined
+      : supplied === undefined && sameTerm ? (legacyChanged ? legacyEdit : previous?.dictionaryMeaning) : supplied
+    const dictionaryReference = termChanged ? undefined : input.dictionaryReference === undefined && sameTerm
       ? previous?.dictionaryReference ?? legacyDictionaryReference(previous) : input.dictionaryReference
-    const phonetics = input.phonetics === undefined && sameTerm ? previous?.phonetics : input.phonetics
+    const phonetics = termChanged ? undefined : input.phonetics === undefined && sameTerm ? previous?.phonetics : input.phonetics
     const fields = cleanEntry({ ...input,
+      meaning: termChanged ? '' : input.meaning,
       explanation: input.explanation ?? previous?.explanation,
       example: input.example ?? previous?.example,
       note: input.note ?? previous?.note,
-      pronunciationOverride: input.pronunciationOverride ?? previous?.pronunciationOverride,
-      phonetic: input.phonetic ?? previous?.phonetic,
+      pronunciationOverride: termChanged ? '' : input.pronunciationOverride ?? previous?.pronunciationOverride,
+      phonetic: termChanged ? '' : input.phonetic ?? previous?.phonetic,
       dictionaryMeaning, dictionaryReference, phonetics })
     const normalizedTerm = normalizeTerm(fields.term)
-    const sameMeaning = previous?.meaning === fields.meaning
+    const sameMeaning = sameTerm && previous?.meaning === fields.meaning
     const meaningSource = fields.meaning ? (sameMeaning ? previous.meaningSource : input.meaningSource ?? 'manual') : undefined
     const needsReview = sameMeaning ? previous.meaningNeedsReview : input.meaningNeedsReview
     return {
@@ -153,8 +153,20 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
           throw new StudyError('The matching words changed. Review the updated preview and confirm again.', 409)
         }
         if (previous && mode === 'skip') { skipped++; continue }
-        store.saveEntry(makeEntry(deckId, { meaning: '', ...previous, ...candidate.input,
-          meaningSource: undefined, meaningNeedsReview: undefined }, now, previous))
+        const meaningMapped = Object.hasOwn(candidate.input, 'meaning')
+        const importedMeaning = meaningMapped ? candidate.input.meaning?.trim() ?? '' : undefined
+        const replaceMeaning = !!importedMeaning && importedMeaning !== previous?.meaning
+        const input: EntryInput = {
+          ...candidate.input,
+          meaning: replaceMeaning ? importedMeaning! : previous?.meaning ?? importedMeaning ?? '',
+          dictionaryMeaning: replaceMeaning ? manualMeaningFromImport(importedMeaning!) ?? null : previous?.dictionaryMeaning,
+          dictionaryReference: previous?.dictionaryReference,
+          phonetics: previous?.phonetics,
+          phonetic: candidate.input.phonetic?.trim() ? candidate.input.phonetic : previous?.phonetic,
+          meaningSource: replaceMeaning ? 'manual' : previous?.meaningSource,
+          meaningNeedsReview: replaceMeaning ? undefined : previous?.meaningNeedsReview,
+        }
+        store.saveEntry(makeEntry(deckId, input, now, previous))
         if (previous) updated++
         else added++
       }

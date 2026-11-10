@@ -95,7 +95,7 @@ async function startFixture(initialOwner: boolean, speechConfigured: boolean) {
         term: word.term,
         senses: ['missing', 'wal'].includes(word.term.toLowerCase()) ? [] : word.term.toLowerCase() === 'banana'
           ? [{ partOfSpeech: 'n.', definitions: [word.currentMeaning ? '香蕉的迭代释义 C' : '香蕉', '热带水果'] }]
-          : [{ partOfSpeech: 'n.', definitions: [word.term.toLowerCase() === 'queue' ? '队列'
+          : [{ partOfSpeech: 'n.', definitions: [['queue', 'queues'].includes(word.term.toLowerCase()) ? '队列'
             : word.term.toLowerCase() === 'thread' ? word.currentMeaning ? '线程的迭代释义 C' : '线程'
               : word.term.toLowerCase() === 'concurrency' ? '并发' : word.term.toLowerCase() === 'deadlock' ? '死锁'
                 : word.term.toLowerCase() === 'latch' ? '闩锁' : word.term.toLowerCase() === 'cache' ? '缓存'

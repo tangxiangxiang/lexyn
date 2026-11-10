@@ -1,14 +1,15 @@
 import Papa from 'papaparse'
+import { dictionaryLimits, type DictionaryMeaning } from './dictionary.ts'
 import { cleanEntry, LibraryError, normalizeTerm, type Entry, type EntryInput } from './library.ts'
 
 export const MAX_IMPORT_BYTES = 5 * 1024 * 1024
 export const MAX_IMPORT_ROWS = 10_000
-export const importFields = ['term', 'meaning', 'phonetic', 'example', 'note'] as const
+export const importFields = ['term', 'meaning', 'phonetic'] as const
 export type ImportField = typeof importFields[number]
 export type FieldMapping = Partial<Record<ImportField, number>>
 export type TextMode = 'auto' | 'words' | 'tab'
 export type DuplicateMode = 'skip' | 'overwrite'
-export type ImportedInput = Pick<EntryInput, 'term'> & Partial<Omit<EntryInput, 'term'>>
+export type ImportedInput = Pick<EntryInput, 'term'> & Partial<Pick<EntryInput, 'meaning' | 'phonetic'>>
 
 interface SourceRow {
   number: number
@@ -79,8 +80,6 @@ const aliases: Record<ImportField, string[]> = {
   term: ['term', 'word', 'english', '单词', '英文', '词汇'],
   meaning: ['meaning', 'definition', 'translation', 'chinese', '释义', '中文'],
   phonetic: ['phonetic', 'ipa', '音标'],
-  example: ['example', 'sentence', '例句'],
-  note: ['note', 'notes', '备注'],
 }
 
 export function suggestMapping(headers: string[]): FieldMapping {
@@ -93,8 +92,9 @@ export function suggestMapping(headers: string[]): FieldMapping {
 }
 
 export function previewImport(source: ImportSource, mapping: FieldMapping, entries: Entry[]): ImportPreview {
-  if (mapping.term === undefined || (source.format === 'csv' && mapping.meaning === undefined)) {
-    throw new LibraryError('Map the Term and Meaning columns before previewing the CSV.')
+  if (mapping.term === undefined) throw new LibraryError('Map the Term column before previewing the file.')
+  if (Object.keys(mapping).some((field) => !importFields.includes(field as ImportField))) {
+    throw new LibraryError('Only Term, Meaning and Phonetic can be imported.')
   }
   const indices = Object.values(mapping)
   if (new Set(indices).size !== indices.length
@@ -141,4 +141,11 @@ export function previewImport(source: ImportSource, mapping: FieldMapping, entri
     }
   }
   return preview
+}
+
+/** Keep ordinary imported prose intact and unlabelled; only use a structured sense when it can represent the text exactly. */
+export function manualMeaningFromImport(value: string): DictionaryMeaning | undefined {
+  const text = value.trim()
+  if (!text || text.length > dictionaryLimits.definition || /\p{Cc}/u.test(text)) return
+  return { senses: [{ partOfSpeech: '', definitions: [text], source: 'manual' }] }
 }
