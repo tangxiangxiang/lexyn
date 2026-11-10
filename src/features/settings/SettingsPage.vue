@@ -5,6 +5,7 @@ import { NAlert, NButton, NCard, NInput, NInputNumber, NRadioButton, NRadioGroup
 import LanguagePicker from '../../i18n/LanguagePicker.vue'
 import BackupSettings from './BackupSettings.vue'
 import SpeechSettings from '../speech/SpeechSettings.vue'
+import DictionarySettings from './DictionarySettings.vue'
 import AppIcon from '../../components/AppIcon.vue'
 import { useAppearance } from '../../ui/appearance'
 import { connection, signOut, study, writeDailyNewWords } from '../../api/client'
@@ -88,6 +89,7 @@ function saveDailyNewWords(value: number | null) {
       </div>
     </NCard>
     <SpeechSettings />
+    <DictionarySettings />
     <BackupSettings />
   </section>
 </template>

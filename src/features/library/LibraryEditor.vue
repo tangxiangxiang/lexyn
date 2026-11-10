@@ -8,6 +8,8 @@ import { useLibraryAction } from './library-ui'
 import { library } from './api'
 import { vocabularyLimits } from '../../../shared/contracts/vocabulary'
 import { vocabulary } from './vocabulary-api'
+import { dictionary } from './dictionary-api'
+import type { DictionaryLookup } from '../../../shared/contracts/dictionary'
 
 const props = defineProps<{ editor: { type: 'deck'; deck?: Deck } | { type: 'entry'; deckId: string; entry?: Entry } }>()
 const emit = defineEmits<{ close: []; saved: [message: string] }>()
@@ -40,6 +42,12 @@ const hint = ref('')
 const generatedFields = ['meaning', 'explanation', 'example'] as const
 const edits = { meaning: 0, explanation: 0, example: 0 }
 const generatedMeaning = ref<{ needsReview: boolean; warning: string | null }>()
+const meaningOrigin = ref<'ai' | 'dictionary'>()
+const dictionaryLoading = ref(false)
+const dictionaryError = ref('')
+const dictionaryResult = ref<DictionaryLookup>()
+const dictionaryChoice = ref('')
+let dictionaryRequest: AbortController | undefined
 let pending: AbortController | undefined
 
 function stopGeneration() {
@@ -50,14 +58,18 @@ function stopGeneration() {
 watch(() => entryForm.term, () => {
   stopGeneration()
   generatedMeaning.value = undefined
+  meaningOrigin.value = undefined
+  dictionaryRequest?.abort()
+  dictionaryResult.value = undefined
+  dictionaryChoice.value = ''
 }, { flush: 'sync' })
 for (const field of generatedFields) {
   watch(() => entryForm[field], () => {
     edits[field]++
-    if (field === 'meaning') generatedMeaning.value = undefined
+    if (field === 'meaning') { generatedMeaning.value = undefined; meaningOrigin.value = undefined }
   }, { flush: 'sync' })
 }
-onScopeDispose(stopGeneration)
+onScopeDispose(() => { stopGeneration(); dictionaryRequest?.abort() })
 
 async function generate() {
   if (editor.type !== 'entry' || aiBusy.value || !entryForm.term.trim()) return
@@ -73,7 +85,10 @@ async function generate() {
       for (const field of generatedFields) {
         if (edits[field] !== before[field] || !generated[field]) continue
         entryForm[field] = generated[field]
-        if (field === 'meaning') generatedMeaning.value = { needsReview: generated.needsReview, warning: generated.warning }
+        if (field === 'meaning') {
+          generatedMeaning.value = { needsReview: generated.needsReview, warning: generated.warning }
+          meaningOrigin.value = 'ai'
+        }
       }
     } catch (error) {
       if (!controller.signal.aborted) throw error
@@ -81,6 +96,42 @@ async function generate() {
       if (pending === controller) pending = undefined
     }
   })
+}
+
+async function lookUpDictionary() {
+  if (editor.type !== 'entry' || !entryForm.term.trim() || dictionaryLoading.value) return
+  dictionaryRequest?.abort()
+  const controller = new AbortController()
+  dictionaryRequest = controller
+  const queried = entryForm.term
+  dictionaryError.value = ''
+  dictionaryResult.value = undefined
+  dictionaryChoice.value = ''
+  dictionaryLoading.value = true
+  try {
+    const status = await dictionary.status(controller.signal)
+    if (!status.installed) throw new Error('ECDICT is not installed on this server.')
+    const found = await dictionary.lookup(queried, controller.signal)
+    if (controller.signal.aborted || entryForm.term !== queried) return
+    dictionaryResult.value = found
+    dictionaryChoice.value = found.suggestedMeaning ?? ''
+  } catch (cause) {
+    if (!controller.signal.aborted) dictionaryError.value = cause instanceof Error ? cause.message : 'Dictionary lookup failed.'
+  } finally {
+    if (dictionaryRequest === controller) { dictionaryRequest = undefined; dictionaryLoading.value = false }
+  }
+}
+
+function useDictionaryMeaning() {
+  const found = dictionaryResult.value
+  const meaning = dictionaryChoice.value.trim()
+  if (!found?.found || !meaning || meaning.length > vocabularyLimits.meaning || entryForm.term !== found.query) return
+  entryForm.meaning = meaning
+  meaningOrigin.value = 'dictionary'
+  generatedMeaning.value = { needsReview: found.needsReview || meaning !== found.suggestedMeaning, warning: null }
+  if (!entryForm.phonetic.trim() && found.entries[0]?.phonetic) {
+    entryForm.phonetic = found.entries[0].phonetic.slice(0, entryLimits.phonetic)
+  }
 }
 
 async function save() {
@@ -91,7 +142,7 @@ async function save() {
       else await library.createDeck(deckForm)
       return deck ? 'Deck updated.' : 'Deck created.'
     }
-    const input = { ...entryForm, meaningSource: generatedMeaning.value ? 'ai' as const : undefined,
+    const input = { ...entryForm, meaningSource: meaningOrigin.value,
       meaningNeedsReview: generatedMeaning.value?.needsReview || undefined }
     if (entry) await library.updateEntry(editor.deckId, entry.id, input, entry.revision)
     else await library.createEntry(editor.deckId, input)
@@ -123,10 +174,27 @@ async function save() {
             <NInput v-model:value="hint" :maxlength="vocabularyLimits.context" :disabled="busy || aiBusy"
               :placeholder="t('Context hint (optional)')" :input-props="{ 'aria-label': t('Context hint (optional)') }" />
             <div class="library-actions">
+              <NButton :loading="dictionaryLoading" :disabled="busy || dictionaryLoading || !entryForm.term.trim()" @click="lookUpDictionary">
+                {{ t('Look up in ECDICT') }}
+              </NButton>
               <NButton :loading="aiBusy" :disabled="busy || aiBusy || !entryForm.term.trim()" @click="generate">
                 {{ t(entry ? 'Regenerate with AI' : 'Fill with AI') }}
               </NButton>
               <NTag v-if="generatedMeaning?.needsReview" size="small">{{ t('Suggested check') }}</NTag>
+            </div>
+            <NAlert v-if="dictionaryError" type="error" role="alert">{{ translateError(dictionaryError) }}</NAlert>
+            <div v-if="dictionaryResult" class="library-form">
+              <p v-if="!dictionaryResult.found" class="library-muted">{{ t('Not found in ECDICT') }}</p>
+              <template v-else>
+                <p class="library-muted">{{ t('Dictionary meanings (select a concise sense):') }}</p>
+                <p v-for="row in dictionaryResult.entries" :key="row.word" class="library-muted library-preserve">{{ row.word }} · {{ row.translation }}</p>
+                <label for="dictionary-meaning-choice">{{ t('Selected dictionary meaning') }}</label>
+                <NInput v-model:value="dictionaryChoice" :maxlength="vocabularyLimits.meaning"
+                  :input-props="{ id: 'dictionary-meaning-choice' }" :disabled="busy" />
+                <NButton :disabled="busy || !dictionaryChoice.trim()" @click="useDictionaryMeaning">
+                  {{ t('Use dictionary meaning') }}
+                </NButton>
+              </template>
             </div>
             <NAlert v-if="aiError" type="error" role="alert">{{ translateError(aiError) }}</NAlert>
             <p v-if="generatedMeaning?.warning" class="library-muted">{{ generatedMeaning.warning }}</p>
