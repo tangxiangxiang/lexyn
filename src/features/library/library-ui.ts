@@ -1,6 +1,6 @@
-import { ref } from 'vue'
-import { LibraryError } from '../../../shared/domain/library'
-import { library } from './repository'
+import { computed, ref } from 'vue'
+import { library } from './api'
+import { t, useI18n } from '../../i18n/useI18n'
 
 export function useLibraryAction() {
   const busy = ref(false)
@@ -12,7 +12,7 @@ export function useLibraryAction() {
     try {
       return await action()
     } catch (cause) {
-      error.value = cause instanceof LibraryError ? cause.message : 'Lexyn could not access this browser’s storage. Try again.'
+      error.value = cause instanceof Error ? cause.message : 'The request failed. Try again.'
     } finally {
       busy.value = false
     }
@@ -22,17 +22,22 @@ export function useLibraryAction() {
 
 export async function downloadLibrary(deckId?: string) {
   const snapshot = await library.exportLibrary(deckId)
-  const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' })
+  downloadJson(snapshot, `lexyn-${deckId ? 'deck' : 'library'}-${snapshot.exportedAt.slice(0, 10)}.json`)
+}
+
+export function downloadJson(value: unknown, filename: string) {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
-  link.download = `lexyn-${deckId ? 'deck' : 'library'}-${snapshot.exportedAt.slice(0, 10)}.json`
+  link.download = filename
   document.body.append(link)
   link.click()
   link.remove()
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-const dateFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-export const formatModified = (time: number) => dateFormatter.format(time)
-export const wordCount = (count: number) => `${count} ${count === 1 ? 'word' : 'words'}`
+const { languageTag } = useI18n()
+const dateFormatter = computed(() => new Intl.DateTimeFormat(languageTag.value, { dateStyle: 'medium', timeStyle: 'short' }))
+export const formatModified = (time: number) => dateFormatter.value.format(time)
+export const wordCount = (count: number) => t(count === 1 ? '{count} word' : '{count} words', { count })

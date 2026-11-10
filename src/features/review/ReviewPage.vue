@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, translateError } from '../../i18n/useI18n'
 import { computed, nextTick, ref, watch } from 'vue'
 import { NAlert, NButton, NCard, NInput, NSelect } from 'naive-ui'
 import { useRoute, useRouter } from 'vue-router'
@@ -6,14 +7,14 @@ import { isSpellingCorrect } from '../../../shared/domain/learning'
 import { reviewRatings, type ReviewRating } from '../../../shared/domain/review'
 import ReviewPronunciation from './ReviewPronunciation.vue'
 import { useLibraryQuery } from '../library/useLibraryQuery'
-import { review, ReviewError } from './repository'
+import { review } from './api'
 import { formatReviewTime, useReviewOverview } from './useReviewOverview'
 
 const route = useRoute()
 const router = useRouter()
 const deckId = computed(() => typeof route.query.deckId === 'string' ? route.query.deckId : undefined)
 const { data: overview, error: overviewError, reload: reloadOverview } = useReviewOverview(deckId)
-const { data: round, error: roundError, reload: reloadRound } = useLibraryQuery(deckId, (id) => review.round(id))
+const { data: round, error: roundError, reload: reloadRound } = useLibraryQuery(deckId, review.round)
 const deckOptions = computed(() => overview.value?.decks.map(({ id, name }) => ({ label: name, value: id })) ?? [])
 const answer = ref('')
 const busy = ref(false)
@@ -28,8 +29,8 @@ const cardKey = computed(() => {
 const revealed = computed(() => round.value?.revealed ?? false)
 const spellCheck = computed(() => {
   const word = round.value?.word
-  if (!revealed.value || !word || !answer.value.trim()) return undefined
-  return isSpellingCorrect(word.entry.term, answer.value)
+  if (!revealed.value || !word?.answer || !answer.value.trim()) return undefined
+  return isSpellingCorrect(word.answer.term, answer.value)
 })
 const ratingLabels = {
   again: { label: 'Again', hint: 'Could not recall' },
@@ -59,7 +60,7 @@ async function run(action: () => Promise<unknown>) {
   try {
     await action()
   } catch (cause) {
-    error.value = cause instanceof ReviewError ? cause.message : 'Review could not be saved on this device. Try again.'
+    error.value = cause instanceof Error ? cause.message : 'The review could not be saved. Try again.'
   } finally {
     busy.value = false
   }
@@ -67,7 +68,7 @@ async function run(action: () => Promise<unknown>) {
 
 function repair() {
   const session = round.value?.session
-  if (session) void run(() => review.repair(session.sessionId, session.currentCardId))
+  if (session) void run(() => review.repair(session.sessionId, session.revision))
 }
 
 let repairAttempted: typeof round.value
@@ -82,19 +83,19 @@ function reveal() {
   const cardId = current?.session.currentCardId
   if (!current?.word || !cardId || revealed.value || composing.value) return
   const { session, word } = current
-  void run(() => review.reveal(session.sessionId, cardId, word.entry.revision))
+  void run(() => review.reveal(session.sessionId, cardId, word.entryRevision, session.revision))
 }
 
 function rate(rating: ReviewRating) {
   const session = round.value?.session
   const cardId = session?.currentCardId
   if (!session || !cardId || !revealed.value || composing.value) return
-  void run(() => review.score(session.sessionId, cardId, rating))
+  void run(() => review.score(session.sessionId, cardId, rating, session.revision))
 }
 
 function changeStatus(status: 'active' | 'paused' | 'abandoned') {
   const session = round.value?.session
-  if (session) void run(() => review.setStatus(session.sessionId, status))
+  if (session) void run(() => review.setStatus(session.sessionId, status, session.revision))
 }
 
 function onKeydown(event: KeyboardEvent) {
@@ -120,91 +121,91 @@ function selectDeck(id: string | null) {
 <template>
   <section class="page review-page">
     <header class="page-intro">
-      <h1>Review</h1>
-      <p>Recall the English word, then rate how well you remembered it.</p>
+      <h1>{{ t('Review') }}</h1>
+      <p>{{ t('Recall the English word, then rate how well you remembered it.') }}</p>
     </header>
 
-    <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+    <NAlert v-if="error" type="error" role="alert">{{ translateError(error) }} <NButton text @click="reloadRound(); reloadOverview()">{{ t('Reload session') }}</NButton></NAlert>
     <NAlert v-if="roundError || overviewError" type="error" role="alert">
-      Your local review data could not be loaded.
-      <NButton text @click="reloadRound(); reloadOverview()">Try again</NButton>
+      {{ t('Your review data could not be loaded from the server.') }}
+      <NButton text @click="reloadRound(); reloadOverview()">{{ t('Try again') }}</NButton>
     </NAlert>
     <NCard v-else-if="round?.session.status === 'active'" class="review-card">
       <div v-if="round.word" ref="focusTarget" tabindex="-1" class="review-recall" @keydown="onKeydown"
         @compositionstart="composing = true" @compositionend="composing = false" @focusout="composing = false">
-        <p class="library-muted">Card {{ round.session.currentIndex + 1 }} of {{ round.session.entryIds.length }}
-          · {{ round.word.card ? 'Due review' : 'First recall' }}</p>
+        <p class="library-muted">{{ t('Card {current} of {total}', { current: round.session.currentIndex + 1, total: round.session.total }) }}
+          · {{ round.word.card ? t('Due review') : t('First recall') }}</p>
         <template v-if="!revealed">
-          <h2>Recall the English word</h2>
+          <h2>{{ t('Recall the English word') }}</h2>
           <p class="review-meaning" lang="zh">{{ round.word.prompt }}</p>
-          <NInput v-model:value="answer" :readonly="busy" placeholder="Type your recall (optional)" :input-props="{
-            'aria-label': 'Type your recall', autocomplete: 'off', autocapitalize: 'off', spellcheck: false,
+          <NInput v-model:value="answer" :readonly="busy" :placeholder="t('Type your recall (optional)')" :input-props="{
+            'aria-label': t('Type your recall'), autocomplete: 'off', autocapitalize: 'off', spellcheck: false,
           }" />
           <div class="review-actions">
-            <NButton type="primary" :disabled="busy" @click="reveal">Show answer</NButton>
-            <span class="library-muted">Space to reveal when the answer field is out of focus</span>
+            <NButton type="primary" :disabled="busy" @click="reveal">{{ t('Show answer') }}</NButton>
+            <span class="library-muted">{{ t('Space to reveal when the answer field is out of focus') }}</span>
           </div>
         </template>
-        <template v-else>
-          <h2 class="review-term">{{ round.word.entry.term }}</h2>
-          <p class="review-meaning" lang="zh">{{ round.word.entry.meaning }}</p>
-          <p v-if="round.word.entry.phonetic" class="library-muted">{{ round.word.entry.phonetic }}</p>
-          <blockquote v-if="round.word.entry.example" class="review-example">{{ round.word.entry.example }}</blockquote>
-          <ReviewPronunciation :term="round.word.entry.term" />
+        <template v-else-if="round.word.answer">
+          <h2 class="review-term">{{ round.word.answer.term }}</h2>
+          <p class="review-meaning" lang="zh">{{ round.word.answer.meaning }}</p>
+          <p v-if="round.word.answer.phonetic" class="library-muted">{{ round.word.answer.phonetic }}</p>
+          <blockquote v-if="round.word.answer.example" class="review-example">{{ round.word.answer.example }}</blockquote>
+          <ReviewPronunciation :term="round.word.answer.term" />
           <p v-if="spellCheck !== undefined" role="status">
-            {{ spellCheck ? 'Your spelling matches.' : 'Your spelling differs.' }} Choose the rating that reflects your recall.
+            {{ spellCheck ? t('Your spelling matches.') : t('Your spelling differs.') }} {{ t('Choose the rating that reflects your recall.') }}
           </p>
-          <div class="review-ratings" aria-label="Recall ratings">
+          <div class="review-ratings" :aria-label="t('Recall ratings')">
             <div v-for="(rating, index) in reviewRatings" :key="rating">
-              <NButton :disabled="busy" @click="rate(rating)">{{ ratingLabels[rating].label }}</NButton>
-              <small>{{ index + 1 }} · {{ ratingLabels[rating].hint }}</small>
+              <NButton :disabled="busy" @click="rate(rating)">{{ t(ratingLabels[rating].label) }}</NButton>
+              <small>{{ index + 1 }} · {{ t(ratingLabels[rating].hint) }}</small>
             </div>
           </div>
         </template>
       </div>
       <div v-else class="review-recall">
-        <p role="status">Checking the remaining review cards…</p>
-        <NButton v-if="error" :disabled="busy" @click="repair">Try again</NButton>
+        <p role="status">{{ t('Checking the remaining review cards…') }}</p>
+        <NButton v-if="error" :disabled="busy" @click="repair">{{ t('Try again') }}</NButton>
       </div>
       <div class="review-actions review-session-actions">
-        <NButton :disabled="busy" @click="changeStatus('paused')">Pause</NButton>
-        <NButton :disabled="busy" @click="changeStatus('abandoned')">End round</NButton>
+        <NButton :disabled="busy" @click="changeStatus('paused')">{{ t('Pause') }}</NButton>
+        <NButton :disabled="busy" @click="changeStatus('abandoned')">{{ t('End round') }}</NButton>
       </div>
     </NCard>
     <template v-else-if="overview && round !== undefined">
       <NCard v-if="round?.session.status === 'paused'" class="review-card">
-        <h2>Review paused</h2>
-        <p>{{ round.rated }} rated in this round.</p>
+        <h2>{{ t('Review paused') }}</h2>
+        <p>{{ t('{count} rated in this round.', { count: round.rated }) }}</p>
         <div class="review-actions review-session-actions">
-          <NButton type="primary" :disabled="busy" @click="changeStatus('active')">Resume review</NButton>
-          <NButton :disabled="busy" @click="changeStatus('abandoned')">End round</NButton>
+          <NButton type="primary" :disabled="busy" @click="changeStatus('active')">{{ t('Resume review') }}</NButton>
+          <NButton :disabled="busy" @click="changeStatus('abandoned')">{{ t('End round') }}</NButton>
         </div>
       </NCard>
       <NCard class="review-card">
         <div class="review-recall">
           <template v-if="round?.session.status === 'completed'">
-            <h2>Review round complete</h2>
-            <p>{{ round.rated }} rated in this round.</p>
+            <h2>{{ t('Review round complete') }}</h2>
+            <p>{{ t('{count} rated in this round.', { count: round.rated }) }}</p>
           </template>
-          <NSelect :value="deckId ?? null" :options="deckOptions" clearable aria-label="Review deck"
-            placeholder="All active decks" @update:value="selectDeck" />
+          <NSelect :value="deckId ?? null" :options="deckOptions" clearable :aria-label="t('Review deck')"
+            :placeholder="t('All active decks')" @update:value="selectDeck" />
           <dl class="review-counts">
-            <div><dt>Due reviews</dt><dd>{{ overview.due }}</dd></div>
-            <div><dt>Waiting for first recall</dt><dd>{{ overview.firstRecall }}</dd></div>
-            <div><dt>Rated today</dt><dd>{{ overview.ratedToday }}</dd></div>
+            <div><dt>{{ t('Due reviews') }}</dt><dd>{{ overview.due }}</dd></div>
+            <div><dt>{{ t('Waiting for first recall') }}</dt><dd>{{ overview.firstRecall }}</dd></div>
+            <div><dt>{{ t('Rated today') }}</dt><dd>{{ overview.ratedToday }}</dd></div>
           </dl>
-          <p v-if="!overview.due && !overview.firstRecall" class="library-muted">No words to review right now.</p>
+          <p v-if="!overview.due && !overview.firstRecall" class="library-muted">{{ t('No words to review right now.') }}</p>
           <p v-if="overview.nextDueAt !== undefined">
-            Next review <time :datetime="new Date(overview.nextDueAt).toISOString()">{{ formatReviewTime(overview.nextDueAt) }}</time>
+            {{ t('Next review') }} <time :datetime="new Date(overview.nextDueAt).toISOString()">{{ formatReviewTime(overview.nextDueAt) }}</time>
           </p>
           <div v-if="round?.session.status !== 'paused'">
             <NButton type="primary" :disabled="busy || !overview.due && !overview.firstRecall"
-              @click="run(() => review.start(deckId))">Start review</NButton>
+              @click="run(() => review.start(deckId))">{{ t('Start review') }}</NButton>
           </div>
         </div>
       </NCard>
     </template>
-    <p v-else class="library-muted" aria-live="polite">Loading your reviews…</p>
+    <p v-else class="library-muted" aria-live="polite">{{ t('Loading your reviews…') }}</p>
   </section>
 </template>
 

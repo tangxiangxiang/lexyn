@@ -8,23 +8,26 @@ import { latestDatabaseVersion } from '../db/migrations/index.ts'
 
 const databaseName = 'lexyn.sqlite'
 const infoName = 'backup.json'
-const requiredTables = ['app_meta', 'owner', 'sessions', 'devices', 'decks', 'entries', 'practice_events', 'learn_progress',
-  'review_events', 'review_cards', 'sync_operations', 'sync_changes', 'sync_metadata']
+const requiredTables = ['owner', 'sessions', 'decks', 'entries', 'practice_events', 'learn_progress', 'learn_sessions',
+  'review_events', 'review_cards', 'review_sessions', 'owner_settings', 'request_idempotency']
 
 const hasSidecars = (path: string) => ['-wal', '-shm', '-journal'].some((suffix) => existsSync(path + suffix))
+
+const isSupportedSchema = (version: unknown): version is number =>
+  Number.isInteger(version) && Number(version) >= 3 && Number(version) <= latestDatabaseVersion
 
 function verifyDatabase(path: string) {
   const db = new Database(path, { readonly: true, fileMustExist: true })
   try {
     const version = db.pragma('user_version', { simple: true })
-    if (version !== latestDatabaseVersion) throw new Error('This SQLite schema is incompatible with this Lexyn build.')
+    if (!isSupportedSchema(version)) throw new Error('This SQLite schema is incompatible with this Lexyn build.')
     const tables = new Set(db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").pluck().all())
     if (!requiredTables.every((table) => tables.has(table))) throw new Error('The SQLite backup is missing required tables.')
     const integrity = db.pragma('integrity_check') as { integrity_check: string }[]
     if (integrity.length !== 1 || integrity[0].integrity_check !== 'ok' || (db.pragma('foreign_key_check') as unknown[]).length) {
       throw new Error('The SQLite backup failed its integrity check.')
     }
-    return version as number
+    return version
   } finally { db.close() }
 }
 
@@ -62,7 +65,7 @@ export async function verifySqliteBackup(directory: string) {
   const stat = lstatSync(infoPath)
   if (!stat.isFile() || stat.size > 4096) throw new Error('Invalid SQLite backup metadata file.')
   const info = JSON.parse(readFileSync(infoPath, 'utf8')) as Record<string, unknown> | null
-  if (!info || info.format !== 'lexyn-sqlite' || info.version !== 1 || info.schemaVersion !== latestDatabaseVersion
+  if (!info || info.format !== 'lexyn-sqlite' || info.version !== 1 || !isSupportedSchema(info.schemaVersion)
     || typeof info.createdAt !== 'string' || !Number.isFinite(Date.parse(info.createdAt))) {
     throw new Error('Invalid or unsupported SQLite backup metadata.')
   }
@@ -70,8 +73,9 @@ export async function verifySqliteBackup(directory: string) {
   if (hasSidecars(path)) throw new Error('The SQLite backup must be a standalone file without sidecars.')
   const actual = await fingerprint(path)
   if (actual.bytes !== info.bytes || actual.sha256 !== info.sha256) throw new Error('SQLite backup size or SHA-256 does not match.')
-  verifyDatabase(path)
-  return { ...actual, schemaVersion: latestDatabaseVersion, createdAt: info.createdAt }
+  const schemaVersion = verifyDatabase(path)
+  if (schemaVersion !== info.schemaVersion) throw new Error('SQLite backup schema version does not match its metadata.')
+  return { ...actual, schemaVersion, createdAt: info.createdAt }
 }
 
 export async function restoreSqliteBackup(dataDir: string, directory: string) {
@@ -92,14 +96,10 @@ export async function restoreSqliteBackup(dataDir: string, directory: string) {
     const recheck = await fingerprint(staged)
     if (recheck.sha256 !== info.sha256) throw new Error('The SQLite backup changed during restore.')
     chmodSync(staged, 0o600)
-    const generation = randomUUID()
     const db = new Database(staged, { fileMustExist: true })
     try {
       db.pragma('journal_mode = DELETE')
-      db.transaction(() => {
-        db.prepare("INSERT INTO app_meta VALUES ('sync_generation', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(generation)
-        db.prepare('DELETE FROM sessions').run()
-      }).immediate()
+      db.prepare('DELETE FROM sessions').run()
     } finally { db.close() }
     verifyDatabase(staged)
     let rollback: string | undefined
@@ -109,7 +109,7 @@ export async function restoreSqliteBackup(dataDir: string, directory: string) {
       linkSync(target, rollback)
     }
     renameSync(staged, target)
-    return { target, rollback, generation }
+    return { target, rollback }
   } finally {
     try { if (temp) rmSync(temp, { recursive: true, force: true }) } finally { unlock() }
   }

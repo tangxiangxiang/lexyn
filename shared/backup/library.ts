@@ -1,6 +1,6 @@
-import type { LibraryExport, OutboxOperation } from '../contracts/library.ts'
-import { fields, integer, isUuid, object, time, validateCardState, validateOperation } from '../contracts/operation-validation.ts'
-import { stableJson } from '../contracts/sync.ts'
+import type { LibraryExport } from '../contracts/library.ts'
+import { fields, integer, isUuid, object, time, validateCardState, validateEntity, validateEvent, validateTimezone } from '../contracts/validation.ts'
+import { stableJson } from '../contracts/json.ts'
 import type { LearnProgress } from '../domain/learning.ts'
 import type { Entry } from '../domain/library.ts'
 import { REVIEW_DIRECTION, reviewCardId, type ReviewCard, type ReviewCardState, type ReviewEvent } from '../domain/review.ts'
@@ -23,6 +23,10 @@ function rows<T>(value: unknown, label: string, identify: (record: Record<string
   return value as T[]
 }
 
+function uniqueSlots<T>(events: T[], key: (event: T) => string, message: string) {
+  requireValid(new Set(events.map(key)).size === events.length, message)
+}
+
 function sameState(snapshot: ReviewCardState, replay: ReviewCardState) {
   // Different JS engines may round the FSRS floating point fields differently.
   const { stability, stabilityFast, difficulty, scheduledDays, ...exact } = snapshot
@@ -41,27 +45,25 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
   let raw: unknown
   try { raw = JSON.parse(text) } catch { throw new Error('The file is not valid JSON.') }
   const root = object(raw)
-  requireValid(root.format === 'lexyn-library' && root.formatVersion === 3, 'Only Lexyn library backup format v3 is supported.')
-  fields(root, 'format formatVersion exportedAt metadata decks entries practiceEvents learnProgress dailyNewWords reviewCards reviewEvents schedulerConfig')
+  requireValid(root.format === 'lexyn-library' && root.formatVersion === 4, 'Only Lexyn library backup format v4 is supported.')
+  fields(root, 'format formatVersion exportedAt metadata decks entries practiceEvents learnProgress settings reviewCards reviewEvents schedulerConfig')
   const meta = object(root.metadata)
-  fields(meta, 'librarySchemaVersion scope')
-  requireValid(meta.librarySchemaVersion === 4 && (meta.scope === 'library' || meta.scope === 'deck'), 'Unsupported backup metadata.')
+  fields(meta, 'scope')
+  requireValid(meta.scope === 'library' || meta.scope === 'deck', 'Unsupported backup metadata.')
   requireValid(typeof root.exportedAt === 'string' && time(Date.parse(root.exportedAt)), 'Invalid export time.')
-  requireValid(integer(root.dailyNewWords, 1, 100), 'Invalid daily new words limit.')
+  const settings = object(root.settings)
+  fields(settings, 'dailyNewWords timezone')
+  requireValid(integer(settings.dailyNewWords, 1, 100), 'Invalid daily new words limit.')
+  validateTimezone(settings.timezone)
   const config = schedulerConfigSnapshot(await createReviewScheduler())
   requireValid(stableJson(root.schedulerConfig) === stableJson(config), 'Unsupported scheduler configuration.')
 
-  const operation = (payload: Record<string, unknown>, kind: OutboxOperation['kind'], entityId: unknown, baseRevision = 0) => {
-    validateOperation({ opId: payload.id, kind, entityId, payload, baseRevision, schemaVersion: 1, sequence: 1, createdAt: 0 }, config)
-    return payload.id as string
-  }
-  const decks = rows<LibraryExport['decks'][number]>(root.decks, 'decks', (deck) => operation(deck,
-    deck.archivedAt === undefined ? 'deck.update' : 'deck.archive', deck.id, Number(deck.revision) - 1))
+  const decks = rows<LibraryExport['decks'][number]>(root.decks, 'decks', (deck) => validateEntity(deck, 'deck'))
   const deckIds = new Set(decks.map(({ id }) => id))
   requireValid(meta.scope !== 'deck' || decks.length === 1, 'A deck backup must contain exactly one deck.')
   const activeTerms = new Set<string>()
   const entries = rows<Entry>(root.entries, 'entries', (entry) => {
-    const id = operation(entry, entry.deletedAt === undefined ? 'entry.update' : 'entry.delete', entry.id, Number(entry.revision) - 1)
+    const id = validateEntity(entry, 'entry')
     requireValid(deckIds.has(entry.deckId as string), 'An entry refers to a missing deck.')
     if (entry.deletedAt === undefined) {
       const key = `${entry.deckId}:${entry.normalizedTerm}`
@@ -77,8 +79,10 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
   }
   const practiceEvents = rows<LibraryExport['practiceEvents'][number]>(root.practiceEvents, 'practice events', (event) => {
     checkEntry(event)
-    return operation(event, 'practice.create', event.entryId)
+    return validateEvent(event, 'practice', config)
   })
+  uniqueSlots(practiceEvents, (event) => `${event.sessionId}:${event.entryId}`,
+    'A Learn session has duplicate results for one entry.')
   const progressFromEvents = new Map<string, LearnProgress>()
   for (const event of practiceEvents) {
     if (event.outcome !== 'completed') continue
@@ -95,11 +99,10 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
   requireValid(learnProgress.length === progressFromEvents.size, 'Learn progress is incomplete.')
   const reviewEvents = rows<ReviewEvent>(root.reviewEvents, 'review events', (value) => {
     checkEntry(value)
-    const { effectiveReviewedAt, ...event } = value
-    requireValid(effectiveReviewedAt === undefined || (time(effectiveReviewedAt) && time(event.reviewedAt)
-      && effectiveReviewedAt <= event.reviewedAt), 'Invalid effective review time.')
-    return operation(event, 'review.create', event.cardId)
+    return validateEvent(value, 'review', config)
   })
+  uniqueSlots(reviewEvents, (event) => `${event.sessionId}:${event.cardId}`,
+    'A Review session has duplicate ratings for one card.')
   const reviewCards = rows<ReviewCard>(root.reviewCards, 'review cards', (card) => {
     checkEntry(card)
     fields(card, 'id entryId deckId direction revision lastEventId createdAt updatedAt schedulerConfigVersion schedulerState dueAt scheduleStatus')
@@ -124,13 +127,18 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
     requireValid(history?.length === snapshot.revision, 'A review history is missing events.')
     let revision = 0
     let createdAt = 0
+    let previous: ReviewCardState | undefined
     await rebuildCardFromEvents(history, (event, schedulerState) => {
-      const reviewedAt = event.effectiveReviewedAt ?? event.reviewedAt
+      const reviewedAt = event.reviewedAt
+      requireValid(sameState(event.resultingCardState, schedulerState)
+        && (previous ? event.previousCardState && sameState(event.previousCardState, previous) : !event.previousCardState),
+      'A review event does not match its FSRS history.')
+      previous = schedulerState
       if (++revision === 1) createdAt = reviewedAt
       const { dueAt, scheduleStatus } = schedulerState
       if (revision === history.length) {
         requireValid(snapshot.lastEventId === event.id && snapshot.createdAt === createdAt
-          && sameState(snapshot.schedulerState, schedulerState), 'A review card does not match its FSRS history. Sync the source and export again.')
+          && sameState(snapshot.schedulerState, schedulerState), 'A review card does not match its FSRS history. Export a new backup from the server.')
       }
       reviewChanges.push({ event, card: { ...snapshot, createdAt, revision, lastEventId: event.id, schedulerState, dueAt,
         scheduleStatus, updatedAt: revision === history.length ? snapshot.updatedAt : reviewedAt } })

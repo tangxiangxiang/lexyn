@@ -1,5 +1,5 @@
 import { computed, inject, onMounted, onUnmounted, provide, ref, type InjectionKey } from 'vue'
-import { readAppearance, writeAppearance, type Appearance } from '../db/local'
+type Appearance = 'system' | 'light' | 'dark'
 
 function createAppearance() {
   const media = window.matchMedia('(prefers-color-scheme: dark)')
@@ -17,7 +17,8 @@ function createAppearance() {
   onMounted(async () => {
     media.addEventListener('change', updateSystem)
     try {
-      appearance.value = await readAppearance()
+      const value = localStorage.getItem('lexyn.appearance')
+      appearance.value = value === 'light' || value === 'dark' ? value : 'system'
     } catch {
       error.value = 'Could not read your device preferences.'
     } finally {
@@ -31,7 +32,7 @@ function createAppearance() {
     busy.value = true
     error.value = ''
     try {
-      await writeAppearance(value)
+      localStorage.setItem('lexyn.appearance', value)
       appearance.value = value
     } catch {
       error.value = 'Could not save your theme on this device. Try again.'

@@ -15,7 +15,6 @@ const defaultOptions = {
 } satisfies DefaultSchedulerOptions<'FSRS-7'>
 
 export async function createReviewScheduler(options: DefaultSchedulerOptions<'FSRS-7'> = defaultOptions) {
-  // Include the model in the loaded application so its first review can be scored offline.
   const scheduler = await DefaultScheduler(options)
   if (scheduler.definition.model.name !== FSRS7Model.name) throw new Error('Expected the FSRS-7 model.')
   return scheduler
@@ -78,7 +77,7 @@ export function serializeRevlog(
 export async function rebuildCardFromEvents(
   events: readonly ReviewEvent[], onReview?: (event: ReviewEvent, state: ReviewCardState) => void,
 ): Promise<ReviewCardState | undefined> {
-  const time = (event: ReviewEvent) => event.effectiveReviewedAt ?? event.reviewedAt
+  const time = (event: ReviewEvent) => event.reviewedAt
   const ordered = [...events].sort((a, b) => time(a) - time(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   const schedulers = new Map<string, ReviewScheduler>()
   let card: DefaultSchedulerCard<'FSRS-7'> | undefined

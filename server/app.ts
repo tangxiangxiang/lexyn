@@ -3,11 +3,12 @@ import { extname, join } from 'node:path'
 import { serveStatic } from '@hono/node-server/serve-static'
 import type Database from 'better-sqlite3'
 import { Hono } from 'hono'
-import { createAuthApi } from './auth/routes.ts'
-import { syncRoutes } from './sync/routes.ts'
+import { createAuthApi, type AuthOptions } from './auth/routes.ts'
+import { studyRoutes } from './study/routes.ts'
 import { healthRoutes } from './routes/health.ts'
 
-export function createApp(db: Database.Database, webRoot?: string, publicOrigin = 'http://127.0.0.1:3000') {
+export function createApp(db: Database.Database, webRoot?: string, publicOrigin = 'http://127.0.0.1:3000',
+  clock = Date.now, authOptions?: AuthOptions) {
   const app = new Hono()
   app.onError((_error, c) => {
     console.error('Request failed')
@@ -15,10 +16,10 @@ export function createApp(db: Database.Database, webRoot?: string, publicOrigin 
   })
   app.notFound((c) => c.json({ error: { code: 'NOT_FOUND', message: 'Route not found.' } }, 404))
 
-  const auth = createAuthApi(db, publicOrigin)
+  const auth = createAuthApi(db, publicOrigin, authOptions)
   app.route('/api/auth', auth.routes)
   app.route('/api', healthRoutes(db))
-  app.route('/api', syncRoutes(db, auth))
+  app.route('/api', studyRoutes(db, auth, clock))
   app.all('/api/*', (c) => {
     c.header('Cache-Control', 'no-store')
     return c.notFound()

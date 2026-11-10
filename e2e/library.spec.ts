@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
-import { expect, test, type Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { expect, signIn, test } from './fixtures'
 import type { LibraryExport } from '../shared/contracts/library'
 
 async function createDeck(page: Page, name: string) {
@@ -124,8 +124,8 @@ test('previews TXT and CSV, explicitly overwrites duplicates and downloads full 
   ])
   const exported: LibraryExport = JSON.parse(await readFile(await download.path(), 'utf8'))
   expect(exported).toMatchObject({
-    format: 'lexyn-library', formatVersion: 3, metadata: { scope: 'library', librarySchemaVersion: 4 },
-    dailyNewWords: 10,
+    format: 'lexyn-library', formatVersion: 4, metadata: { scope: 'library' },
+    settings: { dailyNewWords: 10, timezone: 'UTC' },
     decks: [{ name: 'Computer English', archivedAt: expect.any(Number), revision: 2 }],
   })
   expect(exported.entries).toEqual(expect.arrayContaining([
@@ -134,29 +134,25 @@ test('previews TXT and CSV, explicitly overwrites duplicates and downloads full 
   ]))
 })
 
-test('keeps words added offline after closing and reopening the browser profile', async ({ browser, baseURL }, testInfo) => {
-  const browserType = browser.browserType()
-  const profile = join(testInfo.outputDir, 'profile')
-  const context = await browserType.launchPersistentContext(profile, { baseURL })
-  let deckUrl = ''
+test('rejects offline writes and shares saved words with a separate browser profile', async ({ page, browser, baseURL }) => {
+  await createDeck(page, 'Shared Systems')
+  await page.getByRole('link', { name: 'Shared Systems' }).click()
+  await page.getByRole('button', { name: 'Add word' }).click()
+  await page.context().setOffline(true)
+  await page.getByLabel('Term', { exact: true }).fill('vector clock')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.locator('.library-dialog').getByRole('alert')).toContainText('Could not reach the server')
+  await expect(page.getByRole('heading', { name: 'vector clock' })).toHaveCount(0)
+  const second = await browser.newContext({ baseURL })
   try {
-    const page = context.pages()[0] ?? await context.newPage()
-    await page.goto('/library')
-    await context.setOffline(true)
-    await createDeck(page, 'Offline Systems')
-    await page.getByRole('link', { name: 'Offline Systems' }).click()
-    await addWord(page, 'vector clock', '向量时钟')
-    deckUrl = page.url()
-  } finally {
-    await context.close()
-  }
-  const reopened = await browserType.launchPersistentContext(profile, { baseURL })
-  try {
-    const page = reopened.pages()[0] ?? await reopened.newPage()
-    await page.goto(deckUrl)
-    await expect(page.getByRole('heading', { name: 'vector clock', exact: true })).toBeVisible()
-    await expect(page.getByText('向量时钟')).toBeVisible()
-  } finally {
-    await reopened.close()
-  }
+    const other = await second.newPage()
+    await other.goto(page.url())
+    await signIn(other)
+    await expect(other.getByText('This deck has no words yet')).toBeVisible()
+    await page.context().setOffline(false)
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'vector clock' })).toBeVisible()
+    await other.reload()
+    await expect(other.getByRole('heading', { name: 'vector clock' })).toBeVisible()
+  } finally { await second.close() }
 })

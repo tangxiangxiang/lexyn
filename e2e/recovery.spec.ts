@@ -4,14 +4,14 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { serve } from '@hono/node-server'
-import { expect, test, type Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { expect, password, signIn, test, username } from './fixtures'
 import { createApp } from '../server/app'
 import { lockDataDirectory, openDatabase } from '../server/db/database'
 import type { LibraryExport } from '../shared/contracts/library'
 import { prepareLibraryRestore } from '../shared/backup/library'
 
 const execute = promisify(execFile)
-const password = () => process.env.LEXYN_TEST_OWNER_PASSWORD!
 
 async function command(dataDir: string, args: string[], input?: string) {
   const env = { ...process.env, NODE_ENV: 'test', LEXYN_DATA_DIR: dataDir, LEXYN_PUBLIC_ORIGIN: 'http://127.0.0.1:4173' }
@@ -25,7 +25,7 @@ async function command(dataDir: string, args: string[], input?: string) {
   return (await execute(process.execPath, args, { env })).stdout
 }
 
-const init = (dataDir: string) => command(dataDir, ['dist-server/server/auth/init-owner.js'], password())
+const init = (dataDir: string) => command(dataDir, ['dist-server/server/auth/init-owner.js', username], password)
 const backup = (dataDir: string, ...args: string[]) => command(dataDir, ['dist-server/server/backup/cli.js', ...args])
 
 async function start(dataDir: string, port = 0) {
@@ -52,15 +52,6 @@ async function start(dataDir: string, port = 0) {
 }
 
 const settings = (page: Page) => page.getByRole('navigation').getByRole('link', { name: 'Settings' }).click()
-async function signIn(page: Page, expectSuccess = true) {
-  await page.getByLabel('Owner password').fill(password())
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  if (expectSuccess) {
-    await expect(page.getByText('Synced', { exact: true })).toBeVisible()
-    await expect(page.getByText('0 pending operations', { exact: true })).toBeVisible()
-  }
-}
-
 async function newDeck(page: Page, name: string, csv: string) {
   await page.getByRole('navigation').getByRole('link', { name: 'Library' }).click()
   await page.getByRole('button', { name: 'New deck' }).click()
@@ -108,7 +99,7 @@ function comparable({ exportedAt: _, reviewCards, ...data }: LibraryExport) {
   return { ...data, reviewCards: reviewCards.map(({ schedulerState, ...card }) => ({ ...card, dueAt: schedulerState.dueAt })) }
 }
 
-test('restores a browser JSON export with archived and removed history and syncs it to fresh devices', async ({ page, browser }) => {
+test('restores a server JSON export with archived and removed history for fresh devices', async ({ page, browser }) => {
   test.setTimeout(60_000)
   const root = await mkdtemp(join(tmpdir(), 'lexyn-json-e2e-'))
   const fresh = await browser.newContext()
@@ -131,14 +122,13 @@ test('restores a browser JSON export with archived and removed history and syncs
     await page.getByRole('textbox', { name: 'Daily new words' }).fill('23')
     await page.getByRole('textbox', { name: 'Daily new words' }).press('Tab')
     const { path, snapshot } = await exportLibrary(page)
-    expect(snapshot.dailyNewWords).toBe(23)
+    expect(snapshot.settings.dailyNewWords).toBe(23)
     expect(snapshot.reviewEvents).toHaveLength(3)
     expect(snapshot.practiceEvents).toHaveLength(3)
     await page.getByLabel('Preview a JSON backup').setInputFiles({ name: 'bad.json', mimeType: 'application/json', buffer: Buffer.from('{') })
     await expect(page.getByText('The file is not valid JSON.')).toBeVisible()
     await page.getByLabel('Preview a JSON backup').setInputFiles(path)
     await expect(page.getByRole('heading', { name: 'Backup preview' })).toBeVisible()
-    await expect(page.getByText('This browser has local or synced data.', { exact: false })).toBeVisible()
     await init(root)
     await expect(backup(root, 'restore-json', path)).rejects.toThrow('--confirm-empty')
     await backup(root, 'restore-json', path, '--confirm-empty')
@@ -160,69 +150,57 @@ test('restores a browser JSON export with archived and removed history and syncs
   }
 })
 
-test('recovers a live SQLite backup, rejects an older client generation and bootstraps a fresh device', async ({ browser }) => {
+test('recovers a live SQLite backup, revokes old sessions and persists new writes after restart', async ({ browser }) => {
   test.setTimeout(60_000)
   const root = await mkdtemp(join(tmpdir(), 'lexyn-sqlite-e2e-'))
   const source = join(root, 'source')
   const target = join(root, 'restored')
-  const contexts = await Promise.all([browser.newContext(), browser.newContext(), browser.newContext()])
+  const contexts = await Promise.all([browser.newContext(), browser.newContext()])
   let instance: Awaited<ReturnType<typeof start>> | undefined
   try {
     await init(source)
     instance = await start(source)
-    const [desktop, phone, fresh] = await Promise.all(contexts.map((context) => context.newPage()))
+    const [desktop, phone] = await Promise.all(contexts.map((context) => context.newPage()))
     await desktop.goto(instance.origin + '/library')
+    await signIn(desktop)
     await newDeck(desktop, 'SQLite desktop data', 'durability,耐久性')
     await study(desktop, 1)
-    await settings(desktop)
-    await signIn(desktop)
-    await phone.goto(instance.origin + '/settings')
+    await phone.goto(instance.origin + '/library')
     await signIn(phone)
+    await expect(phone.getByRole('link', { name: 'SQLite desktop data' })).toBeVisible()
     await newDeck(phone, 'SQLite phone data', 'checkpoint,检查点')
     await study(phone, 1)
     await settings(phone)
-    await phone.getByRole('button', { name: 'Sync now' }).click()
-    await expect(phone.getByText('0 pending operations', { exact: true })).toBeVisible()
-    await expect(phone.getByText('Synced', { exact: true })).toBeVisible()
+    await expect(phone.getByLabel('Study timezone (IANA)')).toHaveValue('UTC')
+    await phone.getByLabel('Study timezone (IANA)').fill('Asia/Shanghai')
+    const [saved] = await Promise.all([phone.waitForResponse((response) => response.url().endsWith('/api/settings/timezone')),
+      phone.getByRole('button', { name: 'Save timezone' }).click()])
+    expect(saved.ok()).toBe(true)
     const snapshot = (await exportLibrary(phone)).snapshot
+    expect(snapshot.settings.timezone).toBe('Asia/Shanghai')
     expect(snapshot.reviewEvents).toHaveLength(2)
     expect(snapshot.practiceEvents).toHaveLength(2)
     const { directory } = JSON.parse(await backup(source, 'create', join(root, 'backups'))) as { directory: string }
     await backup(source, 'verify', directory)
     await expect(backup(source, 'restore', directory, '--confirm-stopped')).rejects.toThrow('in use')
-    const count = () => instance!.db.prepare('SELECT count(*) FROM sync_changes').pluck().get()
-    const savedCount = count()
     await newDeck(phone, 'Written after snapshot', 'truncate,截断')
-    await settings(phone)
-    await phone.getByRole('button', { name: 'Sync now' }).click()
-    await expect.poll(count).toBeGreaterThan(Number(savedCount))
-    await expect(phone.getByText('Synced', { exact: true })).toBeVisible()
-    await contexts[1].setOffline(true)
-    await newDeck(phone, 'Unsynced after snapshot', 'rollback,回滚')
-    await settings(phone)
-    await expect(phone.getByText('2 pending operations', { exact: true })).toBeVisible()
     const { port } = instance
     await instance.close()
     instance = undefined
     await backup(target, 'restore', directory, '--confirm-stopped')
     instance = await start(target, port)
-    expect(count()).toBe(savedCount)
-    await contexts[1].setOffline(false)
+    await phone.reload()
     await expect(phone.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible()
-    await signIn(phone, false)
-    await expect(phone.getByText('The server was restored.', { exact: false })).toBeVisible()
-    await expect(phone.getByText('2 pending operations', { exact: true })).toBeVisible()
-    expect(count()).toBe(savedCount)
-    await fresh.goto(instance.origin + '/settings')
-    await signIn(fresh)
-    const recovered = (await exportLibrary(fresh)).snapshot
+    await signIn(phone)
+    await settings(phone)
+    const recovered = (await exportLibrary(phone)).snapshot
     expect(comparable(recovered)).toEqual(comparable(snapshot))
     expect(recovered.reviewCards).toEqual(snapshot.reviewCards)
-    await newDeck(fresh, 'Written after restore', 'recovery,恢复')
-    await settings(fresh)
-    await fresh.getByRole('button', { name: 'Sync now' }).click()
-    await expect.poll(count).toBeGreaterThan(Number(savedCount))
-    await expect(fresh.getByText('Synced', { exact: true })).toBeVisible()
+    await newDeck(phone, 'Written after restore', 'recovery,恢复')
+    await instance.close()
+    instance = await start(target, port)
+    await phone.reload()
+    await expect(phone.getByRole('heading', { name: 'recovery', exact: true })).toBeVisible()
   } finally {
     await Promise.all(contexts.map((context) => context.close()))
     await instance?.close()

@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
 import { readConfig } from '../config/env.ts'
-import { openDatabase } from '../db/database.ts'
+import { lockDataDirectory, openDatabase } from '../db/database.ts'
 import { readLibraryBackup, restoreLibrary } from './library.ts'
 import { createSqliteBackup, restoreSqliteBackup, verifySqliteBackup } from './sqlite.ts'
 
@@ -17,8 +17,12 @@ try {
     console.log(JSON.stringify(await restoreSqliteBackup(readConfig(process.env).dataDir, resolve(path))))
   } else if (command === 'restore-json' && path && confirmation === '--confirm-empty') {
     const plan = await readLibraryBackup(resolve(path))
-    const db = openDatabase(readConfig(process.env).dataDir)
-    try { restoreLibrary(db, plan) } finally { db.close() }
+    const { dataDir } = readConfig(process.env)
+    const unlock = lockDataDirectory(dataDir)
+    try {
+      const db = openDatabase(dataDir)
+      try { restoreLibrary(db, plan) } finally { db.close() }
+    } finally { unlock() }
     console.log(`Restored ${plan.backup.decks.length} decks, ${plan.backup.entries.length} entries, ${plan.backup.practiceEvents.length} practice events and ${plan.backup.reviewEvents.length} review events.`)
   } else {
     throw new Error('Use create [directory], verify <backup directory>, restore <backup directory> --confirm-stopped, or restore-json <file> --confirm-empty.')

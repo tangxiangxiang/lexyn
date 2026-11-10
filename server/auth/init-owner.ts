@@ -3,6 +3,7 @@ import { Writable } from 'node:stream'
 import { readConfig } from '../config/env.ts'
 import { openDatabase } from '../db/database.ts'
 import { initializeOwner } from './owner.ts'
+import { normalizeUsername } from './password.ts'
 
 async function readPassword() {
   if (!process.stdin.isTTY) {
@@ -31,11 +32,14 @@ async function readPassword() {
 }
 
 try {
+  const [username, ...extra] = process.argv.slice(2)
+  if (!username || extra.length) throw new Error('Usage: npm run owner:init -- <username>')
+  const normalized = normalizeUsername(username)
   const config = readConfig(process.env)
   const password = await readPassword()
   const db = openDatabase(config.dataDir)
   try {
-    await initializeOwner(db, password)
+    await initializeOwner(db, normalized, password)
     console.log('Owner initialized.')
   } finally {
     db.close()

@@ -10,10 +10,10 @@ cp .env.production.example .env.production
 
 docker compose --env-file .env.production -f compose.production.yml pull
 docker compose --env-file .env.production -f compose.production.yml up -d
-docker compose --env-file .env.production -f compose.production.yml exec lexyn npm run owner:init:production
+docker compose --env-file .env.production -f compose.production.yml logs lexyn
 ```
 
-Owner 密码在交互终端隐藏输入。自动化时可从受保护的标准输入传入，例如 `docker compose … exec -T lexyn npm run owner:init:production < /secure/path/password-file`。不要将密码写入 Compose 或命令参数。初始化使用同一数据卷，正式镜像包含编译后的命令。
+首次启动时，从 Lexyn 日志复制一次性设置令牌，在 HTTPS 页面中设置 Owner 用户名和密码。也可以通过受保护的环境配置传入至少 32 字节的随机 `LEXYN_SETUP_TOKEN`，服务端不会打印该值。备份恢复和自动化可运行 `npm run owner:init:production -- <username>`，密码从交互终端或受保护的标准输入读取。
 
 镜像运行 Node.js 24 Debian slim，原生 SQLite 模块在同一 Linux 基础镜像和目标架构上安装。运行用户 UID 1000、根文件系统只读、无额外 capabilities。命名卷挂载到 `/var/lib/lexyn`，承载 SQLite、维护锁和默认备份目录。`LEXYN_DATA_DIR`、`LEXYN_BACKUP_DIR` 可选用此卷下的独立目录。自定义绑定目录时先给 UID 1000 写权限，SQLite 数据卷使用支持本地文件锁的存储。不要与其他服务共用数据卷。容器端口由 `LEXYN_PORT` 配置，宿主端口由 `LEXYN_HOST_PORT` 配置，默认仅映射到宿主回环。
 
@@ -26,7 +26,7 @@ Owner 密码在交互终端隐藏输入。自动化时可从受保护的标准�
 ## 升级、备份与回滚
 
 1. 用运行中的旧容器创建并验证 SQLite 备份，把备份复制到数据卷之外。
-2. 将 `LEXYN_IMAGE` 更新为目标版本或 digest，执行 `pull` 和 `up -d`。保持同一个数据卷和公开 origin。检查健康、Owner 登录和两台设备同步，再做离线启动检查。
+2. 将 `LEXYN_IMAGE` 更新为目标版本或 digest，执行 `pull` 和 `up -d`。保持同一个数据卷和公开 origin。检查健康、Owner 登录和两台设备登录后访问同一份词库，再做离线启动检查。
 3. 页面提示更新时，完成当前操作后关闭所有 Lexyn 窗口再重新打开。不要清理站点数据来切换版本。
 4. 若回滚且数据库结构仍兼容，可切换镜像 digest。已通过 Phase 6 备份命令恢复的数据库应继续使用支持恢复代次的版本。涉及数据库恢复时按 [备份与恢复](backup-restore.md) 使用兼容版本和维护命令，保留新旧数据库及原浏览器数据。切换或回滚后重新执行 HTTPS 检查。
 
@@ -41,4 +41,4 @@ docker build --platform linux/amd64 -t lexyn:local .
 node scripts/container-smoke.mjs lexyn:local
 ```
 
-烟测包括 TLS 反代、Owner Cookie、鉴权、写入、在线备份、重启、重建容器和持久化卷。NAS 首次正式验收还要检查其实际反代、证书、备份目录权限、设备安装入口、系统软键盘、手势安全区域和系统 TTS。建议用桌面、手机和目标 Android 平板逐一完成首次安装、断网重启、评分、联网同步与恢复演练。
+烟测包括 TLS 反代、Owner Cookie、鉴权、写入、在线备份、重启、重建容器和持久化卷。NAS 首次正式验收还要检查其实际反代、证书、备份目录权限、设备安装入口、系统软键盘、手势安全区域和系统 TTS。建议用桌面、手机和目标 Android 平板逐一完成首次安装、断网打开应用壳、恢复联网后的评分与备份恢复演练。

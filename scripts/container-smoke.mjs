@@ -84,27 +84,25 @@ try {
   start()
   await healthy()
   assert.equal(docker(['exec', name, 'id', '-u']), '1000')
-  docker(['exec', '-i', name, 'npm', 'run', '--silent', 'owner:init:production'], { input: `${password}\n` })
-  assert.equal((await api('/api/sync/pull')).status, 401)
-  const session = await api('/api/auth/login', { body: { password } })
+  docker(['exec', '-i', name, 'npm', 'run', '--silent', 'owner:init:production', '--', 'smoke-admin'], { input: `${password}\n` })
+  assert.equal((await api('/api/library/decks')).status, 401)
+  const session = await api('/api/auth/login', { body: { username: 'smoke-admin', password } })
   assert.equal(session.status, 200)
   const cookie = session.headers['set-cookie'][0]
   assert.match(cookie, /^__Host-lexyn-session=/)
-  for (const attribute of ['Secure', 'HttpOnly', 'SameSite=Strict', 'Path=/']) assert.ok(cookie.includes(attribute))
+  for (const attribute of ['Secure', 'HttpOnly', 'SameSite=Lax', 'Path=/']) assert.ok(cookie.includes(attribute))
   const headers = { Cookie: cookie.split(';')[0], 'X-Lexyn-Owner': session.json().session.ownerId }
   const crossOrigin = await api('/api/auth/session', { headers: { Origin: 'https://elsewhere.invalid' } })
   assert.equal(crossOrigin.status, 403)
-  const deckId = randomUUID()
-  const now = Date.now()
-  const push = await api('/api/sync/push', { headers, body: { schemaVersion: 1, deviceId: randomUUID(), cursor: 0,
-    operations: [{ opId: randomUUID(), schemaVersion: 1, entityId: deckId, kind: 'deck.create', baseRevision: 0, sequence: 1,
-      createdAt: now, payload: { id: deckId, name: 'Container smoke', revision: 1, createdAt: now, updatedAt: now } }] } })
-  assert.equal(push.status, 200)
-  assert.equal(push.json().results[0].status, 'accepted')
+  const created = await api('/api/library/create-deck', {
+    headers: { ...headers, 'Idempotency-Key': randomUUID() }, body: [{ name: 'Container smoke' }],
+  })
+  assert.equal(created.status, 200)
+  const deckId = created.json().data.id
   const verifyDeck = async () => {
-    const bootstrap = await api('/api/bootstrap', { headers })
-    assert.equal(bootstrap.status, 200)
-    assert.equal(bootstrap.json().changes[0].record.value.id, deckId)
+    const decks = await api('/api/library/decks?args=%5B0%2C50%5D', { headers })
+    assert.equal(decks.status, 200)
+    assert.equal(decks.json().data[0].deck.id, deckId)
   }
   await verifyDeck()
   const snapshot = JSON.parse(docker(['exec', name, 'npm', 'run', '--silent', 'backup:create']))
@@ -132,7 +130,7 @@ try {
   await healthy()
   await verifyDeck()
   assert.equal(JSON.parse(docker(['exec', name, 'npm', 'run', '--silent', 'backup:verify', '--', snapshot.directory])).sha256, snapshot.sha256)
-  console.log('Linux amd64 production image passed TLS proxy, authenticated sync, static PWA, backup, restart and volume recreation checks.')
+  console.log('Linux amd64 production image passed TLS proxy, authenticated Library, static PWA, backup, restart and volume recreation checks.')
 } finally {
   proxy?.close()
   try { docker(['rm', '-f', name], { stdio: 'ignore' }) } catch { /* already removed */ }

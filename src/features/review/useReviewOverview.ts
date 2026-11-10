@@ -1,20 +1,22 @@
-import { onMounted, onUnmounted, watch, type WatchSource } from 'vue'
+import { computed, onMounted, onUnmounted, watch, type WatchSource } from 'vue'
 import { useLibraryQuery } from '../library/useLibraryQuery'
-import { localDayBounds, review } from './repository'
+import { review } from './api'
+import { useI18n } from '../../i18n/useI18n'
+import { study } from '../../api/client'
 
 const refreshLimit = 30 * 60 * 1000
-const timeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+const { languageTag } = useI18n()
+const timeFormat = computed(() => new Intl.DateTimeFormat(languageTag.value, { dateStyle: 'medium', timeStyle: 'short' }))
 
-export const formatReviewTime = (timestamp: number) => timeFormat.format(timestamp)
+export const formatReviewTime = (timestamp: number) => timeFormat.value.format(timestamp)
 
-export function useReviewOverview(deckId: WatchSource<string | undefined>) {
-  const overview = useLibraryQuery(deckId, (id) => review.overview(id))
+export function useReviewOverview(deckId: WatchSource<string | undefined>, progress = false) {
+  const overview = useLibraryQuery(deckId, (id, signal) => progress ? study('progress/overview', [], { signal }) : review.overview(id, signal))
   watch(overview.data, (data, _, onCleanup) => {
     if (!data) return
-    const now = Date.now()
-    const [, midnight] = localDayBounds(now)
-    const next = Math.min(data.nextDueAt ?? Infinity, midnight, now + refreshLimit)
-    const timer = window.setTimeout(overview.reload, Math.max(0, next - now))
+    const now = data.checkedAt
+    const next = Math.min(data.nextDueAt ?? Infinity, data.nextDayAt, now + refreshLimit)
+    const timer = window.setTimeout(overview.reload, Math.max(1000, next - now))
     onCleanup(() => window.clearTimeout(timer))
   })
 

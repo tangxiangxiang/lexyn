@@ -1,25 +1,24 @@
 <script setup lang="ts">
+import { t, translateError, useI18n } from '../../i18n/useI18n'
 import { computed, ref, shallowRef } from 'vue'
 import { NAlert, NButton, NCard } from 'naive-ui'
 import type { LibraryExport } from '../../../shared/contracts/library'
 import { MAX_LIBRARY_BACKUP_BYTES, prepareLibraryRestore } from '../../../shared/backup/library'
-import { db } from '../../db/local'
 import { downloadLibrary } from '../library/library-ui'
 
+const { languageTag } = useI18n()
 const backup = shallowRef<LibraryExport>()
 const busy = ref(false)
 const error = ref('')
-const localHistory = ref(false)
-const pending = ref(0)
 const details = computed(() => {
   const file = backup.value
   if (!file) return []
   return [
-    ['Format version', file.formatVersion], ['Exported', new Date(file.exportedAt).toLocaleString()],
+    ['Format version', file.formatVersion], ['Exported', new Date(file.exportedAt).toLocaleString(languageTag.value)],
     ['Decks', file.decks.length], ['Archived decks', file.decks.filter((deck) => deck.archivedAt !== undefined).length],
     ['Words', file.entries.length], ['Removed words', file.entries.filter((word) => word.deletedAt !== undefined).length],
     ['Practice events', file.practiceEvents.length], ['Review events', file.reviewEvents.length],
-  ]
+  ] as const
 })
 
 async function run(action: () => Promise<void>) {
@@ -40,9 +39,6 @@ function preview(event: Event) {
   void run(async () => {
     if (file.size > MAX_LIBRARY_BACKUP_BYTES) throw new Error('The backup exceeds 64 MiB.')
     const { backup: validated } = await prepareLibraryRestore(new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer()))
-    const [decks, state, queued] = await Promise.all([db.decks.count(), db.sync_state.get('state'), db.client_outbox.count()])
-    localHistory.value = Boolean(decks || state?.ownerId || queued)
-    pending.value = queued
     backup.value = validated
   })
 }
@@ -50,22 +46,20 @@ function preview(event: Event) {
 
 <template>
   <NCard class="settings-card">
-    <section class="backup-settings" aria-label="Data & Backup">
-      <h2>Data &amp; Backup</h2>
-      <p>Download your vocabulary and study history, or check a Lexyn JSON backup before restoring it.</p>
-      <NButton :disabled="busy" @click="run(() => downloadLibrary())">Download JSON backup</NButton>
-      <label class="backup-picker">Preview a JSON backup
+    <section class="backup-settings" :aria-label="t('Data & Backup')">
+      <h2>{{ t('Data & Backup') }}</h2>
+      <p>{{ t('Download your vocabulary and study history, or check a Lexyn JSON backup before restoring it.') }}</p>
+      <NButton :disabled="busy" @click="run(() => downloadLibrary())">{{ t('Download JSON backup') }}</NButton>
+      <label class="backup-picker">{{ t('Preview a JSON backup') }}
         <input type="file" accept=".json,application/json" :disabled="busy" @change="preview">
       </label>
-      <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+      <NAlert v-if="error" type="error" role="alert">{{ translateError(error) }}</NAlert>
       <template v-if="backup">
-        <h3>Backup preview</h3>
+        <h3>{{ t('Backup preview') }}</h3>
         <dl>
-          <div v-for="[label, value] in details" :key="label"><dt>{{ label }}</dt><dd>{{ value }}</dd></div>
+          <div v-for="[label, value] in details" :key="label"><dt>{{ t(label) }}</dt><dd>{{ value }}</dd></div>
         </dl>
-        <p v-if="localHistory">This browser has local or synced data. Use a fresh browser profile after restoring. {{ pending }} Outbox records are stored in this browser.</p>
-        <p v-else>This browser has no library or sync history.</p>
-        <p>Restore the file on a new Lexyn server after initializing its Owner. The server command checks for existing data and requires explicit confirmation.</p>
+        <p>{{ t('Restore the file on a new Lexyn server after initializing its Owner. The server command checks for existing data and requires explicit confirmation.') }}</p>
         <code>npm run backup:restore-json -- /path/to/backup.json --confirm-empty</code>
       </template>
     </section>

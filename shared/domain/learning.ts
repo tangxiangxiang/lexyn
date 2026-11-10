@@ -41,11 +41,6 @@ export interface LearnSession {
   ttsVoicesAvailable?: boolean
 }
 
-export interface DailyNewWords {
-  key: string
-  value: number
-}
-
 export interface SpellingFeedback {
   actual: string
   status: 'correct' | 'incorrect' | 'missing' | 'extra'

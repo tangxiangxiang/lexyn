@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('starts at Library and supports every route and deep-link reload', async ({ page }) => {
   const errors: Error[] = []
@@ -6,7 +6,7 @@ test('starts at Library and supports every route and deep-link reload', async ({
   await page.goto('/')
   await expect(page).toHaveURL(/\/library$/)
   await expect(page.getByRole('heading', { name: 'Your library is empty' })).toBeVisible()
-  await expect(page.getByRole('status')).toHaveText('Service ready')
+  await expect(page.locator('.service-status')).toHaveText('Connected')
 
   const navigation = page.getByRole('navigation', { name: 'Main navigation' })
   for (const title of ['Learn', 'Review', 'Progress', 'Settings', 'Library']) {
@@ -37,7 +37,7 @@ test('serves API and static assets from the production origin', async ({ request
   expect((await request.get('/assets/missing.js')).status()).toBe(404)
 })
 
-test('persists the selected appearance in IndexedDB after a reload', async ({ page }) => {
+test('persists the selected appearance in the browser after a reload', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' })
   await page.goto('/settings')
   const shell = page.locator('.app-shell')
@@ -54,12 +54,14 @@ test('persists the selected appearance in IndexedDB after a reload', async ({ pa
 })
 
 test('shows a recoverable page error and keeps navigation available when the API fails', async ({ page }) => {
-  await page.route('**/api/health', (route) => route.abort())
-  await page.goto('/missing-page')
-  await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible()
-  await expect(page.getByRole('status')).toHaveText('Service unavailable')
-  await page.getByRole('link', { name: 'Back to Library' }).click()
-  await expect(page.getByRole('heading', { level: 1, name: 'Library' })).toBeVisible()
+  const decks = /\/api\/library\/decks\?/
+  await page.route(decks, (route) => route.abort())
+  await page.reload()
+  await expect(page.getByText('Cannot connect to Lexyn.', { exact: false })).toBeVisible()
+  await page.unroute(decks)
+  await page.getByRole('button', { name: 'Retry connection' }).click()
+  await expect(page.getByRole('heading', { name: 'Your library is empty' })).toBeVisible()
+  await expect(page.locator('.service-status')).toHaveText('Connected')
 })
 
 for (const [name, width, height] of [

@@ -1,17 +1,85 @@
 import type Database from 'better-sqlite3'
 
-const migrations = [
+const studySchema = `
+  CREATE TABLE decks (
+    id TEXT PRIMARY KEY NOT NULL, body TEXT NOT NULL CHECK (json_valid(body)),
+    revision INTEGER NOT NULL CHECK (revision > 0 AND json_extract(body, '$.revision') IS revision)
+  ) STRICT;
+  CREATE TABLE entries (
+    id TEXT PRIMARY KEY NOT NULL, deck_id TEXT NOT NULL REFERENCES decks(id),
+    active_term TEXT, body TEXT NOT NULL CHECK (json_valid(body)),
+    revision INTEGER NOT NULL CHECK (revision > 0 AND json_extract(body, '$.revision') IS revision), UNIQUE (deck_id, active_term)
+  ) STRICT;
+  CREATE TABLE practice_events (
+    id TEXT PRIMARY KEY NOT NULL, entry_id TEXT NOT NULL REFERENCES entries(id),
+    body TEXT NOT NULL CHECK (json_valid(body))
+  ) STRICT;
+  CREATE INDEX practice_entry ON practice_events(entry_id);
+  CREATE TABLE learn_progress (
+    entry_id TEXT PRIMARY KEY NOT NULL REFERENCES entries(id), body TEXT NOT NULL CHECK (json_valid(body))
+  ) STRICT;
+  CREATE TABLE review_events (
+    id TEXT PRIMARY KEY NOT NULL, entry_id TEXT NOT NULL REFERENCES entries(id), card_id TEXT NOT NULL,
+    reviewed_at INTEGER NOT NULL CHECK (reviewed_at >= 0), body TEXT NOT NULL CHECK (json_valid(body)),
+    FOREIGN KEY (card_id) REFERENCES review_cards(id) DEFERRABLE INITIALLY DEFERRED
+  ) STRICT;
+  CREATE INDEX review_card_events ON review_events(card_id, reviewed_at, id);
+  CREATE TABLE review_cards (
+    id TEXT PRIMARY KEY NOT NULL, entry_id TEXT NOT NULL REFERENCES entries(id),
+    direction TEXT NOT NULL CHECK (direction = 'meaning-to-term'), revision INTEGER NOT NULL CHECK (revision > 0 AND json_extract(body, '$.revision') IS revision),
+    body TEXT NOT NULL CHECK (json_valid(body)), UNIQUE (entry_id, direction)
+  ) STRICT;
+  CREATE TABLE learn_sessions (
+    id TEXT PRIMARY KEY NOT NULL,
+    deck_id TEXT NOT NULL REFERENCES decks(id),
+    status TEXT NOT NULL CHECK (status IN ('active','paused','abandoned','completed')),
+    revision INTEGER NOT NULL CHECK (revision > 0 AND json_extract(body, '$.revision') IS revision),
+    body TEXT NOT NULL CHECK (json_valid(body))
+  ) STRICT;
+  CREATE UNIQUE INDEX learn_one_open ON learn_sessions ((1)) WHERE status IN ('active','paused');
+  CREATE TABLE review_sessions (
+    id TEXT PRIMARY KEY NOT NULL,
+    deck_id TEXT REFERENCES decks(id),
+    status TEXT NOT NULL CHECK (status IN ('active','paused','abandoned','completed')),
+    revision INTEGER NOT NULL CHECK (revision > 0 AND json_extract(body, '$.revision') IS revision),
+    updated_at INTEGER NOT NULL,
+    body TEXT NOT NULL CHECK (json_valid(body))
+  ) STRICT;
+  CREATE UNIQUE INDEX review_one_open ON review_sessions ((1)) WHERE status IN ('active','paused');
+  CREATE INDEX review_recent ON review_sessions (deck_id, updated_at DESC);
+  CREATE UNIQUE INDEX practice_session_entry ON practice_events (json_extract(body, '$.sessionId'), entry_id);
+  CREATE UNIQUE INDEX review_session_card ON review_events (json_extract(body, '$.sessionId'), card_id);
+  CREATE INDEX review_time ON review_events (reviewed_at);
+`
+
+function repairInterimStudySchema(db: Database.Database) {
+  const columns = (db.pragma('table_info(review_events)') as { name: string }[]).map(({ name }) => name)
+  if (columns.includes('reviewed_at') && !columns.includes('device_id')) return
+  if (!columns.includes('effective_reviewed_at') || !columns.includes('device_id')) {
+    throw new Error('The SQLite study schema is not recognized.')
+  }
+
+  // An interim development build advanced user_version while retaining the sync tables.
+  // Recreate only empty business tables. Leave authentication and settings in place.
+  const studyTables = [
+    'review_events', 'review_cards', 'review_sessions', 'learn_sessions',
+    'practice_events', 'learn_progress', 'entries', 'decks',
+  ]
+  for (const table of [...studyTables, 'sync_operations', 'sync_changes']) {
+    if (db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get()) {
+      throw new Error('The interim development database contains study data. Keep it and configure a new LEXYN_DATA_DIR.')
+    }
+  }
+  for (const table of [...studyTables, 'sync_operations', 'sync_changes', 'sync_metadata', 'devices', 'app_meta']) {
+    db.exec(`DROP TABLE ${table}`)
+  }
+  db.exec(studySchema)
+}
+
+// Version 3 starts the server-first schema. Versions 1 and 2 were development databases.
+const migrations: ({ version: number; sql: string } | { version: number; apply: (db: Database.Database) => void })[] = [
   {
-    version: 1,
-    sql: `
-      CREATE TABLE app_meta (
-        key TEXT PRIMARY KEY NOT NULL,
-        value TEXT NOT NULL
-      ) STRICT;
-    `,
-  },
-  {
-    version: 2,
+    version: 3,
     sql: `
       CREATE TABLE owner (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -19,54 +87,46 @@ const migrations = [
         failed_logins INTEGER NOT NULL DEFAULT 0, login_window INTEGER NOT NULL DEFAULT 0
       ) STRICT;
       CREATE TABLE sessions (
-        token_hash TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES owner(id),
+        token_hash TEXT PRIMARY KEY NOT NULL, owner_id TEXT NOT NULL REFERENCES owner(id),
         expires_at INTEGER NOT NULL
       ) STRICT;
       CREATE INDEX session_expiry ON sessions(expires_at);
-      CREATE TABLE devices (
-        id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES owner(id),
-        last_seen_at INTEGER NOT NULL, pull_cursor INTEGER NOT NULL DEFAULT 0
+      ${studySchema}
+      CREATE TABLE owner_settings (
+        owner_id TEXT PRIMARY KEY NOT NULL REFERENCES owner(id),
+        daily_new_words INTEGER NOT NULL CHECK (daily_new_words BETWEEN 1 AND 100),
+        timezone TEXT NOT NULL CHECK (length(timezone) BETWEEN 1 AND 100)
       ) STRICT;
-      CREATE TABLE decks (
-        id TEXT PRIMARY KEY, body TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision > 0),
-        device_id TEXT NOT NULL REFERENCES devices(id), local_revision INTEGER NOT NULL, base_revision INTEGER
-      ) STRICT;
-      CREATE TABLE entries (
-        id TEXT PRIMARY KEY, deck_id TEXT NOT NULL REFERENCES decks(id),
-        active_term TEXT, body TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision > 0),
-        device_id TEXT NOT NULL REFERENCES devices(id), local_revision INTEGER NOT NULL, base_revision INTEGER,
-        UNIQUE (deck_id, active_term)
-      ) STRICT;
-      CREATE TABLE practice_events (
-        id TEXT PRIMARY KEY, entry_id TEXT NOT NULL REFERENCES entries(id),
-        device_id TEXT NOT NULL REFERENCES devices(id), body TEXT NOT NULL
-      ) STRICT;
-      CREATE INDEX practice_entry ON practice_events(entry_id);
-      CREATE TABLE learn_progress (
-        entry_id TEXT PRIMARY KEY REFERENCES entries(id), body TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE review_events (
-        id TEXT PRIMARY KEY, entry_id TEXT NOT NULL REFERENCES entries(id), card_id TEXT NOT NULL,
-        device_id TEXT NOT NULL REFERENCES devices(id), effective_reviewed_at INTEGER NOT NULL, body TEXT NOT NULL
-      ) STRICT;
-      CREATE INDEX review_card_events ON review_events(card_id, effective_reviewed_at, id);
-      CREATE TABLE review_cards (
-        id TEXT PRIMARY KEY, entry_id TEXT NOT NULL REFERENCES entries(id),
-        direction TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision > 0),
-        body TEXT NOT NULL, UNIQUE (entry_id, direction)
-      ) STRICT;
-      CREATE TABLE sync_operations (
-        id TEXT PRIMARY KEY, device_id TEXT NOT NULL REFERENCES devices(id),
-        request_hash TEXT NOT NULL, server_seq INTEGER, applied INTEGER NOT NULL CHECK (applied IN (0, 1))
-      ) STRICT;
-      CREATE TABLE sync_changes (
-        seq INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE sync_metadata (
-        key TEXT PRIMARY KEY, value INTEGER NOT NULL
+      CREATE TABLE request_idempotency (
+        owner_id TEXT NOT NULL REFERENCES owner(id),
+        id TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        response TEXT NOT NULL CHECK (json_valid(response)),
+        PRIMARY KEY (owner_id, id)
       ) STRICT;
     `,
   },
+  {
+    version: 4,
+    sql: `
+      ALTER TABLE owner ADD COLUMN username TEXT
+        CHECK (length(username) BETWEEN 3 AND 32 AND username NOT GLOB '*[^a-z0-9._-]*'
+          AND substr(username, 1, 1) GLOB '[a-z0-9]' AND substr(username, -1, 1) GLOB '[a-z0-9]');
+    `,
+  },
+  {
+    version: 5,
+    sql: `
+      ALTER TABLE owner RENAME COLUMN username TO previous_username;
+      ALTER TABLE owner ADD COLUMN username TEXT
+        CHECK (username IS NULL OR (length(username) BETWEEN 3 AND 32 AND username NOT GLOB '*[^a-z0-9._-]*'
+          AND substr(username, 1, 1) GLOB '[a-z0-9]' AND substr(username, -1, 1) GLOB '[a-z0-9]'));
+      UPDATE owner SET username = previous_username WHERE previous_username <> 'owner';
+      ALTER TABLE owner DROP COLUMN previous_username;
+      DELETE FROM sessions WHERE owner_id IN (SELECT id FROM owner WHERE username IS NULL);
+    `,
+  },
+  { version: 6, apply: repairInterimStudySchema },
 ]
 
 export const latestDatabaseVersion = migrations.at(-1)!.version
@@ -74,6 +134,9 @@ export const latestDatabaseVersion = migrations.at(-1)!.version
 export function migrate(db: Database.Database) {
   db.transaction(() => {
     const currentVersion = db.pragma('user_version', { simple: true }) as number
+    if (currentVersion === 1 || currentVersion === 2) {
+      throw new Error('This development database uses the old architecture. Stop Lexyn and move the old data directory aside or configure a new LEXYN_DATA_DIR.')
+    }
     const latestVersion = latestDatabaseVersion
     if (currentVersion > latestVersion) {
       throw new Error('The SQLite database schema is newer than this Lexyn build.')
@@ -81,7 +144,8 @@ export function migrate(db: Database.Database) {
 
     for (const migration of migrations) {
       if (migration.version <= currentVersion) continue
-      db.exec(migration.sql)
+      if ('sql' in migration) db.exec(migration.sql)
+      else migration.apply(db)
       db.pragma(`user_version = ${migration.version}`)
     }
   }).immediate()

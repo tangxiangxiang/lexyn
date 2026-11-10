@@ -8,6 +8,7 @@ services:
       LEXYN_PORT: ${LEXYN_PORT:-3000}
       LEXYN_PUBLIC_ORIGIN: ${LEXYN_PUBLIC_ORIGIN:?Set LEXYN_PUBLIC_ORIGIN to the external HTTPS origin}
       LEXYN_DATA_DIR: ${LEXYN_DATA_DIR:-/var/lib/lexyn}
+      LEXYN_SETUP_TOKEN: ${LEXYN_SETUP_TOKEN:-}
       LEXYN_BACKUP_DIR: ${LEXYN_BACKUP_DIR:-/var/lib/lexyn/backups}
     ports:
       - "${LEXYN_BIND_HOST:-127.0.0.1}:${LEXYN_HOST_PORT:-3000}:${LEXYN_PORT:-3000}"

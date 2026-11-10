@@ -1,10 +1,11 @@
 <script setup lang="ts">
+import { t, translateError } from '../../i18n/useI18n'
 import { computed, reactive } from 'vue'
 import { NAlert, NButton, NInput } from 'naive-ui'
 import { entryLimits, normalizeTerm, type Deck, type Entry } from '../../../shared/domain/library'
 import LibraryDialog from './LibraryDialog.vue'
 import { useLibraryAction } from './library-ui'
-import { library } from './repository'
+import { library } from './api'
 
 const props = defineProps<{ editor: { type: 'deck'; deck?: Deck } | { type: 'entry'; deckId: string; entry?: Entry } }>()
 const emit = defineEmits<{ close: []; saved: [message: string] }>()
@@ -43,31 +44,31 @@ async function save() {
 </script>
 
 <template>
-  <LibraryDialog :title="title" :busy="busy" @close="emit('close')">
+  <LibraryDialog :title="t(title)" :busy="busy" @close="emit('close')">
     <form class="library-form" @submit.prevent="save">
       <template v-if="editor.type === 'deck'">
-        <label for="library-deck-name">Deck name</label>
+        <label for="library-deck-name">{{ t('Deck name') }}</label>
         <NInput v-model:value="deckForm.name" :maxlength="100" :disabled="busy"
           :input-props="{ id: 'library-deck-name', required: true }" />
-        <label for="library-deck-description">Description <small>optional</small></label>
+        <label for="library-deck-description">{{ t('Description') }} <small>{{ t('optional') }}</small></label>
         <NInput v-model:value="deckForm.description" type="textarea" :rows="3" :maxlength="1000" :disabled="busy"
           :input-props="{ id: 'library-deck-description' }" />
       </template>
       <template v-else>
         <template v-for="field in fields" :key="field.key">
-          <label :for="`library-word-${field.key}`">{{ field.label }} <small v-if="field.optional">optional</small></label>
+          <label :for="`library-word-${field.key}`">{{ t(field.label) }} <small v-if="field.optional">{{ t('optional') }}</small></label>
           <NInput v-model:value="entryForm[field.key]" :type="field.multiline ? 'textarea' : 'text'" :rows="2"
             :maxlength="entryLimits[field.key]" :disabled="busy"
             :input-props="{ id: `library-word-${field.key}`, required: !field.optional }" />
         </template>
       </template>
       <NAlert v-if="changedTerm" type="warning">
-        Changing the spelling keeps this word’s existing review history and schedule. Add a separate word if it has a different meaning.
+        {{ t('Changing the spelling keeps this word’s existing review history and schedule. Add a separate word if it has a different meaning.') }}
       </NAlert>
-      <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+      <NAlert v-if="error" type="error" role="alert">{{ translateError(error) }}</NAlert>
       <div class="library-dialog-actions">
-        <NButton :disabled="busy" @click="emit('close')">Cancel</NButton>
-        <NButton type="primary" attr-type="submit" :loading="busy">Save</NButton>
+        <NButton :disabled="busy" @click="emit('close')">{{ t('Cancel') }}</NButton>
+        <NButton type="primary" attr-type="submit" :loading="busy">{{ t('Save') }}</NButton>
       </div>
     </form>
   </LibraryDialog>

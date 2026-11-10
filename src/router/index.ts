@@ -1,3 +1,5 @@
+import { watchEffect } from 'vue'
+import { t } from '../i18n/useI18n'
 import { createRouter, createWebHistory } from 'vue-router'
 import EmptyPage from '../components/EmptyPage.vue'
 import LibraryPage from '../features/library/LibraryPage.vue'
@@ -39,6 +41,6 @@ export const router = createRouter({
   scrollBehavior: () => ({ top: 0 }),
 })
 
-router.afterEach((to) => {
-  document.title = `${to.meta.title ?? 'Library'} · Lexyn`
+watchEffect(() => {
+  document.title = `${t(String(router.currentRoute.value.meta.title ?? 'Library'))} · Lexyn`
 })

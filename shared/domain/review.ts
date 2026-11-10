@@ -54,7 +54,6 @@ export interface ReviewEvent {
   readonly direction: ReviewDirection
   readonly rating: ReviewRating
   readonly reviewedAt: number
-  readonly effectiveReviewedAt?: number
   readonly schedulerModel: 'FSRS-7'
   readonly schedulerConfigVersion: string
   readonly schedulerConfigSnapshot: ReviewSchedulerConfig

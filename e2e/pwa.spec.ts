@@ -2,8 +2,10 @@ import { mkdtemp, cp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { serve } from '@hono/node-server'
-import { expect, test, type Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { expect, password, signIn, studyRequest, test, username } from './fixtures'
 import { createApp } from '../server/app'
+import { initializeOwner } from '../server/auth/owner'
 import { openDatabase } from '../server/db/database'
 
 async function controlled(page: Page) {
@@ -48,22 +50,9 @@ async function cachedPaths(page: Page) {
 }
 
 async function counts(page: Page) {
-  return page.evaluate(async () => {
-    const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const open = indexedDB.open('lexyn')
-      open.onsuccess = () => resolve(open.result)
-      open.onerror = () => reject(open.error)
-    })
-    const names = ['practice_events', 'review_events', 'client_outbox']
-    try {
-      const tx = db.transaction(names, 'readonly')
-      return await Promise.all(names.map((name) => new Promise<number>((resolve, reject) => {
-        const request = tx.objectStore(name).count()
-        request.onsuccess = () => resolve(request.result)
-        request.onerror = () => reject(request.error)
-      })))
-    } finally { db.close() }
-  })
+  const response = await studyRequest(page, 'backup/library', [null])
+  const { data } = await response.json()
+  return [data.practiceEvents.length, data.reviewEvents.length]
 }
 
 test('serves the manifest, worker and icons directly with correct types and cache headers', async ({ request }) => {
@@ -85,7 +74,7 @@ test('serves the manifest, worker and icons directly with correct types and cach
     }
   }
   expect(await (await request.get('/manifest.webmanifest')).json()).toMatchObject({
-    name: 'Lexyn', short_name: 'Lexyn', description: 'Learn. Recall. Retain.', start_url: '/', scope: '/', display: 'standalone',
+    name: 'Lexyn', short_name: 'Lexyn', description: '学习、回忆、巩固。', lang: 'zh-CN', start_url: '/', scope: '/', display: 'standalone',
     theme_color: '#285b47', background_color: '#fffefa',
     icons: [
       { src: '/pwa-192.png', sizes: '192x192', purpose: 'any' },
@@ -103,71 +92,53 @@ test('serves the manifest, worker and icons directly with correct types and cach
   expect((await request.get('/assets/absent.js')).status()).toBe(404)
 })
 
-test('cold launches offline, learns and reviews, then synchronizes the saved history once', async ({ context, page }) => {
-  await page.goto('/library')
+test('cold launches the static shell offline without private data or study writes', async ({ context, page }) => {
   await controlled(page)
-  const deckName = 'PWA offline study'
-  const path = await createWord(page, deckName)
+  await createWord(page, 'Private PWA deck')
   const keys = await cachedPaths(page)
   expect(keys).toEqual(expect.arrayContaining(['/index.html', '/manifest.webmanifest', '/favicon.svg', expect.stringMatching(/\.css$/), expect.stringMatching(/\.js$/)]))
   expect(keys.some((path) => path === '/api' || path.startsWith('/api/'))).toBe(false)
-  await context.setOffline(true)
   await page.close()
+  await context.setOffline(true)
   const offline = await context.newPage()
   await offline.goto('/library')
   await controlled(offline)
-  await expect(offline.getByText('Offline · learning available', { exact: false })).toBeVisible()
-  await offline.getByRole('link', { name: deckName, exact: true }).click()
-  await expect(offline.getByRole('heading', { name: 'resilience', exact: true })).toBeVisible()
-  await copyOne(offline)
-  await offline.close()
-  const review = await context.newPage()
-  const deckId = path.split('/').at(-1)!
-  await review.goto(`/review?deckId=${deckId}`)
-  await rateGood(review)
-  expect(await counts(review)).toEqual([1, 1, 4])
-  expect(await review.evaluate(() => fetch('/api/health').then(() => false, () => true))).toBe(true)
+  await expect(offline.locator('.service-status')).toHaveText('Connection unavailable')
+  await expect(offline.getByRole('button', { name: 'Retry connection' })).toBeVisible()
+  await expect(offline.getByText('Private PWA deck')).toHaveCount(0)
+  await expect(offline.getByRole('button', { name: 'New deck' })).toHaveCount(0)
+  expect(await offline.evaluate(() => indexedDB.databases())).toEqual([])
   await context.setOffline(false)
-  await review.getByRole('link', { name: 'Settings', exact: true }).click()
-  await review.getByLabel('Owner password').fill(process.env.LEXYN_TEST_OWNER_PASSWORD!)
-  await review.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect(review.getByText('Synced', { exact: true })).toBeVisible()
-  await expect.poll(() => counts(review)).toEqual([1, 1, 0])
-  await review.getByRole('button', { name: 'Sync now' }).click()
-  await expect(review.getByText('Synced', { exact: true })).toBeVisible()
-  expect(await counts(review)).toEqual([1, 1, 0])
-  const history = await review.evaluate(async (id) => {
-    const headers = { 'X-Lexyn-Client': '1' }
-    const { session } = await (await fetch('/api/auth/session', { headers })).json()
-    const response = await fetch('/api/bootstrap', { headers: { ...headers, 'X-Lexyn-Owner': session.ownerId } })
-    const { changes } = await response.json() as import('../shared/contracts/sync').SyncPage
-    return changes.flatMap(({ record }) => 'event' in record && record.event.deckId === id ? [record.kind] : [])
-  }, deckId)
-  expect(history.sort()).toEqual(['practice', 'review'])
-  expect((await cachedPaths(review)).sort()).toEqual(keys.sort())
+  await expect(offline.getByRole('link', { name: 'Private PWA deck' })).toBeVisible()
+  expect(await counts(offline)).toEqual([0, 0])
+  expect((await cachedPaths(offline)).sort()).toEqual(keys.sort())
 })
 
-test('stages a new shell while open, retains the old shell on install failure and preserves pending data', async ({ browser }) => {
+test('stages a new shell while open, retains the old shell on install failure and preserves server records', async ({ browser }) => {
   const root = await mkdtemp(join(tmpdir(), 'lexyn-update-'))
   const web = join(root, 'web')
   await cp('dist', web, { recursive: true })
   const db = openDatabase(root)
-  const app = createApp(db, web)
+  await initializeOwner(db, username, password)
+  let app: ReturnType<typeof createApp>
   const server = await new Promise<ReturnType<typeof serve>>((resolve) => {
-    const instance = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 }, () => resolve(instance))
+    const instance = serve({ fetch: (request) => app.fetch(request), hostname: '127.0.0.1', port: 0 }, () => resolve(instance))
   })
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('Missing update test server address')
-  const context = await browser.newContext({ baseURL: `http://127.0.0.1:${address.port}` })
+  const baseURL = `http://127.0.0.1:${address.port}`
+  app = createApp(db, web, baseURL)
+  const context = await browser.newContext({ baseURL })
   try {
     const page = await context.newPage()
     await page.goto('/library')
     await controlled(page)
+    await signIn(page)
     await createWord(page, 'PWA update data')
     await copyOne(page)
     await page.getByRole('link', { name: 'Review', exact: true }).click()
     await rateGood(page)
-    expect(await counts(page)).toEqual([1, 1, 4])
+    expect(await counts(page)).toEqual([1, 1])
     const path = join(web, 'sw.js')
     const oldWorker = await readFile(path, 'utf8')
     const nextWorker = oldWorker.replace(/^const version = "[^"]+"/, 'const version = "next-test-version"')
@@ -189,17 +160,17 @@ test('stages a new shell while open, retains the old shell on install failure an
     await writeFile(path, nextWorker)
     await page.evaluate(async () => (await navigator.serviceWorker.getRegistration())!.update())
     await expect(page.getByText('New version available.', { exact: false })).toBeVisible()
-    expect(await counts(page)).toEqual([1, 1, 4])
+    expect(await counts(page)).toEqual([1, 1])
     await page.close()
     const reopened = await context.newPage()
     await reopened.goto('/library')
     await controlled(reopened)
     await expect.poll(() => reopened.evaluate(() => caches.keys())).toEqual(['lexyn-shell-next-test-version'])
     await expect(reopened.getByRole('link', { name: 'PWA update data', exact: true })).toBeVisible()
-    expect(await counts(reopened)).toEqual([1, 1, 4])
+    expect(await counts(reopened)).toEqual([1, 1])
   } finally {
     await context.close()
-    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await new Promise<void>((resolve) => { server.close(() => resolve()); if ('closeAllConnections' in server) server.closeAllConnections() })
     db.close()
     await rm(root, { recursive: true, force: true })
   }

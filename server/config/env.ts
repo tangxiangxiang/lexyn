@@ -1,6 +1,8 @@
 import { resolve } from 'node:path'
 
-export function readConfig(env: NodeJS.ProcessEnv) {
+export const developmentWebPort = 5173
+
+export function readConfig(env: NodeJS.ProcessEnv, serveVite = false) {
   const host = env.LEXYN_HOST || '127.0.0.1'
   const portText = env.LEXYN_PORT ?? '3000'
   const port = Number(portText)
@@ -13,7 +15,9 @@ export function readConfig(env: NodeJS.ProcessEnv) {
 
   const origin = `http://${urlHost}:${port}`
   const production = env.NODE_ENV === 'production'
-  const publicOrigin = env.LEXYN_PUBLIC_ORIGIN || (production ? '' : origin)
+  const useViteDefault = serveVite && !production && !env.LEXYN_PUBLIC_ORIGIN
+  const publicOrigin = env.LEXYN_PUBLIC_ORIGIN
+    || (production ? '' : useViteDefault ? `http://127.0.0.1:${developmentWebPort}` : origin)
   let url: URL
   try {
     url = new URL(publicOrigin)
@@ -29,6 +33,7 @@ export function readConfig(env: NodeJS.ProcessEnv) {
     port,
     origin,
     publicOrigin,
+    additionalOrigins: useViteDefault ? [`http://localhost:${developmentWebPort}`] : [],
     dataDir: resolve(env.LEXYN_DATA_DIR || 'data'),
   }
 }

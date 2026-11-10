@@ -1,28 +1,28 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { t, translateError } from '../../i18n/useI18n'
+import { computed, nextTick, ref, watch } from 'vue'
 import { NAlert, NButton, NCard, NEmpty, NInput, NInputNumber, NProgress, NRadioButton, NRadioGroup, NSelect } from 'naive-ui'
 import { useRoute, useRouter } from 'vue-router'
-import type { EntryRecord, LearnSessionRecord } from '../../db/local'
+import type { Entry as EntryRecord } from '../../../shared/domain/library'
 import type { LearnMode } from '../../../shared/domain/learning'
 import { compareSpelling, isSpellingCorrect, normalizeSpelling } from '../../../shared/domain/learning'
-import { db, readDailyNewWords, writeDailyNewWords } from '../../db/local'
+import { writeDailyNewWords } from '../../api/client'
 import { useLibraryQuery } from '../library/useLibraryQuery'
 import { useLibraryAction } from '../library/library-ui'
-import { createLearnRepository } from './repository'
+import { learn, type LearnSessionRecord } from './api'
 import { useSpeech } from './speech'
 
-const learn = createLearnRepository(db)
 const route = useRoute()
 const router = useRouter()
 const selectedDeckId = ref(typeof route.query.deckId === 'string' ? route.query.deckId : '')
 const mode = ref<LearnMode>('copy')
 const sessionId = computed(() => typeof route.query.session === 'string' ? route.query.session : undefined)
 const { data: home, error: homeLoadError, reload: reloadHome } =
-  useLibraryQuery(() => selectedDeckId.value || undefined, (deckId) => learn.getDailyState(deckId))
+  useLibraryQuery(() => selectedDeckId.value || undefined, learn.getDailyState)
 const { data: current, error: sessionLoadError, reload: reloadSession } =
-  useLibraryQuery(sessionId, (id) => id ? learn.getSession(id) : Promise.resolve(null))
+  useLibraryQuery(sessionId, (id, signal) => id ? learn.getSession(id, signal) : Promise.resolve(null))
 const { data: result } = useLibraryQuery(() => sessionId.value,
-  (id) => id ? learn.result(id) : Promise.resolve(null))
+  (id, signal) => id ? learn.result(id, signal) : Promise.resolve(null))
 const { busy, error, run } = useLibraryAction()
 const input = ref('')
 const inputElement = ref<InstanceType<typeof NInput>>()
@@ -56,9 +56,10 @@ const progressValue = computed(() => current.value
 const eligibleCount = computed(() => home.value?.candidates.length ?? 0)
 const repeatCount = computed(() => home.value?.practiceCandidates.length ?? 0)
 const dailyRemaining = computed(() => Math.max(0, (home.value?.quota ?? 10) - (home.value?.completedToday ?? 0)))
+const newWordCount = computed(() => Math.min(eligibleCount.value, dailyRemaining.value))
 const deckOptions = computed(() => (home.value?.decks ?? []).map((deck) => ({ label: deck.name, value: deck.id })))
 const learnHome = computed(() => !sessionId.value || current.value === null)
-onMounted(async () => { dailyWords.value = await readDailyNewWords() })
+watch(() => home.value?.quota, (quota) => { if (quota !== undefined) dailyWords.value = quota })
 
 watch(() => current.value?.session.mode, (value) => { if (value) mode.value = value }, { immediate: true })
 watch([wordKey, lastSubmitted], ([key, answer], [previousKey]) => {
@@ -95,7 +96,7 @@ function onKeydown(event: KeyboardEvent) {
 function resolveInvalidWord() {
   const session = current.value?.session
   if (!session) return
-  void run(() => learn.advanceInvalid(session.sessionId, session.entryIds[session.currentIndex]))
+  void run(() => learn.advanceInvalid(session.sessionId, session.revision))
 }
 
 let repairAttempted: typeof current.value
@@ -109,7 +110,7 @@ watch([current, busy], ([snapshot, pending]) => {
 function startSession(deckId: string, sessionMode: LearnMode, candidates: EntryRecord[], newWords: boolean) {
   void run(async () => {
     const session = await learn.startSession(deckId, sessionMode, candidates.map(({ id }) => id), newWords)
-    await router.push({ path: '/learn', query: { deckId, session: session.sessionId } })
+    await router.push({ path: '/learn', query: { deckId: session.deckId, session: session.sessionId } })
   })
 }
 
@@ -127,7 +128,7 @@ function beginPractice(sessionMode: LearnMode) {
 
 function continueSession(session: LearnSessionRecord) {
   void run(async () => {
-    const resumed = await learn.continueSession(session.sessionId)
+    const resumed = await learn.continueSession(session.sessionId, session.revision)
     if (resumed) {
       await router.push({ path: '/learn', query: { deckId: resumed.deckId, session: resumed.sessionId } })
     }
@@ -136,7 +137,7 @@ function continueSession(session: LearnSessionRecord) {
 
 function abandonSession(session: LearnSessionRecord) {
   void run(async () => {
-    await learn.setStatus(session.sessionId, 'abandoned')
+    await learn.setStatus(session.sessionId, 'abandoned', session.revision)
     await router.replace({ path: '/learn', query: selectedDeckId.value ? { deckId: selectedDeckId.value } : {} })
     localMessage.value = 'Your completed practice stays in your learning history.'
     await reloadHome()
@@ -145,7 +146,7 @@ function abandonSession(session: LearnSessionRecord) {
 
 function pauseSession(session: LearnSessionRecord) {
   void run(async () => {
-    await learn.setStatus(session.sessionId, 'paused')
+    await learn.setStatus(session.sessionId, 'paused', session.revision)
     await router.replace({ path: '/learn', query: { deckId: session.deckId, session: session.sessionId } })
     await reloadSession()
   })
@@ -153,7 +154,7 @@ function pauseSession(session: LearnSessionRecord) {
 
 function endSession(session: LearnSessionRecord) {
   void run(async () => {
-    await learn.setStatus(session.sessionId, 'paused')
+    await learn.setStatus(session.sessionId, 'paused', session.revision)
     await router.push({ path: '/learn', query: { deckId: session.deckId } })
     await reloadHome()
   })
@@ -166,13 +167,12 @@ async function submit() {
   const answer = input.value
   if (!answer.trim()) { localMessage.value = 'Type your answer before submitting.'; return }
   localMessage.value = ''
-  const correct = isSpellingCorrect(entry.term, answer)
-  const attempt = await run(() => learn.recordAttempt(session.sessionId, answer, correct, Date.now(), entry.id))
+  const attempt = await run(() => learn.recordAttempt(session.sessionId, entry.id, answer, session.revision))
   if (!attempt || wordKey.value !== session.sessionId + '/' + entry.id) return
-  if (correct) {
-    const message = attempt.first ? 'Correct on your first try' : 'Correct'
-    localMessage.value = attempt.assisted ? message + ' after revealing the answer.'
-      : attempt.first ? message + '.' : 'Correct. Keep going.'
+  if (attempt.correct) {
+    localMessage.value = attempt.assisted
+      ? (attempt.first ? 'Correct on your first try after revealing the answer.' : 'Correct after revealing the answer.')
+      : (attempt.first ? 'Correct on your first try.' : 'Correct. Keep going.')
   } else {
     localMessage.value = 'Not quite. Check the marked letters and try again.'
   }
@@ -182,14 +182,14 @@ async function finishWord(outcome: 'completed' | 'skipped') {
   const session = current.value?.session
   const entry = activeWord.value
   if (!session || !entry || busy.value || (outcome === 'completed') !== submittedCorrectly.value) return
-  await run(() => learn.finishCurrent(session.sessionId, outcome, Date.now(), session.currentIndex, entry.id))
+  await run(() => learn.finishCurrent(session.sessionId, entry.id, outcome, session.revision))
 }
 
 async function markAssisted() {
   const session = current.value?.session
   const entry = activeWord.value
   if (!session || !entry || submittedCorrectly.value) return
-  const saved = await run(() => learn.setAssisted(session.sessionId, entry.id))
+  const saved = await run(() => learn.setAssisted(session.sessionId, entry.id, session.revision))
   if (saved && wordKey.value === session.sessionId + '/' + entry.id) {
     localMessage.value = 'Answer revealed. This answer will be marked as assisted.'
   }
@@ -197,7 +197,7 @@ async function markAssisted() {
 
 function switchToCopy(session: LearnSessionRecord) {
   void run(async () => {
-    await learn.setMode(session.sessionId, 'copy')
+    await learn.setMode(session.sessionId, 'copy', session.revision)
   })
 }
 
@@ -211,165 +211,170 @@ async function saveDailyWords(value: number | null) {
 
 <template>
   <section class="page learn-page">
-    <RouterLink v-if="sessionId" class="library-back" to="/learn">← Learn home</RouterLink>
-    <header class="page-intro"><h1>Learn</h1><p>Meet new words and get comfortable using them.</p></header>
+    <RouterLink v-if="sessionId" class="library-back" to="/learn">{{ t('← Learn home') }}</RouterLink>
+    <header class="page-intro"><h1>{{ t('Learn') }}</h1><p>{{ t('Meet new words and get comfortable using them.') }}</p></header>
     <template v-if="learnHome">
       <NAlert v-if="homeLoadError" type="error" role="alert">
-        Your local learning data could not be loaded. <NButton text @click="reloadHome">Try again</NButton>
+        {{ t('Your learning data could not be loaded from the server.') }} <NButton text @click="reloadHome">{{ t('Try again') }}</NButton>
       </NAlert>
-      <p v-else-if="!home" class="library-muted" aria-live="polite">Loading your learning data…</p>
+      <p v-else-if="!home" class="library-muted" aria-live="polite">{{ t('Loading your learning data…') }}</p>
       <template v-else>
         <NCard class="learn-start-card">
           <div class="learn-card-content">
-            <p class="learn-overline">{{ home.completedToday }} of {{ home.quota }} new words completed today</p>
+            <p class="learn-overline">{{ t('{count} of {quota} new words completed today', { count: home.completedToday, quota: home.quota }) }}</p>
             <NProgress type="line" :percentage="Math.min(100, Math.round(home.completedToday / home.quota * 100))"
-              :show-indicator="false" aria-label="Today's first learning progress" />
-            <label for="learn-deck">Word deck</label>
+              :show-indicator="false" :aria-label="t('Today\'s first learning progress')" />
+            <label for="learn-deck">{{ t('Word deck') }}</label>
             <NSelect v-model:value="selectedDeckId" :options="deckOptions" clearable
-              placeholder="Choose a deck" aria-label="Choose a deck" />
+              :placeholder="t('Choose a deck')" :aria-label="t('Choose a deck')" />
             <div class="learn-quota-row">
-              <div><h2>Daily new words</h2><p>One shared limit across your active decks.</p></div>
+              <div><h2>{{ t('Daily new words') }}</h2><p>{{ t('One shared limit across your active decks.') }}</p></div>
               <NInputNumber :value="dailyWords" :min="1" :max="100" :step="1" :disabled="busy"
-                aria-label="Daily new words" @update:value="saveDailyWords" />
+                :aria-label="t('Daily new words')" @update:value="saveDailyWords" />
             </div>
           </div>
         </NCard>
         <NCard v-if="home.activeSession" class="learn-session-choice">
-          <h2>Continue your session?</h2>
-          <p class="library-muted">{{ home.activeSession.firstCompletedEntryIds.length }} first completions ·
-            word {{ Math.min(home.activeSession.currentIndex + 1, home.activeSession.entryIds.length) }}
-            of {{ home.activeSession.entryIds.length }} · {{ home.activeSession.mode === 'copy' ? 'Copy' : 'Dictation' }}
+          <h2>{{ t('Continue your session?') }}</h2>
+          <p class="library-muted">{{ t('{completed} first completions · word {current} of {total} · {mode}', {
+              completed: home.activeSession.firstCompletedEntryIds.length,
+              current: Math.min(home.activeSession.currentIndex + 1, home.activeSession.entryIds.length),
+              total: home.activeSession.entryIds.length, mode: t(home.activeSession.mode === 'copy' ? 'Copy' : 'Dictation'),
+            }) }}
           </p>
           <div class="learn-actions">
-            <NButton type="primary" :disabled="busy" @click="continueSession(home.activeSession)">Continue session</NButton>
-            <NButton :disabled="busy" @click="abandonSession(home.activeSession)">End and save session</NButton>
+            <NButton type="primary" :disabled="busy" @click="continueSession(home.activeSession)">{{ t('Continue session') }}</NButton>
+            <NButton :disabled="busy" @click="abandonSession(home.activeSession)">{{ t('End and save session') }}</NButton>
           </div>
         </NCard>
         <NCard v-else-if="home.decks.length" class="learn-session-choice">
-          <h2>{{ dailyRemaining ? 'Ready for a few new words?' : 'Today’s new word limit is complete' }}</h2>
+          <h2>{{ dailyRemaining ? t('Ready for a few new words?') : t('Today’s new word limit is complete') }}</h2>
           <p class="library-muted">{{ selectedDeckId
-            ? eligibleCount + ' new words available · ' + dailyRemaining + ' places remaining today'
-            : 'Choose a deck to see today’s available new words.' }}</p>
+            ? t('{eligible} new words available · {remaining} places remaining today', { eligible: eligibleCount, remaining: dailyRemaining })
+            : t('Choose a deck to see today’s available new words.') }}</p>
           <div class="learn-mode-picker">
-            <span>Practice mode</span>
-            <NRadioGroup :value="mode" name="learn-mode" aria-label="Practice mode"
+            <span>{{ t('Practice mode') }}</span>
+            <NRadioGroup :value="mode" name="learn-mode" :aria-label="t('Practice mode')"
               @update:value="(value) => { mode = value as LearnMode }">
-              <NRadioButton value="copy">Copy</NRadioButton>
-              <NRadioButton value="dictation">Dictation</NRadioButton>
+              <NRadioButton value="copy">{{ t('Copy') }}</NRadioButton>
+              <NRadioButton value="dictation">{{ t('Dictation') }}</NRadioButton>
             </NRadioGroup>
           </div>
           <NAlert v-if="mode === 'dictation' && !speechAvailable" type="warning">
-            Dictation needs an English voice on this device. {{ speechMessage }} Choose Copy to continue without speech.
+            {{ t('Dictation needs an English voice on this device.') }} {{ t(speechMessage) }} {{ t('Choose Copy to continue without speech.') }}
           </NAlert>
           <div class="learn-actions">
             <NButton type="primary" :disabled="!selectedDeckId || !eligibleCount || !dailyRemaining
               || (mode === 'dictation' && !speechAvailable)" @click="beginNewWords(mode)">
-              Learn {{ Math.min(eligibleCount, dailyRemaining) }} new
-              {{ Math.min(eligibleCount, dailyRemaining) === 1 ? 'word' : 'words' }}
+              {{ t(newWordCount === 1 ? 'Learn {count} new word' : 'Learn {count} new words', { count: newWordCount }) }}
             </NButton>
             <NButton v-if="selectedDeckId && repeatCount" secondary
               :disabled="mode === 'dictation' && !speechAvailable" @click="beginPractice(mode)">
-              Practice {{ repeatCount }} learned {{ repeatCount === 1 ? 'word' : 'words' }}
+              {{ t(repeatCount === 1 ? 'Practice {count} learned word' : 'Practice {count} learned words', { count: repeatCount }) }}
             </NButton>
           </div>
         </NCard>
-        <NEmpty v-else description="Create a deck in Library to start learning.">
-          <template #extra><RouterLink to="/library" class="library-back">Open Library</RouterLink></template>
+        <NEmpty v-else :description="t('Create a deck in Library to start learning.')">
+          <template #extra><RouterLink to="/library" class="library-back">{{ t('Open Library') }}</RouterLink></template>
         </NEmpty>
-        <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
-        <NAlert v-if="localMessage" type="info" role="status">{{ localMessage }}</NAlert>
+        <NAlert v-if="error" type="error" role="alert">
+            {{ translateError(error) }} <NButton text @click="reloadHome(); reloadSession()">{{ t('Reload Learn') }}</NButton>
+          </NAlert>
+        <NAlert v-if="localMessage" type="info" role="status">{{ t(localMessage) }}</NAlert>
       </template>
     </template>
     <NAlert v-else-if="sessionLoadError" type="error" role="alert">
-      This session could not be loaded. <NButton text @click="reloadSession">Try again</NButton>
+      {{ t('This session could not be loaded.') }} <NButton text @click="reloadSession">{{ t('Try again') }}</NButton>
     </NAlert>
-    <p v-else-if="sessionId && !current" class="library-muted" aria-live="polite">Restoring your learning session…</p>
+    <p v-else-if="sessionId && !current" class="library-muted" aria-live="polite">{{ t('Restoring your learning session…') }}</p>
     <NCard v-else-if="current?.session.status === 'completed' && result?.session.status === 'completed'" class="learn-result-card">
-      <p class="learn-overline">Session complete</p>
-      <h2>Words you worked through</h2>
+      <p class="learn-overline">{{ t('Session complete') }}</p>
+      <h2>{{ t('Words you worked through') }}</h2>
       <div class="learn-result-grid">
-        <div><strong>{{ result.completed }}</strong><span>completed</span></div>
-        <div><strong>{{ result.firstCompleted }}</strong><span>first learning</span></div>
-        <div><strong>{{ result.firstTryCorrect }}</strong><span>unassisted first try correct</span></div>
-        <div><strong>{{ result.skipped }}</strong><span>skipped</span></div>
+        <div><strong>{{ result.completed }}</strong><span>{{ t('completed') }}</span></div>
+        <div><strong>{{ result.firstCompleted }}</strong><span>{{ t('first learning') }}</span></div>
+        <div><strong>{{ result.firstTryCorrect }}</strong><span>{{ t('unassisted first try correct') }}</span></div>
+        <div><strong>{{ result.skipped }}</strong><span>{{ t('skipped') }}</span></div>
       </div>
-      <p>{{ result.attempts }} submitted {{ result.attempts === 1 ? 'answer' : 'answers' }}
-        · {{ result.assisted }} assisted {{ result.assisted === 1 ? 'answer' : 'answers' }}</p>
+      <p>{{ t(result.attempts === 1 ? '{count} submitted answer' : '{count} submitted answers', { count: result.attempts }) }}
+        · {{ t(result.assisted === 1 ? '{count} assisted answer' : '{count} assisted answers', { count: result.assisted }) }}</p>
       <div class="learn-actions">
-        <NButton type="primary" @click="router.push({ path: '/learn', query: selectedDeckId ? { deckId: selectedDeckId } : {} })">Continue learning</NButton>
-        <NButton @click="router.push('/library')">Return to Library</NButton>
+        <NButton type="primary" @click="router.push({ path: '/learn', query: selectedDeckId ? { deckId: selectedDeckId } : {} })">{{ t('Continue learning') }}</NButton>
+        <NButton @click="router.push('/library')">{{ t('Return to Library') }}</NButton>
       </div>
     </NCard>
     <template v-else-if="current?.session">
       <NAlert v-if="current.invalidReason === 'archived'" type="warning">
-        This deck is archived. Restore it in Library to continue.
-        <RouterLink :to="{ path: '/library/' + current.session.deckId }" class="library-back">Open deck</RouterLink>
+        {{ t('This deck is archived. Restore it in Library to continue.') }}
+        <RouterLink :to="{ path: '/library/' + current.session.deckId }" class="library-back">{{ t('Open deck') }}</RouterLink>
       </NAlert>
       <NAlert v-else-if="current.session.status === 'abandoned'" type="info">
-        This session can no longer be continued. <RouterLink to="/learn">Return to Learn</RouterLink>
+        {{ t('This session can no longer be continued.') }} <RouterLink to="/learn">{{ t('Return to Learn') }}</RouterLink>
       </NAlert>
       <NAlert v-else-if="current.invalidReason" :type="error ? 'error' : 'info'">
-        {{ error || 'Checking the remaining words…' }}
-        <NButton text :disabled="busy" @click="resolveInvalidWord">Try again</NButton>
+        {{ translateError(error || 'Checking the remaining words…') }}
+        <NButton text :disabled="busy" @click="resolveInvalidWord">{{ t('Try again') }}</NButton>
       </NAlert>
       <NAlert v-else-if="current.session.status === 'paused'" type="info">
-        Session paused. <NButton text @click="continueSession(current.session)">Resume</NButton>
+        {{ t('Session paused.') }} <NButton text @click="continueSession(current.session)">{{ t('Resume') }}</NButton>
       </NAlert>
       <NCard v-else-if="activeWord && current.entry" class="learn-card" @keydown="onKeydown">
         <div class="learn-session-top">
-          <span>{{ current.session.mode === 'copy' ? 'Copy · 跟写' : 'Dictation · 听写' }}</span>
+          <span>{{ current.session.mode === 'copy' ? t('Copy · 跟写') : t('Dictation · 听写') }}</span>
           <span>{{ current.session.currentIndex + 1 }} / {{ current.session.entryIds.length }}</span>
         </div>
-        <NProgress type="line" :percentage="progressValue" :show-indicator="false" aria-label="Session progress" />
+        <NProgress type="line" :percentage="progressValue" :show-indicator="false" :aria-label="t('Session progress')" />
         <p v-if="meaning" class="learn-meaning">{{ meaning }}</p>
-        <p v-else-if="!current.entry.meaning" class="learn-meaning learn-muted">Meaning not added yet</p>
+        <p v-else-if="!current.entry.meaning" class="learn-meaning learn-muted">{{ t('Meaning not added yet') }}</p>
         <p v-if="answerVisible && current.entry.phonetic" class="learn-phonetic">{{ current.entry.phonetic }}</p>
-        <p v-if="!isCopy && answerVisible" class="learn-overline">Answer revealed</p>
+        <p v-if="!isCopy && answerVisible" class="learn-overline">{{ t('Answer revealed') }}</p>
         <h2 v-if="answerVisible" class="learn-term">{{ current.entry.term }}</h2>
         <p v-if="current.session.mode === 'dictation'" class="library-muted">
-          Listen to the word. The English example stays hidden during dictation.
+          {{ t('Listen to the word. The English example stays hidden during dictation.') }}
         </p>
         <blockquote v-if="current.session.mode === 'copy' && current.entry.example" class="learn-example">
           {{ current.entry.example }}
         </blockquote>
         <div class="learn-practice-area">
           <NButton v-if="current.session.mode === 'dictation'" :disabled="!canPlay || busy"
-            @click="speak">{{ speechSpeaking ? 'Playing…' : 'Play English pronunciation' }}</NButton>
+            @click="speak">{{ speechSpeaking ? t('Playing…') : t('Play English pronunciation') }}</NButton>
           <p v-if="current.session.mode === 'dictation' && !speechAvailable" class="learn-voice-message">
-            {{ speechMessage }}
-            <NButton text :disabled="busy" @click="switchToCopy(current.session)">Switch to Copy</NButton>
+            {{ t(speechMessage) }}
+            <NButton text :disabled="busy" @click="switchToCopy(current.session)">{{ t('Switch to Copy') }}</NButton>
           </p>
           <NInput ref="inputElement" v-model:value="input" :readonly="busy" :disabled="submittedCorrectly" :input-props="{
-              'aria-label': isCopy ? 'Copy the word' : 'Type the dictated word',
+              'aria-label': isCopy ? t('Copy the word') : t('Type the dictated word'),
               autocomplete: 'off', autocapitalize: 'off', spellcheck: false, enterkeyhint: 'done',
               onCompositionstart: () => { composing = true }, onCompositionend: () => { composing = false },
               onBlur: () => { composing = false },
-            }" placeholder="Type your answer" />
+            }" :placeholder="t('Type your answer')" />
           <div v-if="feedback.length" class="learn-spelling" aria-live="polite"
-            :aria-label="feedback.map((part) => part.actual + ': ' + part.status).join(', ')">
+            :aria-label="feedback.map((part) => part.actual + ': ' + t(part.status)).join(', ')">
             <span v-for="(part, index) in feedback" :key="index" :class="'letter-' + part.status"
               aria-hidden="true">{{ part.actual === ' ' ? '·' : part.actual }}</span>
           </div>
-          <p class="learn-keyboard-hint">{{ submittedCorrectly ? 'Press Enter for the next word.' : 'Press Enter to check spelling.' }}</p>
-          <NAlert v-if="localMessage" :type="submittedCorrectly ? 'success' : 'info'" role="status">{{ localMessage }}</NAlert>
-          <NAlert v-if="error" type="error" role="alert">{{ error }}</NAlert>
+          <p class="learn-keyboard-hint">{{ submittedCorrectly ? t('Press Enter for the next word.') : t('Press Enter to check spelling.') }}</p>
+          <NAlert v-if="localMessage" :type="submittedCorrectly ? 'success' : 'info'" role="status">{{ t(localMessage) }}</NAlert>
+          <NAlert v-if="error" type="error" role="alert">
+            {{ translateError(error) }} <NButton text @click="reloadHome(); reloadSession()">{{ t('Reload Learn') }}</NButton>
+          </NAlert>
           <NAlert v-if="current.entry.meaning.trim() === ''" type="info">
-            This word needs a meaning. Spelling practice remains available.
+            {{ t('This word needs a meaning. Spelling practice remains available.') }}
           </NAlert>
         </div>
         <div class="learn-actions learn-session-actions">
           <NButton v-if="!submittedCorrectly" type="primary"
-            :disabled="busy || !input.trim() || current.session.status !== 'active'" @click="submit">Check spelling</NButton>
-          <NButton v-else ref="nextButton" type="primary" :disabled="busy" @click="finishWord('completed')">Next word</NButton>
+            :disabled="busy || !input.trim() || current.session.status !== 'active'" @click="submit">{{ t('Check spelling') }}</NButton>
+          <NButton v-else ref="nextButton" type="primary" :disabled="busy" @click="finishWord('completed')">{{ t('Next word') }}</NButton>
           <NButton v-if="current.session.mode === 'dictation' && !submittedCorrectly && !current.session.currentAssisted"
-            :disabled="busy" @click="markAssisted">Reveal answer</NButton>
-          <NButton v-if="!submittedCorrectly" :disabled="busy || current.session.status !== 'active'" @click="finishWord('skipped')">Skip word</NButton>
-          <NButton v-if="current.session.status === 'active'" :disabled="busy" @click="pauseSession(current.session)">Pause</NButton>
-          <NButton :disabled="busy" @click="endSession(current.session)">End session</NButton>
+            :disabled="busy" @click="markAssisted">{{ t('Reveal answer') }}</NButton>
+          <NButton v-if="!submittedCorrectly" :disabled="busy || current.session.status !== 'active'" @click="finishWord('skipped')">{{ t('Skip word') }}</NButton>
+          <NButton v-if="current.session.status === 'active'" :disabled="busy" @click="pauseSession(current.session)">{{ t('Pause') }}</NButton>
+          <NButton :disabled="busy" @click="endSession(current.session)">{{ t('End session') }}</NButton>
         </div>
-        <p v-if="activeDeck && answerVisible" class="learn-deck-name">From {{ activeDeck.name }}</p>
+        <p v-if="activeDeck && answerVisible" class="learn-deck-name">{{ t('From {deck}', { deck: activeDeck.name }) }}</p>
       </NCard>
     </template>
-    <p class="learn-distinction">Spelling practice records exposure and attempts. It never schedules an FSRS review.</p>
+    <p class="learn-distinction">{{ t('Spelling practice records exposure and attempts. It never schedules an FSRS review.') }}</p>
   </section>
 </template>

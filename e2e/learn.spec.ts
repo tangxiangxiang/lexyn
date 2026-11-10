@@ -1,6 +1,7 @@
-import { expect, test, type Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { expect, test } from './fixtures'
 import type { LearnSession, PracticeEvent } from '../shared/domain/learning'
-import type { OutboxOperation } from '../shared/contracts/library'
+import type Database from 'better-sqlite3'
 
 interface SpeechMock {
   spoken: string[]
@@ -66,26 +67,10 @@ async function mockSpeech(page: Page, initiallyReady: boolean) {
 interface PracticeRecords {
   practice_events: PracticeEvent
   learn_sessions: LearnSession
-  client_outbox: OutboxOperation
 }
 
-async function records<Table extends keyof PracticeRecords>(page: Page, table: Table): Promise<PracticeRecords[Table][]> {
-  return page.evaluate(async (store) => {
-    const opening = indexedDB.open('lexyn')
-    const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      opening.onsuccess = () => resolve(opening.result)
-      opening.onerror = () => reject(opening.error)
-    })
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = database.transaction(store).objectStore(store).getAll()
-        request.onsuccess = () => resolve(request.result)
-        request.onerror = () => reject(request.error)
-      })
-    } finally {
-      database.close()
-    }
-  }, table)
+function records<Table extends keyof PracticeRecords>(db: Database.Database, table: Table): PracticeRecords[Table][] {
+  return (db.prepare(`SELECT body FROM ${table}`).all() as { body: string }[]).map(({ body }) => JSON.parse(body))
 }
 
 async function makeDeckWithWords(page: Page, spellingHints = false) {
@@ -107,10 +92,9 @@ async function makeDeckWithWords(page: Page, spellingHints = false) {
   }
 }
 
-test('learns a new word, retries a misspelling, resumes after reload and persists local practice history', async ({ page }) => {
+test('learns a new word, retries a misspelling, resumes after reload and persists server practice history', async ({ page, backend }) => {
   await makeDeckWithWords(page)
   await page.getByRole('link', { name: 'Start learning' }).click()
-  await page.context().setOffline(true)
   await page.getByRole('button', { name: 'Learn 2 new words' }).click()
   await expect(page.getByRole('heading', { name: 'concurrency' })).toBeVisible()
 
@@ -122,7 +106,6 @@ test('learns a new word, retries a misspelling, resumes after reload and persist
   await answer.fill('concurrency')
   await answer.press('Enter')
   await expect(page.locator('.learn-practice-area [role="alert"]')).toContainText('Correct. Keep going.')
-  await page.context().setOffline(false)
   await page.reload()
   await expect(page.getByRole('heading', { name: 'concurrency' })).toBeVisible()
   await page.getByRole('button', { name: 'Next word' }).click()
@@ -133,29 +116,12 @@ test('learns a new word, retries a misspelling, resumes after reload and persist
   await expect(page.getByText('1 of 10 new words completed today')).toBeVisible()
   await expect(page.getByText('1 new words available', { exact: false })).toBeVisible()
 
-  const stored = await page.evaluate(async () => {
-    const opening = indexedDB.open('lexyn')
-    const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      opening.onsuccess = () => resolve(opening.result)
-      opening.onerror = () => reject(opening.error)
-    })
-    const result = await new Promise<{ events: number; progress: number; sessions: number }>((resolve, reject) => {
-      const transaction = database.transaction(['practice_events', 'learn_progress', 'learn_sessions'], 'readonly')
-      const counts = { events: 0, progress: 0, sessions: 0 }
-      for (const [table, key] of [['practice_events', 'events'], ['learn_progress', 'progress'], ['learn_sessions', 'sessions']] as const) {
-        const request = transaction.objectStore(table).count()
-        request.onsuccess = () => { counts[key] = request.result }
-      }
-      transaction.oncomplete = () => resolve(counts)
-      transaction.onerror = () => reject(transaction.error)
-    })
-    database.close()
-    return result
-  })
-  expect(stored).toMatchObject({ events: 1, progress: 1, sessions: 1 })
+  expect(records(backend.db, 'practice_events')).toHaveLength(1)
+  expect(records(backend.db, 'learn_sessions')).toHaveLength(1)
+  expect(backend.db.prepare('SELECT count(*) FROM learn_progress').pluck().get()).toBe(1)
 })
 
-test('IME composition does not submit and 320px layout has no horizontal overflow', async ({ page }) => {
+test('IME composition does not submit and 320px layout has no horizontal overflow', async ({ page, backend }) => {
   await page.setViewportSize({ width: 320, height: 740 })
   await makeDeckWithWords(page)
   await page.getByRole('link', { name: 'Start learning' }).click()
@@ -170,7 +136,7 @@ test('IME composition does not submit and 320px layout has no horizontal overflo
     element.dispatchEvent(new KeyboardEvent('keydown', enter))
     element.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'concurrency' }))
   })
-  expect(await records(page, 'learn_sessions')).toMatchObject([{ currentAttempts: 0 }])
+  expect(records(backend.db, 'learn_sessions')).toMatchObject([{ currentAttempts: 0 }])
   await expect(page.getByRole('button', { name: 'Check spelling' })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320)
 })
@@ -189,7 +155,7 @@ test('disables dictation cleanly when the browser has no speech synthesis and al
   await expect(page.getByRole('button', { name: 'Learn 2 new words' })).toBeEnabled()
 })
 
-test('keeps dictation hints out of the DOM until submission or reveal and restores an assisted word', async ({ page }) => {
+test('keeps dictation hints out of the DOM until submission or reveal and restores an assisted word', async ({ page, backend }) => {
   await mockSpeech(page, true)
   await makeDeckWithWords(page, true)
   await page.getByRole('link', { name: 'Start learning' }).click()
@@ -220,8 +186,7 @@ test('keeps dictation hints out of the DOM until submission or reveal and restor
   await expect(card.getByRole('heading', { name: 'concurrency' })).toBeVisible()
   await expect(reveal).toHaveCount(0)
   await expect(page.locator('.learn-practice-area [role="alert"]')).toContainText('Answer revealed')
-  expect(await records(page, 'practice_events')).toEqual([])
-  expect((await records(page, 'client_outbox')).filter(({ kind }) => kind === 'practice.create')).toEqual([])
+  expect(records(backend.db, 'practice_events')).toEqual([])
   await page.reload()
   await expect(card.getByRole('heading', { name: 'concurrency' })).toBeVisible()
   await expect(answer).toHaveValue('concurrncy')
@@ -234,12 +199,12 @@ test('keeps dictation hints out of the DOM until submission or reveal and restor
   await expect(page.locator('.learn-spelling')).toHaveCount(0)
   expect(await card.innerHTML()).not.toContain('deadlock')
   await expect(reveal).toBeEnabled()
-  expect(await records(page, 'practice_events')).toMatchObject([
+  expect(records(backend.db, 'practice_events')).toMatchObject([
     { mode: 'dictation', outcome: 'completed', assisted: true, attempts: 2 },
   ])
 })
 
-test('Enter submits and advances once, and keyboard shortcuts are scoped to the active word', async ({ page }) => {
+test('Enter submits and advances once, and keyboard shortcuts are scoped to the active word', async ({ page, backend }) => {
   await makeDeckWithWords(page)
   await page.getByRole('link', { name: 'Start learning' }).click()
   await page.getByRole('button', { name: 'Learn 2 new words' }).click()
@@ -253,7 +218,7 @@ test('Enter submits and advances once, and keyboard shortcuts are scoped to the 
   })
   const next = page.getByRole('button', { name: 'Next word' })
   await expect(next).toBeFocused()
-  expect(await records(page, 'learn_sessions')).toMatchObject([{ currentAttempts: 1 }])
+  expect(records(backend.db, 'learn_sessions')).toMatchObject([{ currentAttempts: 1 }])
   const ignored = await page.locator('.learn-card').evaluate((card) => {
     const field = document.createElement('textarea')
     card.append(field)
@@ -262,7 +227,7 @@ test('Enter submits and advances once, and keyboard shortcuts are scoped to the 
     return allowed
   })
   expect(ignored).toBe(true)
-  expect(await records(page, 'practice_events')).toHaveLength(0)
+  expect(records(backend.db, 'practice_events')).toHaveLength(0)
   await page.keyboard.press('Enter')
   await expect(page.getByRole('heading', { name: 'deadlock' })).toBeVisible()
   await expect(answer).toBeFocused()
@@ -275,11 +240,11 @@ test('Enter submits and advances once, and keyboard shortcuts are scoped to the 
   await page.getByRole('link', { name: 'Review', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Review', exact: true })).toBeVisible()
   await page.keyboard.press('Enter')
-  expect(await records(page, 'learn_sessions')).toMatchObject([{ currentIndex: 1, currentLastSubmitted: 'deadlock' }])
-  expect(await records(page, 'practice_events')).toMatchObject([{ attempts: 1, outcome: 'completed' }])
+  expect(records(backend.db, 'learn_sessions')).toMatchObject([{ currentIndex: 1, currentLastSubmitted: 'deadlock' }])
+  expect(records(backend.db, 'practice_events')).toMatchObject([{ attempts: 1, outcome: 'completed' }])
 })
 
-test('automatically skips removed words and completes the remaining queue without changing prior history', async ({ page }) => {
+test('automatically skips removed words and completes the remaining queue without changing prior history', async ({ page, backend }) => {
   await makeDeckWithWords(page)
   const deckUrl = page.url()
   await page.getByRole('link', { name: 'Start learning' }).click()
@@ -292,7 +257,7 @@ test('automatically skips removed words and completes the remaining queue withou
   await answer.fill('deadlock')
   await answer.press('Enter')
   await expect(page.getByRole('button', { name: 'Next word' })).toBeFocused()
-  const history = await records(page, 'practice_events')
+  const history = records(backend.db, 'practice_events')
 
   const library = await page.context().newPage()
   await library.goto(deckUrl)
@@ -301,16 +266,14 @@ test('automatically skips removed words and completes the remaining queue withou
   await library.locator('.library-dialog').getByRole('button', { name: 'Remove word' }).click()
   await expect(word).toHaveCount(0)
 
+  await page.reload()
   await expect(page.getByText('Session complete', { exact: true })).toBeVisible()
   await expect(page.locator('.learn-result-grid')).toContainText('1first learning')
-  expect(await records(page, 'practice_events')).toEqual(history)
-  expect(await records(page, 'learn_sessions')).toMatchObject([{ status: 'completed', currentIndex: 0 }])
-  expect((await records(page, 'client_outbox')).filter(({ kind }) => kind === 'practice.create')).toMatchObject([
-    { payload: history[0] },
-  ])
+  expect(records(backend.db, 'practice_events')).toEqual(history)
+  expect(records(backend.db, 'learn_sessions')).toMatchObject([{ status: 'completed', currentIndex: 0 }])
 })
 
-test('recovers dictation after a voice timeout, survives playback errors and stops speech on word and route changes', async ({ page }) => {
+test('recovers dictation after a voice timeout, survives playback errors and stops speech on word and route changes', async ({ page, backend }) => {
   await mockSpeech(page, false)
   await makeDeckWithWords(page)
   await page.getByRole('link', { name: 'Start learning' }).click()
@@ -327,7 +290,7 @@ test('recovers dictation after a voice timeout, survives playback errors and sto
   await page.evaluate(() => { window.lexynSpeechMock.failNext = true })
   await play.click()
   await expect(page.getByText('Speech could not be played.', { exact: false })).toBeVisible()
-  expect(await records(page, 'practice_events')).toHaveLength(0)
+  expect(records(backend.db, 'practice_events')).toHaveLength(0)
   await play.click()
   await expect(page.getByRole('button', { name: 'Playing…' })).toBeVisible()
   const answer = page.getByRole('textbox', { name: 'Type the dictated word' })
@@ -348,10 +311,10 @@ test('recovers dictation after a voice timeout, survives playback errors and sto
   expect(await page.evaluate(() => ({
     cancels: window.lexynSpeechMock.cancels, listeners: window.lexynSpeechMock.listeners,
   }))).toEqual({ cancels: 2, listeners: 0 })
-  expect(await records(page, 'practice_events')).toMatchObject([{ mode: 'dictation', outcome: 'completed', attempts: 1 }])
+  expect(records(backend.db, 'practice_events')).toMatchObject([{ mode: 'dictation', outcome: 'completed', attempts: 1 }])
 })
 
-test('pauses when the deck is archived and resumes with the same answer after restore', async ({ page }) => {
+test('pauses when the deck is archived and resumes with the same answer after restore', async ({ page, backend }) => {
   await makeDeckWithWords(page)
   await page.getByRole('link', { name: 'Start learning' }).click()
   await page.getByRole('button', { name: 'Learn 2 new words' }).click()
@@ -367,7 +330,7 @@ test('pauses when the deck is archived and resumes with the same answer after re
   await expect(page.getByRole('heading', { name: 'Your library is empty' })).toBeVisible()
   await page.goto(sessionUrl)
   await expect(page.getByText('This deck is archived.', { exact: false })).toBeVisible()
-  expect(await records(page, 'learn_sessions')).toMatchObject([{ status: 'paused', currentAttempts: 1 }])
+  expect(records(backend.db, 'learn_sessions')).toMatchObject([{ status: 'paused', currentAttempts: 1 }])
   await page.getByRole('link', { name: 'Open deck' }).click()
   await page.getByRole('button', { name: 'Restore deck' }).click()
   await expect(page.getByRole('button', { name: 'Add word' })).toBeVisible()
@@ -375,11 +338,11 @@ test('pauses when the deck is archived and resumes with the same answer after re
   await page.getByRole('button', { name: 'Resume' }).click()
   await expect(answer).toBeFocused()
   await expect(answer).toHaveValue('concurrncy')
-  expect(await records(page, 'learn_sessions')).toMatchObject([{ status: 'active', currentAttempts: 1 }])
-  expect(await records(page, 'practice_events')).toEqual([])
+  expect(records(backend.db, 'learn_sessions')).toMatchObject([{ status: 'active', currentAttempts: 1 }])
+  expect(records(backend.db, 'practice_events')).toEqual([])
 })
 
-test('enables dictation on voiceschanged while loading and switches to Copy if English disappears', async ({ page }) => {
+test('enables dictation on voiceschanged while loading and switches to Copy if English disappears', async ({ page, backend }) => {
   await mockSpeech(page, false)
   await makeDeckWithWords(page)
   await page.getByRole('link', { name: 'Start learning' }).click()
@@ -398,5 +361,5 @@ test('enables dictation on voiceschanged while loading and switches to Copy if E
   await expect(page.getByRole('button', { name: 'Next word' })).toBeFocused()
   await page.keyboard.press('Enter')
   await expect(page.getByRole('heading', { name: 'deadlock' })).toBeVisible()
-  expect(await records(page, 'practice_events')).toMatchObject([{ mode: 'copy', outcome: 'completed' }])
+  expect(records(backend.db, 'practice_events')).toMatchObject([{ mode: 'copy', outcome: 'completed' }])
 })

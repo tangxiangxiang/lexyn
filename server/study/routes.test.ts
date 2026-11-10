@@ -1,0 +1,219 @@
+import { randomUUID } from 'node:crypto'
+import Database from 'better-sqlite3'
+import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import { createApp } from '../app.ts'
+import { initializeOwner } from '../auth/owner.ts'
+import { migrate } from '../db/migrations/index.ts'
+import { reviewRatings } from '../../shared/domain/review.ts'
+import { createReviewScheduler, rebuildCardFromEvents, schedulerGrades, serializeCard } from '../../shared/srs/scheduler.ts'
+import { dayBounds } from './calendar.ts'
+
+const origin = 'http://127.0.0.1:3000'
+const initial = Date.parse('2026-11-10T15:59:59Z')
+let now: number
+let db: Database.Database
+let app: ReturnType<typeof createApp>
+let auth: Record<string, string>
+
+beforeEach(async () => {
+  db = new Database(':memory:')
+  db.pragma('foreign_keys=ON')
+  migrate(db)
+  now = initial
+  const password = 'test-owner-password'
+  await initializeOwner(db, 'test-admin', password)
+  app = createApp(db, undefined, origin, () => now)
+  const login = await app.request('/api/auth/login', { method: 'POST', headers: {
+    'X-Lexyn-Client': '1', 'Content-Type': 'application/json', Origin: origin,
+  }, body: JSON.stringify({ username: 'test-admin', password }) })
+  const { session } = await login.json()
+  auth = { 'X-Lexyn-Client': '1', 'X-Lexyn-Owner': session.ownerId, Cookie: login.headers.get('Set-Cookie')!.split(';')[0] }
+})
+afterEach(() => db.close())
+
+function get(path: string, args: unknown[] = []) {
+  return app.request('/api/' + path + '?args=' + encodeURIComponent(JSON.stringify(args)), { headers: auth })
+}
+function post(path: string, args: unknown[], key: string = randomUUID(), headers = auth) {
+  return app.request('/api/' + path, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json',
+    'Idempotency-Key': key, ...headers }, body: JSON.stringify(args) })
+}
+async function data(result: Response | Promise<Response>) {
+  const response = await result
+  const body = await response.json()
+  expect(response.status, JSON.stringify(body)).toBe(200)
+  expect(response.headers.get('Cache-Control')).toBe('no-store')
+  return body.data
+}
+const count = (table: string) => db.prepare(`SELECT count(*) FROM ${table}`).pluck().get()
+
+async function setupLearn(meaning = '缓存') {
+  const deck = await data(post('library/create-deck', [{ name: 'Systems' }]))
+  const entry = await data(post('library/create-entry', [deck.id, { term: 'cache', meaning }]))
+  const session = await data(post('learn/start', [deck.id, 'copy', [entry.id], true]))
+  await data(post('learn/attempt', [session.sessionId, entry.id, 'cache', session.revision]))
+  return { deck, entry, session: (await data(get('learn/session', [session.sessionId]))).session }
+}
+async function setupReview() {
+  const { deck, entry, session } = await setupLearn()
+  await data(post('learn/finish', [session.sessionId, entry.id, 'completed', session.revision]))
+  await data(post('review/start', [deck.id]))
+  const front = await data(get('review/session', [deck.id]))
+  expect(front.word).toEqual({ card: false, entryRevision: 1, prompt: '缓存' })
+  await data(post('review/reveal', [front.session.sessionId, front.session.currentCardId, entry.revision, front.session.revision]))
+  const back = await data(get('review/session', [deck.id]))
+  expect(back.word.answer.term).toBe('cache')
+  return back.session
+}
+
+test('authenticates private reads and writes, rejects bad origin and invalid input', async () => {
+  for (const path of ['library/decks', 'learn/daily', 'review/overview', 'progress/overview', 'settings/owner', 'backup/library']) {
+    const res = await app.request('/api/' + path, { headers: { 'X-Lexyn-Client': '1' } })
+    expect(res.status).toBe(401)
+    expect(res.headers.get('Cache-Control')).toBe('no-store')
+  }
+  expect((await post('library/create-deck', [{ name: 'bad' }], randomUUID(), { ...auth, Origin: 'https://invalid.example' })).status).toBe(403)
+  expect((await post('library/create-deck', [{ name: 'bad' }], randomUUID(), { ...auth, Cookie: 'lexyn-session=invalid' })).status).toBe(401)
+  expect((await post('library/create-deck', [{ name: 'bad', id: randomUUID() }])).status).toBe(400)
+  expect((await post('settings/timezone', ['+08:00'])).status).toBe(400)
+  expect(count('decks')).toBe(0)
+  expect(count('request_idempotency')).toBe(0)
+})
+
+test('normalizes unique spelling and rolls back a batch when a later preview match is stale', async () => {
+  const deck = await data(post('library/create-deck', [{ name: 'Systems' }]))
+  const entry = await data(post('library/create-entry', [deck.id, { term: ' Café ', meaning: '咖啡' }]))
+  expect(entry.normalizedTerm).toBe('café')
+  expect((await post('library/create-entry', [deck.id, { term: 'CAFE\u0301', meaning: '' }])).status).toBe(409)
+  const key = randomUUID()
+  const preview = [
+    { input: { term: 'new' }, normalizedTerm: 'new' },
+    { input: { term: 'café' }, normalizedTerm: 'café', match: { id: entry.id, revision: 2 } },
+  ]
+  expect((await post('library/import', [deck.id, preview, 'overwrite'], key)).status).toBe(409)
+  expect(count('entries')).toBe(1)
+  await data(post('library/import', [deck.id, [preview[0]], 'skip'], key))
+  expect(count('entries')).toBe(2)
+  expect((await post('library/import', [deck.id, [], 'skip'], key)).status).toBe(409)
+  expect((await data(get('library/deck', [deck.id, 'CAFÉ', 'active', 0, 1]))).entries).toMatchObject([entry])
+})
+
+test('commits PracticeEvent, progress, session and receipt together and enforces one shared quota', async () => {
+  await data(post('settings/daily', [1]))
+  await data(post('settings/timezone', ['Asia/Shanghai']))
+  const { deck, entry, session } = await setupLearn()
+  const other = await data(post('library/create-entry', [deck.id, { term: 'latch', meaning: '闩锁' }]))
+  const args = [session.sessionId, entry.id, 'completed', session.revision]
+  const key = randomUUID()
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    db.exec("CREATE TRIGGER fail_receipt BEFORE INSERT ON request_idempotency BEGIN SELECT RAISE(ABORT, 'receipt fault'); END")
+    expect((await post('learn/finish', args, key)).status).toBe(500)
+    expect(count('practice_events')).toBe(0)
+    expect(count('learn_progress')).toBe(0)
+    expect((await data(get('learn/session', [session.sessionId]))).session).toEqual(session)
+  } finally { db.exec('DROP TRIGGER fail_receipt'); log.mockRestore() }
+  const completed = await data(post('learn/finish', args, key))
+  expect(await data(post('learn/finish', args, key))).toEqual(completed)
+  expect((await post('learn/finish', args)).status).toBe(409)
+  expect(count('practice_events')).toBe(1)
+  expect(count('review_cards')).toBe(0)
+  expect((await post('learn/start', [deck.id, 'copy', [other.id], true])).status).toBe(409)
+  expect(await data(get('progress/overview'))).toMatchObject({ learnedToday: 1, firstRecall: 1, ratedToday: 0 })
+  now += 1000
+  expect(await data(get('learn/daily', [deck.id]))).toMatchObject({ completedToday: 0, candidates: [other] })
+  expect(await data(get('progress/overview'))).toMatchObject({ learnedToday: 0, firstRecall: 1 })
+})
+
+test.each(reviewRatings)('scores %s using FSRS-7 and atomically stores history, projection and session', async (rating) => {
+  const round = await setupReview()
+  const args = [round.sessionId, round.currentCardId, rating, round.revision]
+  const key = randomUUID()
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    db.exec("CREATE TRIGGER fail_round BEFORE UPDATE ON review_sessions BEGIN SELECT RAISE(ABORT, 'round fault'); END")
+    expect((await post('review/score', args, key)).status).toBe(500)
+    expect(count('review_events')).toBe(0)
+    expect(count('review_cards')).toBe(0)
+    expect((await data(get('review/session', [null]))).session).toEqual(round)
+  } finally { db.exec('DROP TRIGGER fail_round'); log.mockRestore() }
+  const result = await data(post('review/score', args, key))
+  expect(await data(post('review/score', args, key))).toEqual(result)
+  expect((await post('review/score', args)).status).toBe(409)
+  expect(result.round.session.status).toBe('completed')
+  const snapshot = await data(get('backup/library', [null]))
+  expect(snapshot.reviewEvents).toHaveLength(1)
+  const engine = await createReviewScheduler()
+  const time = new Date(now)
+  const expected = serializeCard(engine.review({ card: engine.newCard({ now: time, cardId: round.currentCardId }),
+    grade: schedulerGrades[rating], now: time }).card)
+  expect(snapshot.reviewCards[0].schedulerState).toEqual(expected)
+  expect(await rebuildCardFromEvents(snapshot.reviewEvents)).toEqual(expected)
+  expect(await data(get('progress/overview'))).toMatchObject({ learnedToday: 1, ratedToday: 1, due: 0, nextDueAt: expected.dueAt })
+  now = expected.dueAt
+  expect(await data(get('progress/overview'))).toMatchObject({ due: 1 })
+})
+
+test('uses calendar days with DST and independent Owner timezones', () => {
+  const spring = Date.parse('2026-03-08T15:00:00Z')
+  const fall = Date.parse('2026-11-01T15:00:00Z')
+  expect(dayBounds(spring, 'America/New_York')).toEqual([Date.parse('2026-03-08T05:00:00Z'), Date.parse('2026-03-09T04:00:00Z')])
+  expect(dayBounds(fall, 'America/New_York')).toEqual([Date.parse('2026-11-01T04:00:00Z'), Date.parse('2026-11-02T05:00:00Z')])
+  expect(dayBounds(initial, 'Asia/Shanghai')[1]).toBe(initial + 1000)
+  expect(dayBounds(initial, 'UTC')[1]).toBe(Date.parse('2026-11-11T00:00:00Z'))
+})
+
+test('rejects premature Learn completion and records Skip without creating progress or consuming quota', async () => {
+  const deck = await data(post('library/create-deck', [{ name: 'Systems' }]))
+  const entry = await data(post('library/create-entry', [deck.id, { term: 'skip', meaning: '跳过' }]))
+  const session = await data(post('learn/start', [deck.id, 'dictation', [entry.id], true]))
+  const args = [session.sessionId, entry.id, 'completed', session.revision]
+  expect((await post('learn/finish', args)).status).toBe(409)
+  expect(await data(post('learn/assist', [session.sessionId, entry.id, session.revision]))).toBe(true)
+  const assisted = (await data(get('learn/session', [session.sessionId]))).session
+  await data(post('learn/finish', [session.sessionId, entry.id, 'skipped', assisted.revision]))
+  expect(await data(get('learn/history', [session.sessionId, 0, 1]))).toMatchObject({
+    completed: 0, skipped: 1, firstCompleted: 0, assisted: 1,
+  })
+  expect(await data(get('learn/daily', [deck.id]))).toMatchObject({ completedToday: 0, candidates: [entry] })
+  expect(count('learn_progress')).toBe(0)
+})
+
+test('uses a single active spelling per deck and rejects restoration while a replacement is active', async () => {
+  const deck = await data(post('library/create-deck', [{ name: 'Systems' }]))
+  const another = await data(post('library/create-deck', [{ name: 'Others' }]))
+  const args = { term: 'Café', meaning: '咖啡' }
+  const entry = await data(post('library/create-entry', [deck.id, args]))
+  await data(post('library/create-entry', [another.id, args]))
+  await data(post('library/remove-entry', [deck.id, entry.id, true, entry.revision]))
+  await data(post('library/create-entry', [deck.id, args]))
+  expect((await post('library/remove-entry', [deck.id, entry.id, false, entry.revision + 1])).status).toBe(409)
+  const backup = await data(get('backup/library', [deck.id]))
+  expect(backup.decks).toEqual([deck])
+  expect(backup.entries).toHaveLength(2)
+  expect(backup.entries.filter((word: { deletedAt?: number }) => word.deletedAt !== undefined)).toHaveLength(1)
+})
+
+test('excludes unlearned and non-Chinese words from Review', async () => {
+  const { deck, entry, session } = await setupLearn('English only')
+  await data(post('library/create-entry', [deck.id, { term: 'unlearned', meaning: '未学' }]))
+  await data(post('learn/finish', [session.sessionId, entry.id, 'completed', session.revision]))
+  expect(await data(get('review/overview', [deck.id]))).toMatchObject({ due: 0, firstRecall: 0 })
+  await data(post('review/start', [deck.id]))
+  expect(await data(get('review/session', [deck.id]))).toBe(null)
+})
+
+test('rejects a rating for a changed reveal, then preserves the rating after archiving the deck', async () => {
+  const round = await setupReview()
+  const [deck] = (await data(get('backup/library', [null]))).decks
+  const [entry] = (await data(get('library/deck', [deck.id, '', 'active', 0, 100]))).entries
+  await data(post('library/update-entry', [deck.id, entry.id, { term: 'cache', meaning: '高速缓存' }, entry.revision]))
+  const args = [round.sessionId, round.currentCardId, 'again', round.revision]
+  expect((await post('review/score', args)).status).toBe(409)
+  expect(await data(get('review/session', [deck.id]))).toMatchObject({ revealed: false, word: { prompt: '高速缓存' } })
+  await data(post('review/reveal', [round.sessionId, round.currentCardId, entry.revision + 1, round.revision]))
+  const scored = await data(post('review/score', [round.sessionId, round.currentCardId, 'again', round.revision + 1]))
+  await data(post('library/archive-deck', [deck.id, true, deck.revision]))
+  expect(await data(get('review/overview', [null]))).toMatchObject({ decks: [], due: 0, firstRecall: 0 })
+  expect(await data(get('backup/library', [deck.id]))).toMatchObject({ reviewEvents: [scored.event] })
+})

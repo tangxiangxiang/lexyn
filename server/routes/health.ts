@@ -6,7 +6,7 @@ export function healthRoutes(db: Database.Database) {
   return new Hono().get('/health', (c) => {
     c.header('Cache-Control', 'no-store')
     try {
-      db.prepare('SELECT key FROM app_meta LIMIT 1').get()
+      db.prepare('SELECT id FROM owner LIMIT 1').get()
       return c.json<HealthResponse>({ status: 'ok', database: 'ok' })
     } catch (error) {
       console.error('SQLite health check failed', error)

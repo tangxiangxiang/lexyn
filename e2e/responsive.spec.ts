@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 async function fits(page: Page, width: number) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
@@ -7,7 +8,7 @@ async function fits(page: Page, width: number) {
 for (const [width, height, touch] of [[320, 740, true], [375, 812, true], [768, 1024, true], [1024, 768, false], [1440, 900, false]] as const) {
   test.describe(`${width}px`, () => {
     test.use({ viewport: { width, height }, hasTouch: touch, isMobile: touch })
-    test('fits the study, sync and backup screens and accepts touch or keyboard input', async ({ page }) => {
+    test('fits the study, account and backup screens and accepts touch or keyboard input', async ({ page }) => {
       const activate = (control: Locator) => touch ? control.tap() : control.click()
       const nav = (name: string) => activate(page.getByRole('navigation').getByRole('link', { name, exact: true }))
       await page.addInitScript(() => Object.defineProperty(window, 'speechSynthesis', { value: undefined }))
@@ -54,14 +55,9 @@ for (const [width, height, touch] of [[320, 740, true], [375, 812, true], [768, 
       await nav('Progress')
       await expect(page.getByRole('heading', { level: 1, name: 'Progress' })).toBeVisible()
       await fits(page, width)
-      await page.route('**/api/auth/login', (route) => route.fulfill({ status: 503, json: {
-        error: { message: 'Synchronization is temporarily unavailable. Your local learning history and pending operations are still available.' },
-      } }))
       await nav('Settings')
-      const sync = page.getByRole('region', { name: 'Synchronization' })
-      await sync.getByLabel('Owner password').fill('responsive-fixture')
-      await activate(sync.getByRole('button', { name: 'Sign in', exact: true }))
-      await expect(sync.getByRole('alert')).toContainText('temporarily unavailable')
+      await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
+      await expect(page.getByLabel('Study timezone (IANA)')).toHaveValue('UTC')
       await fits(page, width)
       const backup = page.getByRole('region', { name: 'Data & Backup' })
       await expect(backup.getByRole('button', { name: 'Download JSON backup' })).toBeEnabled()
