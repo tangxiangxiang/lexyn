@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { darkTheme, NConfigProvider, type GlobalThemeOverrides } from 'naive-ui'
 import { RouterLink, RouterView } from 'vue-router'
 import type { HealthResponse } from '../../shared/contracts/health'
 import AppIcon from '../components/AppIcon.vue'
 import { navigation } from '../router'
 import { provideAppearance } from '../ui/appearance'
+import { synchronization } from '../features/sync/coordinator'
+import { pwaUpdateWaiting } from '../pwa'
 
 const { dark } = provideAppearance()
 const themeOverrides = computed<GlobalThemeOverrides>(() => ({
@@ -24,18 +26,34 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => ({
   },
 }))
 
-const serviceStatus = ref<'Connecting' | 'Service ready' | 'Service unavailable'>('Connecting')
-onMounted(async () => {
+const serviceStatus = ref('Connecting')
+const pending = computed(() => synchronization.data.value?.pending ?? 0)
+let check: AbortController | undefined
+async function checkService() {
+  check?.abort()
+  const controller = check = new AbortController()
+  if (!navigator.onLine) {
+    serviceStatus.value = 'Offline · learning available'
+    return
+  }
   try {
-    const response = await fetch('/api/health', { signal: AbortSignal.timeout(4000) })
+    const response = await fetch('/api/health', { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(4000)]) })
     if (!response.ok) throw new Error('Health check failed.')
     const health: HealthResponse = await response.json()
-    serviceStatus.value = health.status === 'ok' && health.database === 'ok'
-      ? 'Service ready'
-      : 'Service unavailable'
+    if (!controller.signal.aborted) serviceStatus.value = health.status === 'ok' && health.database === 'ok'
+      ? 'Service ready' : 'Service unavailable'
   } catch {
-    serviceStatus.value = 'Service unavailable'
+    if (!controller.signal.aborted) serviceStatus.value = navigator.onLine ? 'Service unavailable' : 'Offline · learning available'
   }
+}
+const healthEvents = ['online', 'offline', 'focus'] as const
+onMounted(() => {
+  void checkService()
+  for (const event of healthEvents) window.addEventListener(event, checkService)
+})
+onUnmounted(() => {
+  check?.abort()
+  for (const event of healthEvents) window.removeEventListener(event, checkService)
 })
 </script>
 
@@ -60,8 +78,11 @@ onMounted(async () => {
       <div class="main-column">
         <header class="topbar">
           <span class="topbar-label">Vocabulary studio</span>
-          <span class="service-status" role="status" :data-status="serviceStatus">{{ serviceStatus }}</span>
+          <span class="service-status" role="status" :data-status="serviceStatus">
+            {{ serviceStatus }}<template v-if="pending"> · {{ pending }} pending</template>
+          </span>
         </header>
+        <p v-if="pwaUpdateWaiting" class="update-notice">New version available. Finish your work, then close all Lexyn tabs and reopen.</p>
         <main id="main" class="main" tabindex="-1">
           <RouterView />
         </main>

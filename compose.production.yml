@@ -1,0 +1,31 @@
+services:
+  lexyn:
+    image: ${LEXYN_IMAGE:?Set LEXYN_IMAGE to a versioned Lexyn image or digest}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      LEXYN_HOST: 0.0.0.0
+      LEXYN_PORT: ${LEXYN_PORT:-3000}
+      LEXYN_PUBLIC_ORIGIN: ${LEXYN_PUBLIC_ORIGIN:?Set LEXYN_PUBLIC_ORIGIN to the external HTTPS origin}
+      LEXYN_DATA_DIR: ${LEXYN_DATA_DIR:-/var/lib/lexyn}
+      LEXYN_BACKUP_DIR: ${LEXYN_BACKUP_DIR:-/var/lib/lexyn/backups}
+    ports:
+      - "${LEXYN_BIND_HOST:-127.0.0.1}:${LEXYN_HOST_PORT:-3000}:${LEXYN_PORT:-3000}"
+    volumes:
+      - lexyn-data:/var/lib/lexyn
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 20s
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:'+process.env.LEXYN_PORT+'/api/health',{signal:AbortSignal.timeout(4000)}).then(r=>{if(!r.ok)process.exitCode=1}).catch(()=>{process.exitCode=1})"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+volumes:
+  lexyn-data:

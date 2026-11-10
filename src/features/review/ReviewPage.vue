@@ -221,7 +221,7 @@ function selectDeck(id: string | null) {
 .review-counts dd { margin: 4px 0 0; font-size: 1.5rem; font-weight: 650; }
 .review-ratings > div { display: grid; gap: 4px; align-content: start; }
 .review-ratings small, .review-example { color: var(--muted); }
-@media (max-width: 520px) {
+@media (max-width: 520px), (pointer: coarse) {
   .review-actions > .n-button, .review-ratings .n-button { min-height: 42px; }
 }
 </style>

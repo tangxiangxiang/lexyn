@@ -8,9 +8,10 @@ class RequestError extends Error {
   constructor(message: string, readonly status: number) { super(message) }
 }
 
-async function request<T>(path: string, options: { body?: unknown; ownerId?: string; push?: boolean } = {}) {
+async function request<T>(path: string, options: { body?: unknown; ownerId?: string; generation?: string; push?: boolean } = {}) {
   const headers: Record<string, string> = { 'X-Lexyn-Client': '1' }
   if (options.ownerId) headers['X-Lexyn-Owner'] = options.ownerId
+  if (options.generation) headers['X-Lexyn-Generation'] = options.generation
   if (options.body !== undefined) headers['Content-Type'] = 'application/json'
   const response = await fetch('/api' + path, {
     method: options.body === undefined ? 'GET' : 'POST',
@@ -67,8 +68,8 @@ async function runSync(retryRejected: boolean) {
     if (epoch !== authEpoch) return
     session.value = result.session
     if (!result.session) return
-    const ownerId = result.session.ownerId
-    const claimed = await syncStore.acquire(ownerId, window.location.origin, leaseId)
+    const { ownerId, generation } = result.session
+    const claimed = await syncStore.acquire(ownerId, window.location.origin, leaseId, generation)
     if (!claimed) return
     acquired = true
     if (retryRejected) await syncStore.retryRejected()
@@ -80,7 +81,7 @@ async function runSync(retryRejected: boolean) {
       if (!operations.length && !first) break
       if (epoch !== authEpoch) return
       const response = await request<PushResponse>('/sync/push', {
-        ownerId, push: true, body: { schemaVersion: SYNC_VERSION, deviceId: state.deviceId, cursor: state.cursor, operations },
+        ownerId, generation, push: true, body: { schemaVersion: SYNC_VERSION, deviceId: state.deviceId, cursor: state.cursor, operations },
       })
       await syncStore.acknowledge(leaseId, operations, response)
       first = false
@@ -92,7 +93,7 @@ async function runSync(retryRejected: boolean) {
       const query = new URLSearchParams({ after: String(state.cursor) })
       if (bootstrap && state.through !== undefined) query.set('through', String(state.through))
       const path = bootstrap ? '/bootstrap?' : '/sync/pull?'
-      const page = await request<SyncPage>(path + query, { ownerId })
+      const page = await request<SyncPage>(path + query, { ownerId, generation })
       await syncStore.apply(leaseId, page, bootstrap)
       if (!bootstrap && !page.hasMore) break
     }

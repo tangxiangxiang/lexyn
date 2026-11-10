@@ -1,0 +1,73 @@
+import { expect, test, type Locator, type Page } from '@playwright/test'
+
+async function fits(page: Page, width: number) {
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+}
+
+for (const [width, height, touch] of [[320, 740, true], [375, 812, true], [768, 1024, true], [1024, 768, false], [1440, 900, false]] as const) {
+  test.describe(`${width}px`, () => {
+    test.use({ viewport: { width, height }, hasTouch: touch, isMobile: touch })
+    test('fits the study, sync and backup screens and accepts touch or keyboard input', async ({ page }) => {
+      const activate = (control: Locator) => touch ? control.tap() : control.click()
+      const nav = (name: string) => activate(page.getByRole('navigation').getByRole('link', { name, exact: true }))
+      await page.addInitScript(() => Object.defineProperty(window, 'speechSynthesis', { value: undefined }))
+      await page.goto('/library')
+      await expect(page.getByRole('heading', { level: 1, name: 'Library' })).toBeVisible()
+      await fits(page, width)
+      await activate(page.getByRole('button', { name: 'New deck' }))
+      await page.getByLabel('Deck name').fill('Responsive fixture')
+      await activate(page.getByRole('button', { name: 'Save', exact: true }))
+      await activate(page.getByRole('link', { name: 'Responsive fixture', exact: true }))
+      await expect(page.getByRole('heading', { level: 1, name: 'Responsive fixture' })).toBeVisible()
+      await fits(page, width)
+      await activate(page.getByRole('button', { name: 'Add word' }))
+      await page.getByLabel('Term', { exact: true }).fill('deterministic')
+      await page.getByLabel('Meaning optional').fill('确定性')
+      await activate(page.getByRole('button', { name: 'Save', exact: true }))
+      await activate(page.getByRole('link', { name: 'Start learning' }))
+      await activate(page.getByText('Dictation', { exact: true }))
+      await expect(page.getByText('Dictation needs an English voice', { exact: false })).toBeVisible()
+      await fits(page, width)
+      await activate(page.getByText('Copy', { exact: true }))
+      await activate(page.getByRole('button', { name: 'Learn 1 new word' }))
+      const answer = page.getByRole('textbox', { name: 'Copy the word' })
+      await answer.fill('deterministic')
+      if (touch) await page.setViewportSize({ width, height: height - 280 })
+      await fits(page, width)
+      await answer.press('Enter')
+      const next = page.getByRole('button', { name: 'Next word' })
+      await expect(next).toBeVisible()
+      await activate(next)
+      if (touch) await page.setViewportSize({ width, height })
+      await expect(page.getByText('Session complete', { exact: true })).toBeVisible()
+      await nav('Review')
+      await activate(page.getByRole('button', { name: 'Start review' }))
+      await activate(page.getByRole('button', { name: 'Show answer' }))
+      for (const name of ['Again', 'Hard', 'Good', 'Easy']) {
+        const rating = page.getByRole('button', { name, exact: true })
+        await expect(rating).toBeEnabled()
+        if (touch) expect((await rating.boundingBox())?.height).toBeGreaterThanOrEqual(42)
+      }
+      await fits(page, width)
+      await activate(page.getByRole('button', { name: 'Good', exact: true }))
+      await expect(page.getByRole('heading', { name: 'Review round complete' })).toBeVisible()
+      await nav('Progress')
+      await expect(page.getByRole('heading', { level: 1, name: 'Progress' })).toBeVisible()
+      await fits(page, width)
+      await page.route('**/api/auth/login', (route) => route.fulfill({ status: 503, json: {
+        error: { message: 'Synchronization is temporarily unavailable. Your local learning history and pending operations are still available.' },
+      } }))
+      await nav('Settings')
+      const sync = page.getByRole('region', { name: 'Synchronization' })
+      await sync.getByLabel('Owner password').fill('responsive-fixture')
+      await activate(sync.getByRole('button', { name: 'Sign in', exact: true }))
+      await expect(sync.getByRole('alert')).toContainText('temporarily unavailable')
+      await fits(page, width)
+      const backup = page.getByRole('region', { name: 'Data & Backup' })
+      await expect(backup.getByRole('button', { name: 'Download JSON backup' })).toBeEnabled()
+      await backup.getByLabel('Preview a JSON backup').setInputFiles({ name: 'broken.json', mimeType: 'application/json', buffer: Buffer.from('{') })
+      await expect(backup.getByRole('alert')).toContainText('not valid JSON')
+      await fits(page, width)
+    })
+  })
+}

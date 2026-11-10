@@ -21,6 +21,8 @@
 
 Bootstrap 在不可变变更日志上重放固定前缀，无需保持跨请求的 SQLite 读事务。水位之后的写入通过增量 Pull 补齐。当前保留完整变更日志。
 
+Phase 6 扩展了 v1 的可选恢复代次。普通升级前后的客户端沿用未设置代次的历史。通过 SQLite 恢复命令重建服务后，登录和会话响应会提供 `generation`，同步请求需携带 `X-Lexyn-Generation`，响应页也包含对应代次。浏览器在现有 `sync_state` 行中记录绑定代次；不匹配时保留原游标和 Outbox，并拒绝继续同步。该字段不需要 SQLite 或 Dexie Schema 变更。操作步骤见 [备份与恢复](backup-restore.md)。
+
 ## 数据一致性
 
 SQLite v2 保留 `app_meta`，新增 `owner`、`sessions`、`devices`、`decks`、`entries`、`practice_events`、`learn_progress`、`review_events`、`review_cards`、`sync_operations`、`sync_changes` 和 `sync_metadata`。SQLite 同一事务保存业务记录、操作回执和变更日志。 `opId` 检测重复请求及内容变更，事件 UUID 独立去重。ACK 丢失可用同一 operationId 和 sequence 安全重试。

@@ -5,7 +5,8 @@ import { PULL_LIMIT, PUSH_LIMIT, SYNC_VERSION, type PushResult } from '../../sha
 import { createReviewScheduler, schedulerConfigSnapshot } from '../../shared/srs/scheduler.ts'
 import { apiError, type AuthEnv, type createAuthApi } from '../auth/routes.ts'
 import { createSyncRepository } from './repository.ts'
-import { InvalidOperation, integer, isUuid, object, validateOperation } from './validation.ts'
+import { serverGeneration } from '../backup/generation.ts'
+import { InvalidOperation, integer, isUuid, object, validateOperation } from '../../shared/contracts/operation-validation.ts'
 
 function queryInteger(value: string | undefined, fallback?: number) {
   if (value === undefined) return fallback
@@ -30,7 +31,10 @@ export function syncRoutes(db: Database.Database, auth: ReturnType<typeof create
       }
       const page = sync.page(c.get('ownerId'), after, limit, through)
       if (!page) return apiError(c, 409, 'CURSOR', 'This cursor does not exist on the server.')
-      return c.json(page)
+      const restoredLimit = path === '/bootstrap' && after === 0
+        ? db.prepare("SELECT value FROM app_meta WHERE key = 'restored_daily_new_words'").pluck().get() : undefined
+      return c.json({ ...page, generation: serverGeneration(db),
+        restoredDailyNewWords: restoredLimit === undefined ? undefined : Number(restoredLimit) })
     })
   }
   routes.post('/sync/push', bodyLimit({ maxSize: 1024 * 1024 }), async (c) => {

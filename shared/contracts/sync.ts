@@ -10,6 +10,7 @@ export const PULL_LIMIT = 100
 export interface OwnerSession {
   ownerId: string
   expiresAt: number
+  generation?: string
 }
 
 export type LibrarySnapshot =
@@ -43,6 +44,8 @@ export interface PushResponse {
 export interface SyncPage {
   schemaVersion: typeof SYNC_VERSION
   ownerId: string
+  generation?: string
+  restoredDailyNewWords?: number
   serverSeq: number
   nextCursor: number
   hasMore: boolean

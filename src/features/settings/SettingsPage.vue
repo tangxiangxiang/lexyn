@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
+import { liveQuery } from 'dexie'
 import { NAlert, NButton, NCard, NInputNumber, NRadioButton, NRadioGroup } from 'naive-ui'
 import SyncSettings from '../sync/SyncSettings.vue'
+import BackupSettings from './BackupSettings.vue'
 import AppIcon from '../../components/AppIcon.vue'
 import { useAppearance } from '../../ui/appearance'
 import { readDailyNewWords, writeDailyNewWords } from '../../db/local'
@@ -10,7 +12,11 @@ import { useLibraryAction } from '../library/library-ui'
 const { appearance, busy, error, setAppearance } = useAppearance()
 const dailyNewWords = ref(10)
 const { busy: savingDailyNewWords, error: dailyNewWordsError, run } = useLibraryAction()
-onMounted(async () => { dailyNewWords.value = await readDailyNewWords() })
+let dailyLimitSubscription: { unsubscribe(): void } | undefined
+onMounted(() => {
+  dailyLimitSubscription = liveQuery(readDailyNewWords).subscribe({ next: (value) => { dailyNewWords.value = value } })
+})
+onUnmounted(() => dailyLimitSubscription?.unsubscribe())
 function saveDailyNewWords(value: number | null) {
   if (value === null) return
   void run(async () => {
@@ -50,12 +56,13 @@ function saveDailyNewWords(value: number | null) {
           <p>One shared limit across all active decks. Choose from 1 to 100.</p>
         </div>
         <NInputNumber :value="dailyNewWords" :min="1" :max="100" :step="1" :disabled="savingDailyNewWords"
-          aria-label="Daily new words" @update:value="saveDailyNewWords" />
+          :input-props="{ 'aria-label': 'Daily new words' }" @update:value="saveDailyNewWords" />
       </div>
       <NAlert v-if="dailyNewWordsError" class="settings-error" type="error" role="alert">
         {{ dailyNewWordsError }}
       </NAlert>
     </NCard>
     <SyncSettings />
+    <BackupSettings />
   </section>
 </template>

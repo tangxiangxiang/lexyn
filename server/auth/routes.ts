@@ -3,6 +3,7 @@ import { bodyLimit } from 'hono/body-limit'
 import { getCookie, setCookie } from 'hono/cookie'
 import type Database from 'better-sqlite3'
 import { createAuth } from './owner.ts'
+import { serverGeneration } from '../backup/generation.ts'
 
 export type AuthEnv = { Variables: { ownerId: string } }
 
@@ -31,12 +32,18 @@ export function createAuthApi(db: Database.Database, publicOrigin: string) {
     if (!session) return apiError(c, 401, 'SESSION', 'Sign in to synchronize.')
     const expectedOwner = c.req.header('X-Lexyn-Owner')
     if (expectedOwner !== session.ownerId) return apiError(c, 409, 'ACCOUNT', 'The signed-in Owner changed.')
+    if (c.req.header('X-Lexyn-Generation') !== serverGeneration(db)) {
+      return apiError(c, 409, 'GENERATION', 'The server was restored. Keep this browser’s saved data and use a separate browser profile to sync.')
+    }
     c.set('ownerId', session.ownerId)
     await next()
   }
   const routes = new Hono()
   routes.use('*', guardOrigin)
-  routes.get('/session', (c) => c.json({ session: auth.session(getCookie(c, name)) ?? null }))
+  routes.get('/session', (c) => {
+    const session = auth.session(getCookie(c, name))
+    return c.json({ session: session ? { ...session, generation: serverGeneration(db) } : null })
+  })
   routes.post('/login', bodyLimit({ maxSize: 4096 }), async (c) => {
     const body: unknown = c.req.header('Content-Type')?.split(';')[0] === 'application/json'
       ? await c.req.json().catch(() => null) : null
@@ -51,7 +58,7 @@ export function createAuthApi(db: Database.Database, publicOrigin: string) {
     }
     if (login.status !== 'ok') return apiError(c, 401, 'CREDENTIALS', 'Sign-in credentials are invalid.')
     setCookie(c, name, login.token, { ...options, expires: new Date(login.expiresAt) })
-    return c.json({ session: { ownerId: login.ownerId, expiresAt: login.expiresAt } })
+    return c.json({ session: { ownerId: login.ownerId, expiresAt: login.expiresAt, generation: serverGeneration(db) } })
   })
   routes.post('/logout', (c) => {
     auth.revoke(getCookie(c, name))

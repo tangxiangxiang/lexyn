@@ -5,6 +5,7 @@ export interface SyncState {
   key: 'state'
   deviceId: string
   ownerId?: string
+  generation?: string
   origin?: string
   cursor: number
   bootstrapped: boolean

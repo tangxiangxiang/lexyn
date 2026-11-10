@@ -1,8 +1,8 @@
-import type { OutboxOperation } from '../../shared/contracts/library.ts'
-import { stableJson } from '../../shared/contracts/sync.ts'
-import { cleanDeck, cleanEntry, LibraryError, normalizeTerm } from '../../shared/domain/library.ts'
-import { REVIEW_DIRECTION, reviewCardId, type ReviewCardState, type ReviewSchedulerConfig } from '../../shared/domain/review.ts'
-import { isReviewRating, restoreCard } from '../../shared/srs/scheduler.ts'
+import type { OutboxOperation } from './library.ts'
+import { stableJson } from './sync.ts'
+import { cleanDeck, cleanEntry, LibraryError, normalizeTerm } from '../domain/library.ts'
+import { REVIEW_DIRECTION, reviewCardId, type ReviewCardState, type ReviewSchedulerConfig } from '../domain/review.ts'
+import { isReviewRating, restoreCard } from '../srs/scheduler.ts'
 
 export class InvalidOperation extends Error {}
 
@@ -19,11 +19,11 @@ export function integer(value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER):
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= min && value <= max
 }
 
-function time(value: unknown) {
+export function time(value: unknown) {
   return integer(value, 0, 8.64e15)
 }
 
-function fields(record: Record<string, unknown>, allowed: string) {
+export function fields(record: Record<string, unknown>, allowed: string) {
   const names = new Set(allowed.split(' '))
   if (Object.keys(record).some((key) => !names.has(key))) throw new InvalidOperation('Unexpected fields.')
 }
@@ -37,7 +37,7 @@ function string(record: Record<string, unknown>, key: string, optional = false) 
 
 const cardFields = 'cardId dueAt lastReviewAt stability stabilityFast difficulty state scheduleStatus reps lapses scheduledDays learningStep'
 
-function state(value: unknown, cardId: string) {
+export function validateCardState(value: unknown, cardId: string) {
   const card = object(value)
   fields(card, cardFields)
   if (card.cardId !== cardId) throw new InvalidOperation('Card identity does not match.')
@@ -85,13 +85,13 @@ function validatePayload(op: Record<string, unknown>, config?: ReviewSchedulerCo
         || stableJson(payload.schedulerConfigSnapshot) !== stableJson(config)) {
         throw new InvalidOperation('This review uses an unsupported scheduler configuration.')
       }
-      state(payload.resultingCardState, cardId)
-      if (payload.previousCardState !== undefined) state(payload.previousCardState, cardId)
+      validateCardState(payload.resultingCardState, cardId)
+      if (payload.previousCardState !== undefined) validateCardState(payload.previousCardState, cardId)
       const log = object(payload.schedulerRevlog)
       fields(log, 'cardId dueAt lastReviewAt stability stabilityFast difficulty state scheduleStatus scheduledDays learningStep rating reviewTime')
       if (log.rating !== payload.rating || log.reviewTime !== payload.reviewedAt) throw new InvalidOperation('Invalid review log.')
       const { rating: _rating, reviewTime: _time, ...oldState } = log
-      state({ ...oldState, reps: 0, lapses: 0 }, cardId)
+      validateCardState({ ...oldState, reps: 0, lapses: 0 }, cardId)
     }
     return op as unknown as OutboxOperation
   }

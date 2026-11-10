@@ -26,9 +26,9 @@ function originalReview({ effectiveReviewedAt: _, ...event }: ReviewEvent) {
 
 export function createSyncStore(database: LexynLocalDatabase) {
   const { sync_state, sync_shadows, sync_issues, sync_meta, client_outbox, decks, entries,
-    learn_progress, practice_events, review_events, review_cards, learn_sessions } = database
+    learn_progress, practice_events, review_events, review_cards, learn_sessions, preferences } = database
   const projectionTables = [sync_state, sync_shadows, sync_issues, client_outbox, decks, entries, learn_sessions, review_cards]
-  const pullTables = [...projectionTables, learn_progress, practice_events, review_events]
+  const pullTables = [...projectionTables, learn_progress, practice_events, review_events, preferences]
 
   async function currentState() {
     const state = await sync_state.get('state')
@@ -154,14 +154,17 @@ export function createSyncStore(database: LexynLocalDatabase) {
       return state
     }),
 
-    acquire: (ownerId: string, origin: string, leaseId: string) => database.transaction('rw', sync_state, async () => {
+    acquire: (ownerId: string, origin: string, leaseId: string, generation?: string) => database.transaction('rw', sync_state, async () => {
       const state = await currentState()
       if (state.ownerId && (state.ownerId !== ownerId || state.origin !== origin)) {
         throw new SyncError('This browser’s data is bound to a different Owner or server. Use a separate browser profile for that account.')
       }
+      if (state.ownerId && state.generation !== generation) {
+        throw new SyncError('The server was restored. Keep this browser’s saved data and use a separate browser profile to sync.')
+      }
       const now = Date.now()
       if (state.leaseId && (state.leaseUntil ?? 0) > now) return undefined
-      const updated = { ...state, ownerId, origin, leaseId, leaseUntil: now + leaseTime }
+      const updated = { ...state, ownerId, origin, generation, leaseId, leaseUntil: now + leaseTime }
       await sync_state.put(updated)
       return updated
     }),
@@ -219,7 +222,7 @@ export function createSyncStore(database: LexynLocalDatabase) {
 
     apply: (leaseId: string, page: SyncPage, bootstrap: boolean) => database.transaction('rw', pullTables, async () => {
       const state = await requireLease(leaseId)
-      if (page.schemaVersion !== SYNC_VERSION || page.ownerId !== state.ownerId || !Array.isArray(page.changes)
+      if (page.schemaVersion !== SYNC_VERSION || page.ownerId !== state.ownerId || page.generation !== state.generation || !Array.isArray(page.changes)
         || !Number.isSafeInteger(page.serverSeq) || !Number.isSafeInteger(page.nextCursor)
         || page.nextCursor < state.cursor || page.nextCursor > page.serverSeq
         || (bootstrap && state.through !== undefined && page.serverSeq !== state.through)) {
@@ -257,6 +260,11 @@ export function createSyncStore(database: LexynLocalDatabase) {
       }
       if (previous !== page.nextCursor || (page.hasMore !== (page.nextCursor < page.serverSeq))) {
         throw new SyncError('The synchronization page ended at an unexpected cursor.')
+      }
+      if (bootstrap && state.cursor === 0 && page.restoredDailyNewWords !== undefined) {
+        const value = page.restoredDailyNewWords
+        if (!Number.isInteger(value) || value < 1 || value > 100) throw new SyncError('Invalid restored daily new words limit.')
+        if (!await preferences.get('daily-new-words')) await preferences.add({ key: 'daily-new-words', value })
       }
       for (const entryId of practiced) await recomputeProgress(entryId)
       await applyShadows(page.nextCursor)

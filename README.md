@@ -2,7 +2,7 @@
 
 **Learn. Recall. Retain.**
 
-Lexyn 是一款面向个人的词汇学习与长期记忆工具，支持词库管理、拼写练习、FSRS-7 主动回忆和单用户跨设备同步。
+Lexyn 是一款面向个人的词汇学习与长期记忆工具，支持词库管理、拼写练习、FSRS-7 主动回忆、单用户跨设备同步和可离线启动的 PWA。
 
 ## 技术栈
 
@@ -53,7 +53,7 @@ WAL,,
 
 确认前可查看有效行、重复行、无效行与缺失释义数。重复比较按单词本进行，对词汇做 NFC 规范化、去除首尾空白并统一大小写。文件内保留第一条有效记录。已有词条默认跳过，显式选择覆盖时保留原 ID，并仅修改映射到的字段。无效记录会列在预览中并跳过。文件编码、CSV 结构或文件限制有问题时会阻止导入。专业词汇、缩写和词组可以直接添加。
 
-**Export library** 下载全部单词本、词条和学习历史，包括归档单词本、已移除词条及其练习与复习记录。详情中的 **Export deck** 导出当前单词本及其完整历史。JSON 格式为 `lexyn-library` v3，包含每日新词设置、复习卡片、完整复习事件和调度配置。v2 格式包含词库、练习事件、学习进度与每日新词设置。v3 保留这些字段，增加 `reviewCards`、`reviewEvents` 与 `schedulerConfig`，并将 `metadata.librarySchemaVersion` 更新为 4。活动会话属于设备私有状态，不导出。JSON 恢复安排在后续阶段。
+**Export library** 下载全部单词本、词条和学习历史，包括归档单词本、已移除词条及其练习与复习记录。详情中的 **Export deck** 导出当前单词本及其完整历史。JSON 格式为 `lexyn-library` v3，包含每日新词设置、复习卡片、完整复习事件和调度配置。v2 格式包含词库、练习事件、学习进度与每日新词设置。v3 保留这些字段，增加 `reviewCards`、`reviewEvents` 与 `schedulerConfig`，并将 `metadata.librarySchemaVersion` 更新为 4。活动会话属于设备私有状态，不导出。可在 **Settings → Data & Backup** 校验并预览 JSON v3，使用恢复命令将完整业务历史导入空服务端。见 [备份与恢复](docs/backup-restore.md)。
 
 ## 使用 Learn
 
@@ -72,7 +72,7 @@ WAL,,
 
 Dexie v4 新增 `review_cards`、`review_events`、`review_sessions`。每次评分原子写入不可变事件、可重建的卡片投影、会话和统一 Outbox。事件保留 UTC 毫秒时间及模型和配置，重放按评分时间、事件 ID 排序。页面加载后可离线评分。
 
-词库保存在当前浏览器配置和站点来源的 IndexedDB 中。打开页面后，词库操作可离线完成。首次加载或重新打开页面需要能访问应用。请用 localhost 或 HTTPS 访问，以便浏览器生成 UUID。清理站点数据、换浏览器配置或换访问地址会影响对原词库的访问，建议定期导出 JSON。登录 Owner 后，词库、练习与复习历史会与该服务器同步。
+词库保存在当前浏览器配置和站点来源的 IndexedDB 中。打开页面后，词库操作可离线完成。首次在线安装应用壳后，可断网重新打开。请用 localhost 或 HTTPS 访问，以便浏览器生成 UUID。清理站点数据、换浏览器配置或换访问地址会影响对原词库的访问，建议定期导出 JSON。登录 Owner 后，词库、练习与复习历史会与该服务器同步。
 
 ### 数据迁移与操作日志
 
@@ -100,6 +100,12 @@ npm start
 ```
 
 从项目根目录启动。默认访问 `http://127.0.0.1:3000`，静态资源、SPA 路由和 API 由同一进程提供。SQLite 数据位于数据目录的 `lexyn.sqlite`，启动时按版本执行迁移。更换数据目录会打开另一份数据库。IndexedDB 按浏览器来源隔离，开发与生产的端口对应独立的设备存储。
+
+## NAS、PWA 与备份
+
+- [NAS HTTPS、Compose 与镜像发布](docs/deployment.md)
+- [JSON 与 SQLite 备份、恢复及客户端代次](docs/backup-restore.md)
+- [PWA 安装、离线使用和代理检查](docs/pwa.md)
 
 ## 测试
 

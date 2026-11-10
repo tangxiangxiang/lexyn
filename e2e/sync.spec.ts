@@ -362,6 +362,7 @@ test('shows both sides of an edit conflict and retries a failed pull without adv
     await issues.getByText('Compare local and server versions').click()
     await expect(issues.locator('pre').first()).toContainText('死锁状态')
     await expect(issues.locator('pre').last()).toContainText('"meaning": "死锁"')
+    expect(await b.page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320)
     await expect(issues.getByRole('button', { name: 'Use server version' })).toBeEnabled()
     await issues.getByRole('button', { name: 'Keep local and resubmit' }).click()
     const resolvedCursor = await waitSynced(b.page)

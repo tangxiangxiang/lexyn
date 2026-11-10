@@ -25,6 +25,7 @@ a { color: inherit; }
   --radius: 10px;
   min-height: 100vh;
   min-height: 100dvh;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
   display: grid;
   grid-template-columns: 232px minmax(0, 1fr);
   color: var(--ink);
@@ -140,8 +141,9 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .service-status[data-status="Service ready"] { color: var(--accent); }
 .service-status[data-status="Service unavailable"] { color: var(--danger); }
+.update-notice { margin: 12px clamp(16px, 5vw, 64px) 0; color: var(--muted); font-size: 13px; }
 
-.main { padding: clamp(32px, 7vw, 88px) clamp(16px, 5vw, 64px) 48px; }
+.main { padding: clamp(32px, 7vw, 88px) clamp(16px, 5vw, 64px) calc(48px + env(safe-area-inset-bottom)); }
 .page { max-width: 840px; margin-inline: auto; }
 .page-intro { margin-bottom: clamp(24px, 4vw, 38px); }
 

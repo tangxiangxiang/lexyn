@@ -69,10 +69,12 @@ const migrations = [
   },
 ]
 
+export const latestDatabaseVersion = migrations.at(-1)!.version
+
 export function migrate(db: Database.Database) {
   db.transaction(() => {
     const currentVersion = db.pragma('user_version', { simple: true }) as number
-    const latestVersion = migrations.at(-1)!.version
+    const latestVersion = latestDatabaseVersion
     if (currentVersion > latestVersion) {
       throw new Error('The SQLite database schema is newer than this Lexyn build.')
     }

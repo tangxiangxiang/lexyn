@@ -19,12 +19,20 @@ export function createApp(db: Database.Database, webRoot?: string, publicOrigin 
   app.route('/api/auth', auth.routes)
   app.route('/api', healthRoutes(db))
   app.route('/api', syncRoutes(db, auth))
-  app.all('/api/*', (c) => c.notFound())
+  app.all('/api/*', (c) => {
+    c.header('Cache-Control', 'no-store')
+    return c.notFound()
+  })
 
   if (webRoot) {
     const index = readFileSync(join(webRoot, 'index.html'), 'utf8')
-    app.use('/assets/*', serveStatic({ root: webRoot }))
-    app.use('/favicon.svg', serveStatic({ root: webRoot }))
+    app.use('/assets/*', serveStatic({ root: webRoot, onFound: (_path, c) => {
+      c.header('Cache-Control', 'public, max-age=31536000, immutable')
+    } }))
+    for (const path of ['/manifest.webmanifest', '/sw.js', '/favicon.svg', '/pwa-192.png', '/pwa-512.png', '/pwa-512-maskable.png']) {
+      app.use(path, serveStatic({ root: webRoot, onFound: (_file, c) => { c.header('Cache-Control', 'no-cache') } }))
+    }
+    app.get('/index.html', (c) => c.html(index, 200, { 'Cache-Control': 'no-cache' }))
     app.get('*', (c) => {
       const path = c.req.path
       if (path === '/assets' || path.startsWith('/assets/') || extname(path)) return c.notFound()

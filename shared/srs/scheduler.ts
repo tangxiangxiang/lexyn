@@ -75,7 +75,9 @@ export function serializeRevlog(
 }
 
 /** Replay one card's immutable events in UTC order with a stable tie-breaker. */
-export async function rebuildCardFromEvents(events: readonly ReviewEvent[]): Promise<ReviewCardState | undefined> {
+export async function rebuildCardFromEvents(
+  events: readonly ReviewEvent[], onReview?: (event: ReviewEvent, state: ReviewCardState) => void,
+): Promise<ReviewCardState | undefined> {
   const time = (event: ReviewEvent) => event.effectiveReviewedAt ?? event.reviewedAt
   const ordered = [...events].sort((a, b) => time(a) - time(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   const schedulers = new Map<string, ReviewScheduler>()
@@ -98,6 +100,7 @@ export async function rebuildCardFromEvents(events: readonly ReviewEvent[]): Pro
     const now = utcDate(time(event))
     card ??= scheduler.newCard({ now, cardId: event.cardId })
     card = scheduler.review({ card, grade: schedulerGrades[event.rating], now }).card
+    onReview?.(event, serializeCard(card))
   }
   return card && serializeCard(card)
 }

@@ -1,0 +1,57 @@
+name: Release image
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lexyn-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  image:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - name: Resolve versioned image
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_TYPE" == tag ]]
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+([.-][a-zA-Z0-9]+)*)?$ ]]
+          printf 'IMAGE=ghcr.io/%s:%s\n' "${GITHUB_REPOSITORY,,}" "$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+      - name: Build and start the production image
+        run: |
+          docker build --platform linux/amd64 --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" -t "$IMAGE" .
+          node scripts/container-smoke.mjs "$IMAGE"
+      - name: Publish version tag and report digest
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          if output=$(docker manifest inspect "$IMAGE" 2>&1); then
+            echo "The version tag already exists. Refusing to overwrite it." >&2
+            exit 1
+          elif ! grep -Eqi 'manifest unknown|name unknown|no such manifest' <<< "$output"; then
+            printf '%s\n' "$output" >&2
+            exit 1
+          fi
+          docker push "$IMAGE"
+          digest=$(docker image inspect "$IMAGE" --format '{{index .RepoDigests 0}}')
+          printf 'Image: %s\n\nDigest reference: `%s`\n' "$IMAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"
