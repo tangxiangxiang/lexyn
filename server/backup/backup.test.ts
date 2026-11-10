@@ -78,6 +78,7 @@ test('rolls back JSON restore including library and history and retries into the
     backup.entries[0].dictionaryMeaning = dictionaryMeaning
     backup.entries[0].dictionaryReference = { sourceWord: 'audit', sourceRevision: 'fixture',
       translation: dictionaryMeaning.rawTranslation, definition: 'to examine records', partOfSpeech: 'n. vt.', phonetic: 'ˈɔːdɪt' }
+    backup.entries[0].phonetics = { british: 'ˈɔːdɪt', american: 'ˈɑdɪt', unspecified: '/ˈɔːdɪt/' }
     backup.entries[0].meaning = meaningFromSenses(dictionaryMeaning.senses)
     await expect(parse(backup)).rejects.toThrow('require backup format v5')
     backup.formatVersion = 5
@@ -96,6 +97,8 @@ test('rolls back JSON restore including library and history and retries into the
       .toEqual(dictionaryMeaning)
     expect(JSON.parse(db.prepare("SELECT json_extract(body, '$.dictionaryReference') FROM entries").pluck().get() as string))
       .toEqual(backup.entries[0].dictionaryReference)
+    expect(JSON.parse(db.prepare("SELECT json_extract(body, '$.phonetics') FROM entries").pluck().get() as string))
+      .toEqual(backup.entries[0].phonetics)
     expect(db.prepare("SELECT json_extract(body, '$.pronunciationOverride') FROM entries").pluck().get()).toBe('aw dit')
     expect(db.prepare("SELECT json_extract(body, '$.explanation') FROM entries").pluck().get()).toBe('系统化地检查记录。')
     expect(db.prepare("SELECT json_extract(body, '$.meaningSource'), json_extract(body, '$.meaningNeedsReview') FROM entries").raw().get())

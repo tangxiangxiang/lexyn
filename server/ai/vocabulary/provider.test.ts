@@ -79,5 +79,35 @@ test('requires useful definitions and rejects output truncation before any calle
   const empty = await generateVocabulary('key', ['unclear'], { name: 'Deck' },
     async () => results({ ref: 0, term: 'unclear', senses: [], needsReview: true, warning: '无法确定可靠释义' }))
   expect(empty[0]).toMatchObject({ senses: [], needsReview: true })
-  expect(vocabularyPromptVersion).toBe('lexyn-meaning-v2')
+  expect(vocabularyPromptVersion).toBe('lexyn-meaning-ipa-v3')
+})
+
+test.each([
+  [{ british: ' /kəˈmɑːnd/ ', american: 'kəˈmænd' }, { british: 'kəˈmɑːnd', american: 'kəˈmænd' }, false],
+  [{ british: 'bed', american: 'bed' }, { british: 'bed', american: 'bed' }, false],
+  [{ british: 'ˈrek.ɔːd', american: null }, { british: 'ˈrek.ɔːd' }, false],
+  [{ british: null, american: 'ˈrek.ɚd' }, { american: 'ˈrek.ɚd' }, false],
+  [{ british: null, american: null }, {}, false],
+  [{ british: 'British IPA: kəˈmɑːnd', american: 'kəˈmænd' }, { american: 'kəˈmænd' }, true],
+  [{ british: 'ˈˈbad', american: '美式' }, {}, true],
+  [{ british: '//bed//', american: 'bed\n' }, {}, true],
+  [{ british: 'a'.repeat(241), american: 'bedˈ' }, {}, true],
+] as const)('validates IPA candidates without losing usable meanings or accents (%#)', async (phonetics, accepted, needsReview) => {
+  const [candidate] = await generateVocabulary('key', ['record'], { name: 'Deck' },
+    async () => results({ ...word(0, 'record'), phonetics }))
+  expect(candidate).toMatchObject({ phonetics: accepted, needsReview, senses: [{ definitions: ['线程'] }] })
+  expect(candidate?.phonetics).toEqual(accepted)
+})
+
+test('uses saved IPA as input and accepts an IPA-only response for backfill', async () => {
+  const send = vi.fn<typeof fetch>(async () => results({
+    ref: 0, term: 'record', phonetics: { british: null, american: 'ˈrek.ɚd' }, needsReview: true, warning: null,
+  }))
+  const [candidate] = await generateVocabulary('key', ['record'], { name: 'Deck', mode: 'phonetics',
+    currentPhonetics: [{ british: '/ˈrekɔːd/', unspecified: 'rekɔːd' }],
+  }, send)
+  expect(candidate).toEqual({ senses: [], phonetics: { american: 'ˈrek.ɚd' }, needsReview: true, warning: null })
+  const { messages } = JSON.parse(String(send.mock.calls[0][1]?.body))
+  expect(messages[0].content).toContain('Do not generate meanings.')
+  expect(JSON.parse(messages[1].content).words[0].currentPhonetics).toEqual({ british: '/ˈrekɔːd/', unspecified: 'rekɔːd' })
 })

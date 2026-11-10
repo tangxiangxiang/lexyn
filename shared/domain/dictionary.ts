@@ -67,6 +67,11 @@ export function phoneticText(value: PhoneticVariants | undefined, legacy?: strin
   return value?.unspecified || legacy || ''
 }
 
+export function formatPhonetic(value?: string) {
+  const text = value?.trim().replace(/^\/+|\/+$/g, '').trim()
+  return text ? `/${text}/` : ''
+}
+
 export function cleanPhonetics(value: unknown): PhoneticVariants | undefined {
   if (value === undefined || value === null) return
   const row = record(value, 'british american unspecified')

@@ -46,6 +46,26 @@ async function installEcdict(directory: string, term: string, raw: string) {
   await importEcdictCsv(directory, csv, 'fixture-sha')
 }
 
+test('generates a meaning and both IPA accents in one request for a new word', async ({ page, backend }) => {
+  const deckId = await createDeck(page)
+  await page.getByRole('button', { name: 'Add word' }).click()
+  await page.getByLabel('Term', { exact: true }).fill('command')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect.poll(() => savedEntry(backend.db, 'command')?.revision).toBe(2)
+  expect(backend.vocabulary.requests).toEqual([['command']])
+  expect(savedEntry(backend.db, 'command')).toMatchObject({
+    meaningSource: 'ai', phonetics: { british: 'kəˈmɑːnd', american: 'kəˈmænd' },
+  })
+  await expect(page.locator('.phonetics span')).toHaveText(['UK /kəˈmɑːnd/', 'US /kəˈmænd/'])
+  const seeded = await writeStudy(page, 'library/create-entry', [deckId, {
+    term: 'queue', meaning: '队列', phonetics: { american: '/kjuː/' },
+  }])
+  expect(seeded.ok()).toBe(true)
+  await page.reload()
+  const queue = page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'queue', exact: true }) })
+  await expect(queue.locator('.phonetics span')).toHaveText(['US /kjuː/'])
+})
+
 test('saves a new word before AI, then iterates from the latest human meaning without losing ECDICT', async ({ page, backend }) => {
   await installEcdict(backend.directory, 'thread', 'n. 原始词典释义；织物纤维')
   const dictionary = createEcdict(backend.directory)

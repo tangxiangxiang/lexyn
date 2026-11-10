@@ -90,16 +90,18 @@ async function startFixture(initialOwner: boolean, speechConfigured: boolean) {
       vocabulary.inputs.push(words)
       await vocabulary.beforeReply?.()
       vocabulary.responses.push(words.map(({ term }) => term))
+      const ipaOnly = messages[0].content.includes('Do not generate meanings.')
       const results = words.map((word) => ({
         ref: word.ref,
         term: word.term,
-        senses: ['missing', 'wal'].includes(word.term.toLowerCase()) ? [] : word.term.toLowerCase() === 'banana'
+        ...(!ipaOnly ? { senses: ['missing', 'wal'].includes(word.term.toLowerCase()) ? [] : word.term.toLowerCase() === 'banana'
           ? [{ partOfSpeech: 'n.', definitions: [word.currentMeaning ? '香蕉的迭代释义 C' : '香蕉', '热带水果'] }]
           : [{ partOfSpeech: 'n.', definitions: [['queue', 'queues'].includes(word.term.toLowerCase()) ? '队列'
             : word.term.toLowerCase() === 'thread' ? word.currentMeaning ? '线程的迭代释义 C' : '线程'
               : word.term.toLowerCase() === 'concurrency' ? '并发' : word.term.toLowerCase() === 'deadlock' ? '死锁'
                 : word.term.toLowerCase() === 'latch' ? '闩锁' : word.term.toLowerCase() === 'cache' ? '缓存'
-                  : word.term.toLowerCase() === 'mutex' ? '互斥锁' : '确定性'] }],
+                  : word.term.toLowerCase() === 'mutex' ? '互斥锁' : '确定性'] }] } : {}),
+        phonetics: word.term === 'command' ? { british: 'kəˈmɑːnd', american: 'kəˈmænd' } : null,
         needsReview: false,
         warning: ['missing', 'wal'].includes(word.term.toLowerCase()) ? '无法确定可靠释义' : null,
       }))

@@ -1,4 +1,4 @@
-import type { VocabularyJob, VocabularyPlan, VocabularyStatus } from '../../../shared/contracts/vocabulary'
+import type { VocabularyJob, VocabularyMode, VocabularyPlan, VocabularyStatus } from '../../../shared/contracts/vocabulary'
 import type { Entry } from '../../../shared/domain/library'
 import { ownerFeatureRequest } from '../../api/client'
 
@@ -23,7 +23,7 @@ export const vocabulary = {
     throw new Error('Vocabulary generation is still running. Refresh later to see the saved meaning.')
   },
   plan: (deckId: string, signal?: AbortSignal) => ownerFeatureRequest<VocabularyPlan>(path(deckId), 'GET', undefined, signal),
-  start: (deckId: string, input: { count: number; requestId: string; afterTaskId: string | null }) =>
+  start: (deckId: string, input: { count: number; requestId: string; afterTaskId: string | null; mode: VocabularyMode }) =>
     ownerFeatureRequest<VocabularyJob>(path(deckId), 'POST', input),
   cancel: (deckId: string, jobId: string) =>
     ownerFeatureRequest<VocabularyJob>(path(deckId) + '/cancel', 'POST', { jobId }),

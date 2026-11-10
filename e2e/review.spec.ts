@@ -13,6 +13,7 @@ interface WordInput {
   explanation?: string
   example?: string
   fullDefinition?: string
+  phonetic?: string
 }
 
 async function learnWords(page: Page, words: WordInput[]) {
@@ -23,10 +24,10 @@ async function learnWords(page: Page, words: WordInput[]) {
   await page.getByRole('link', { name: 'Review Systems' }).click()
   const deckUrl = page.url()
   const deckId = new URL(deckUrl).pathname.split('/').at(-1)!
-  for (const { term, meaning, explanation, example, fullDefinition } of words) {
+  for (const { term, meaning, explanation, example, fullDefinition, phonetic } of words) {
     const definitions = [meaning, ...(fullDefinition ? [fullDefinition] : [])]
     const response = await writeStudy(page, 'library/create-entry', [deckId, {
-      term, meaning, dictionaryMeaning: { senses: [{ partOfSpeech: 'n.', definitions, source: 'manual' }] },
+      term, meaning, phonetic, dictionaryMeaning: { senses: [{ partOfSpeech: 'n.', definitions, source: 'manual' }] },
       ...(explanation ? { explanation } : {}), ...(example ? { example } : {}),
     }])
     expect(response.ok()).toBe(true)
@@ -44,6 +45,7 @@ async function learnWords(page: Page, words: WordInput[]) {
     const current = words.find((word) => word.term === term)
     const definition = current?.fullDefinition
     if (definition) await expect(page.locator('.learn-card .dictionary-definition')).toContainText([current!.meaning, definition])
+    if (current?.phonetic) await expect(page.locator('.learn-card .phonetics')).toHaveText(current.phonetic)
     await page.getByRole('textbox', { name: 'Copy the word' }).fill(term)
     await page.getByRole('button', { name: 'Check spelling' }).click()
     await page.getByRole('button', { name: 'Next word' }).click()
@@ -68,6 +70,50 @@ async function openReview(page: Page) {
 function stat(page: Page, label: string) {
   return page.locator('dl > div').filter({ has: page.getByText(label, { exact: true }) }).locator('dd')
 }
+
+test('fills missing IPA in a rated word without changing its meaning or FSRS schedule', async ({ page, backend }) => {
+  const deckUrl = await learnWords(page, [{ term: 'command', meaning: '命令', fullDefinition: '指令', phonetic: '/kəˈmɑːnd/' }])
+  await openReview(page)
+  await page.getByRole('button', { name: 'Start review' }).click()
+  await expect(page.locator('.phonetics')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Show answer' }).click()
+  await expect(page.locator('.phonetics')).toHaveText('/kəˈmɑːnd/')
+  await page.getByRole('button', { name: 'Good' }).click()
+  await expect(page.getByRole('heading', { name: 'Review round complete' })).toBeVisible()
+  const before = readReview(backend.db)
+  expect(before.cards).toHaveLength(1)
+  const entryBody = () => JSON.parse(backend.db.prepare("SELECT body FROM entries WHERE active_term = 'command'").pluck().get() as string)
+  const entry = entryBody()
+  await page.goto(deckUrl)
+  await expect(page.locator('.phonetics')).toHaveText('/kəˈmɑːnd/')
+
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  backend.vocabulary.beforeReply = () => gate
+  try {
+    await page.getByRole('button', { name: 'AI fill missing IPA' }).click()
+    await page.getByRole('button', { name: 'Fill missing IPA (1)' }).click()
+    await expect.poll(() => backend.vocabulary.requests).toEqual([['command']])
+    await page.reload()
+    await page.getByRole('button', { name: 'View AI task progress' }).click()
+    await expect(page.getByRole('heading', { name: 'AI fill missing IPA', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Stop AI task' }).click()
+    await expect(page.getByText('AI vocabulary task stopped')).toBeVisible()
+    expect(entryBody()).toEqual(entry)
+  } finally {
+    backend.vocabulary.beforeReply = undefined
+    release()
+  }
+  await expect.poll(() => backend.vocabulary.responses.length).toBe(1)
+  await page.getByRole('button', { name: 'Retry IPA backfill (1)' }).click()
+  await expect(page.getByText('AI vocabulary task completed')).toBeVisible()
+  await expect(page.getByText('No words need IPA.')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.phonetics span')).toHaveText(['UK /kəˈmɑːnd/', 'US /kəˈmænd/'])
+  expect(entryBody()).toMatchObject({ meaning: entry.meaning, dictionaryMeaning: entry.dictionaryMeaning,
+    phonetic: entry.phonetic, phonetics: { british: 'kəˈmɑːnd', american: 'kəˈmænd' } })
+  expect(readReview(backend.db)).toEqual(before)
+})
 
 test('learns from Library, restores a revealed answer and scores on the server with real Progress data', async ({ page, backend }) => {
   await trackPlayback(page)
