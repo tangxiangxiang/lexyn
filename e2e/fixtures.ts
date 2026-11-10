@@ -74,7 +74,7 @@ async function startFixture(initialOwner: boolean, speechConfigured: boolean) {
       }))
       return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ results }) } }] })
     })
-  return { origin, db, setupToken, speech, vocabulary, advanceTo: (time: number) => { now = time }, close: async () => {
+  return { origin, db, directory, setupToken, speech, vocabulary, advanceTo: (time: number) => { now = time }, close: async () => {
     await new Promise<void>((done) => { server.close(() => done()); if ('closeAllConnections' in server) server.closeAllConnections() })
     db.close()
     rmSync(directory, { recursive: true, force: true })

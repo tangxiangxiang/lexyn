@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { createReadStream, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs'
+import { copyFileSync, createReadStream, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import Database from 'better-sqlite3'
 import Papa from 'papaparse'
@@ -79,9 +79,11 @@ export async function importEcdictCsv(dataDir: string, csvPath: string, sourceCo
     if (db.pragma('integrity_check', { simple: true }) !== 'ok') throw new Error('ECDICT SQLite integrity check failed.')
     db.close()
     db = undefined
-    if (existsSync(target)) { renameSync(target, backup); oldMoved = true }
-    try { renameSync(temporary, target); swapped = true }
-    catch (error) { if (oldMoved) { renameSync(backup, target); oldMoved = false }; throw error }
+    // Keep the current dictionary live until the new database is fully built.
+    // POSIX rename atomically replaces the target; Windows replacement may fail safely.
+    if (existsSync(target)) { copyFileSync(target, backup); oldMoved = true }
+    renameSync(temporary, target)
+    swapped = true
     if (oldMoved) { rmSync(backup); oldMoved = false }
     return { count, sha256: hash, bytes: statSync(target).size }
   } finally {

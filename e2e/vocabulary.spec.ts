@@ -1,4 +1,7 @@
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { Page } from '@playwright/test'
+import { importEcdictCsv } from '../server/dictionary/import'
 import type { Entry } from '../shared/domain/library'
 import { expect, test, writeStudy } from './fixtures'
 
@@ -94,4 +97,25 @@ test('starts with one confirmation, resumes progress after refresh and automatic
   expect(rows.find(({ term }) => term === 'missing')).toMatchObject({ meaning: '', revision: 1 })
   expect(backend.db.prepare('SELECT count(*) FROM practice_events').pluck().get()).toBe(0)
   expect(backend.db.prepare('SELECT count(*) FROM review_events').pluck().get()).toBe(0)
+})
+
+
+test('uses ECDICT lookup in Library editor and saves meaning provenance without MiniMax', async ({ page, backend }) => {
+  await deckWithWords(page)
+  const csv = join(backend.directory, 'ecdict-e2e.csv')
+  writeFileSync(csv, 'word,phonetic,definition,translation,pos,collins,oxford,tag,bnc,frq,exchange,detail,audio\n' +
+    'banana,bəˈnɑːnə,,n. 香蕉,n.,,,,,,,,\n')
+  await importEcdictCsv(backend.directory, csv, 'fixture-sha')
+  await page.getByRole('button', { name: 'Add word' }).click()
+  await page.getByLabel('Term', { exact: true }).fill('banana')
+  await page.getByRole('button', { name: 'Look up in ECDICT' }).click()
+  await expect(page.getByLabel('Selected dictionary meaning')).toHaveValue('香蕉')
+  await page.getByRole('button', { name: 'Use dictionary meaning' }).click()
+  await expect(page.getByLabel('Meaning optional')).toHaveValue('香蕉')
+  await expect(page.getByLabel('Phonetic optional')).toHaveValue('bəˈnɑːnə')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByRole('list', { name: 'Words' }).getByText('香蕉', { exact: true })).toBeVisible()
+  const row = JSON.parse(backend.db.prepare('SELECT body FROM entries').pluck().get() as string) as Entry
+  expect(row).toMatchObject({ term: 'banana', meaning: '香蕉', meaningSource: 'dictionary' })
+  expect(backend.vocabulary.requests).toHaveLength(0)
 })
