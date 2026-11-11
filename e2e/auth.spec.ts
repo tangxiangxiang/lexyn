@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { expect, test } from './fixtures'
+import { expect, navigateFromMenu, test } from './fixtures'
 
 test.use({ initialOwner: false, viewport: { width: 320, height: 740 } })
 
@@ -17,7 +17,7 @@ test('sets up the Owner in the browser, signs in automatically and later require
   await page.getByRole('button', { name: 'Create Owner' }).click()
   await expect(page.getByRole('heading', { name: 'Your library is empty' })).toBeVisible()
 
-  await page.getByRole('link', { name: 'Settings' }).click()
+  await navigateFromMenu(page, 'Settings')
   await page.getByRole('button', { name: 'Sign out' }).click()
   await expect(page.getByRole('heading', { name: 'Sign in to Lexyn' })).toBeVisible()
   await expect(page.getByLabel('Setup token')).toHaveCount(0)

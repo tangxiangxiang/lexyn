@@ -23,9 +23,22 @@ export async function signIn(page: Page) {
 }
 
 export async function libraryAction(scope: Page | Locator, action: string, menu?: string) {
-  const summary = menu ? scope.locator('summary').filter({ hasText: menu }) : scope.locator('.word-menu summary')
-  await summary.click()
+  const summary = menu === 'Deck options' ? scope.locator('.app-menu > summary')
+    : menu ? scope.locator('summary').filter({ hasText: menu }) : scope.locator('.word-menu summary')
+  if (menu !== 'Deck options' || await scope.locator('.app-menu:not([open])').count()) await summary.click()
   await scope.getByRole('button', { name: action, exact: true }).click()
+}
+
+export async function navigateFromMenu(page: Page, name: string, touch = false) {
+  const navigation = page.getByRole('navigation')
+  const menu = navigation.locator('.app-menu:not([open]) > summary')
+  if (touch) {
+    if (await menu.count()) await menu.tap()
+    await navigation.getByRole('link', { name, exact: true }).tap()
+  } else {
+    if (await menu.count()) await menu.click()
+    await navigation.getByRole('link', { name, exact: true }).click()
+  }
 }
 
 /** Fill the current structured meaning editor without relying on the legacy short-meaning field. */

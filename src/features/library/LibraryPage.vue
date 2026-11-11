@@ -2,7 +2,7 @@
 import { t, translateError } from '../../i18n/useI18n'
 import { computed, ref } from 'vue'
 import { NAlert, NButton, NCard, NEmpty } from 'naive-ui'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import type { Deck } from '../../../shared/domain/library'
 import AppIcon from '../../components/AppIcon.vue'
 import LibraryConfirm from './LibraryConfirm.vue'
@@ -10,7 +10,11 @@ import LibraryEditor from './LibraryEditor.vue'
 import { closeLibraryMenu, downloadLibrary, useLibraryAction, wordCount } from './library-ui'
 import { library } from './api'
 import { useLibraryQuery } from './useLibraryQuery'
+import { currentBookId, rememberCurrentBook } from './currentBook'
+import StudyHome from '../learn/StudyHome.vue'
 
+defineProps<{ resumeCurrentBook?: boolean }>()
+const router = useRouter()
 const { data, error: loadError, reload } = useLibraryQuery(() => null, (_key, signal) => library.listDecks(signal))
 const archived = ref(false)
 const editor = ref<{ type: 'deck'; deck?: Deck }>()
@@ -18,6 +22,13 @@ const toArchive = ref<Deck>()
 const feedback = ref('')
 const { busy, error, run } = useLibraryAction()
 const shown = computed(() => data.value?.filter(({ deck }) => (deck.archivedAt !== undefined) === archived.value) ?? [])
+const currentDeckId = ref(currentBookId())
+const currentDeck = computed(() => data.value?.find(({ deck }) => deck.id === currentDeckId.value && deck.archivedAt === undefined)?.deck)
+
+function startReading(deckId: string) {
+  rememberCurrentBook(deckId)
+  void router.push({ name: 'library-deck', params: { deckId } })
+}
 
 function saved(message: string) {
   feedback.value = message
@@ -45,11 +56,12 @@ function exportAll() {
 </script>
 
 <template>
-  <section class="page library-page">
+  <StudyHome v-if="resumeCurrentBook && currentDeck" :deck-id="currentDeck.id" :deck-name="currentDeck.name" />
+  <section v-else class="page library-page">
     <header class="page-intro library-heading">
       <div>
         <h1>{{ t('Library') }}</h1>
-        <p>{{ t('Pick a book and return to the words you are learning.') }}</p>
+        <p>{{ t(resumeCurrentBook ? 'Choose your current book to open its word list from home.' : 'Pick a book and return to the words you are learning.') }}</p>
       </div>
       <div class="library-actions">
         <NButton secondary :disabled="!data" @click="editor = { type: 'deck' }">{{ t('New deck') }}</NButton>
@@ -83,6 +95,7 @@ function exportAll() {
         <article class="book">
           <div class="library-row-copy">
             <h2><RouterLink :to="{ name: 'library-deck', params: { deckId: deck.id } }">{{ deck.name }}</RouterLink></h2>
+            <p v-if="deck.id === currentDeck?.id" class="library-muted">{{ t('Current book') }}</p>
             <p class="library-muted">{{ wordCount(count) }} · {{ t('{count} lists', { count: listCount }) }}</p>
           </div>
           <p v-if="listCount" class="library-muted book-progress-copy">
@@ -91,12 +104,14 @@ function exportAll() {
           <div class="library-actions">
             <NButton v-if="archived" secondary :disabled="busy" @click="restore(deck.id)">{{ t('Restore deck') }}</NButton>
             <template v-else>
-              <RouterLink v-if="nextListId" class="book-continue" :to="{ name: 'library-deck', params: { deckId: deck.id }, query: { listId: nextListId } }">
+              <NButton v-if="resumeCurrentBook" secondary @click="startReading(deck.id)">{{ t('Set as current book') }}</NButton>
+              <RouterLink v-if="!resumeCurrentBook && nextListId" class="book-continue" :to="{ name: 'library-deck', params: { deckId: deck.id }, query: { listId: nextListId } }">
                 {{ t(learnedCount || activeListId ? 'Continue learning' : 'Open study list') }}
               </RouterLink>
               <details name="library-options" class="library-menu">
                 <summary>{{ t('Book options') }}</summary>
                 <div @click="closeLibraryMenu">
+                  <NButton v-if="!resumeCurrentBook && deck.id !== currentDeck?.id" text @click="startReading(deck.id)">{{ t('Set as current book') }}</NButton>
                   <NButton text @click="editor = { type: 'deck', deck }">{{ t('Edit deck') }}</NButton>
                   <NButton text @click="toArchive = deck">{{ t('Archive deck') }}</NButton>
                 </div>

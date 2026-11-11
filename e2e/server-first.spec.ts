@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Page } from '@playwright/test'
-import { expect, signIn, studyRequest, test, writeStudy } from './fixtures'
+import { expect, navigateFromMenu, signIn, studyRequest, test, writeStudy } from './fixtures'
 import { rebuildCardFromEvents } from '../shared/srs/scheduler'
 
 async function read(page: Page, path: string, args: unknown[] = []) {
@@ -110,7 +110,7 @@ test('rejects a stale Library edit and hides personal state after signing out', 
     const edit = (term: string) => [deck.id, entry.id, { term, meaning: '缓存' }, entry.revision]
     await write(page, 'library/update-entry', edit('cache memory'))
     expect((await writeStudy(other, 'library/update-entry', edit('stale change'))).status()).toBe(409)
-    await other.getByRole('link', { name: 'Settings', exact: true }).click()
+    await navigateFromMenu(other, 'Settings')
     await other.getByRole('button', { name: 'Sign out' }).click()
     await expect(other.getByLabel('Owner password')).toBeVisible()
     await expect(other.getByRole('navigation')).toHaveCount(0)

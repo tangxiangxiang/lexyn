@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test'
-import { expect, libraryAction, fillMeaning, test, writeStudy } from './fixtures'
+import { navigateFromMenu, expect, libraryAction, fillMeaning, test, writeStudy } from './fixtures'
 import type { LearnSession, PracticeEvent } from '../shared/domain/learning'
 import type Database from 'better-sqlite3'
 
@@ -191,7 +191,7 @@ test('Enter submits and advances once, and keyboard shortcuts are scoped to the 
   await answer.fill('deadlock')
   await page.keyboard.press('Enter')
   await expect(next).toBeFocused()
-  await page.getByRole('link', { name: 'Review', exact: true }).click()
+  await navigateFromMenu(page, 'Review')
   await expect(page.getByRole('heading', { name: 'Review', exact: true })).toBeVisible()
   await page.keyboard.press('Enter')
   expect(records(backend.db, 'learn_sessions')).toMatchObject([{ currentIndex: 1, currentLastSubmitted: 'deadlock' }])
@@ -254,7 +254,7 @@ test('retries speech and releases audio on word and route changes', async ({ pag
   await play.click()
   await expect(page.getByRole('button', { name: 'Pause pronunciation' })).toBeVisible()
   expect(backend.speech.requests.map(({ text }) => text)).toEqual(['concurrency', 'concurrency', 'deadlock'])
-  await page.getByRole('link', { name: 'Review', exact: true }).click()
+  await navigateFromMenu(page, 'Review')
   await expect(page.getByRole('heading', { name: 'Review', exact: true })).toBeVisible()
   expect(await page.evaluate(() => window.lexynAudio.revoked)).toHaveLength(2)
   expect(records(backend.db, 'practice_events')).toMatchObject([{ mode: 'dictation', outcome: 'completed', attempts: 1 }])
@@ -270,7 +270,7 @@ test('pauses when the deck is archived and resumes with the same answer after re
   await expect(page.locator('.learn-practice-area [role="alert"]')).toContainText('Not quite')
   const sessionUrl = page.url()
 
-  await page.getByRole('link', { name: 'Library', exact: true }).click()
+  await navigateFromMenu(page, 'Library')
   await libraryAction(page, 'Archive deck', 'Book options')
   await page.locator('.library-dialog').getByRole('button', { name: 'Archive deck' }).click()
   await expect(page.getByRole('heading', { name: 'Your library is empty' })).toBeVisible()
@@ -278,9 +278,8 @@ test('pauses when the deck is archived and resumes with the same answer after re
   await expect(page.getByText('This deck is archived.', { exact: false })).toBeVisible()
   expect(records(backend.db, 'learn_sessions')).toMatchObject([{ status: 'paused', currentAttempts: 1 }])
   await page.getByRole('link', { name: 'Open deck' }).click()
-  await page.getByRole('button', { name: 'Restore deck' }).click()
-  await expect(page.getByText('Deck options', { exact: true })).toBeVisible()
-  await page.getByText('Deck options', { exact: true }).click()
+  await libraryAction(page, 'Restore deck', 'Deck options')
+  await page.locator('.app-menu > summary').click()
   await expect(page.getByRole('button', { name: 'Add word' })).toBeVisible()
   await page.goto(sessionUrl)
   await page.getByRole('button', { name: 'Resume' }).click()

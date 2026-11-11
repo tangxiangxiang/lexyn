@@ -11,6 +11,7 @@ import { useAppearance } from '../../ui/appearance'
 import { connection, signOut, study, writeDailyNewWords } from '../../api/client'
 import { useLibraryQuery } from '../library/useLibraryQuery'
 import { useLibraryAction } from '../library/library-ui'
+import { pronunciationAccent, setPronunciationAccent } from '../../ui/pronunciationAccent'
 
 const { appearance, busy, error, setAppearance } = useAppearance()
 const dailyNewWords = ref(10)
@@ -60,6 +61,20 @@ function saveDailyNewWords(value: number | null) {
         </NRadioGroup>
       </div>
       <NAlert v-if="error" class="settings-error" type="error" role="alert">{{ translateError(error) }}</NAlert>
+    </NCard>
+    <NCard class="settings-card">
+      <div class="setting-row">
+        <span class="setting-icon"><AppIcon name="headphones" /></span>
+        <div class="setting-copy">
+          <h2>{{ t('Preferred pronunciation accent') }}</h2>
+          <p>{{ t('Choose which IPA accent to show while learning.') }}</p>
+        </div>
+        <NRadioGroup name="pronunciation-accent" :aria-label="t('Preferred pronunciation accent')"
+          :value="pronunciationAccent" @update:value="setPronunciationAccent">
+          <NRadioButton value="american">{{ t('American') }}</NRadioButton>
+          <NRadioButton value="british">{{ t('British') }}</NRadioButton>
+        </NRadioGroup>
+      </div>
     </NCard>
     <NCard class="settings-card">
       <div class="setting-row">

@@ -1,22 +1,25 @@
-import { expect, test } from './fixtures'
+import { navigateFromMenu, expect, test } from './fixtures'
 
 test('starts at Library and supports every route and deep-link reload', async ({ page }) => {
   const errors: Error[] = []
   page.on('pageerror', (error) => errors.push(error))
   await page.goto('/')
-  await expect(page).toHaveURL(/\/library$/)
+  await expect(page).toHaveURL(/\/study$/)
   await expect(page.getByRole('heading', { name: 'Your library is empty' })).toBeVisible()
   await expect(page.locator('.service-status')).toHaveCount(0)
 
   const navigation = page.getByRole('navigation', { name: 'Main navigation' })
   for (const title of ['Learn', 'Review', 'Progress', 'Settings', 'Library']) {
     const link = navigation.getByRole('link', { name: title })
-    await link.click()
+    await expect(link).toBeHidden()
+    await navigateFromMenu(page, title)
     await expect(page).toHaveURL(new RegExp(`/${title.toLowerCase()}$`))
     await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible()
-    await expect(link).toHaveAttribute('aria-current', 'page')
     await page.reload()
     await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible()
+    await navigation.locator('summary').click()
+    await expect(link).toHaveAttribute('aria-current', 'page')
+    await navigation.locator('summary').click()
   }
   expect(errors).toEqual([])
 })
@@ -74,7 +77,7 @@ for (const [name, width, height] of [
     await page.goto('/library')
     await expect(page.getByRole('heading', { level: 1, name: 'Library' })).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
-    await page.getByRole('navigation').getByRole('link', { name: 'Settings' }).click()
+    await navigateFromMenu(page, 'Settings')
     await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
   })

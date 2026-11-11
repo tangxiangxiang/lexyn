@@ -1,5 +1,5 @@
 import type { Locator, Page } from '@playwright/test'
-import { expect, fillMeaning, test, writeStudy } from './fixtures'
+import { navigateFromMenu, expect, fillMeaning, test, writeStudy } from './fixtures'
 
 async function fits(page: Page, width: number) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
@@ -10,7 +10,7 @@ for (const [width, height, touch] of [[320, 740, true], [375, 812, true], [768, 
     test.use({ viewport: { width, height }, hasTouch: touch, isMobile: touch })
     test('fits the study, account and backup screens and accepts touch or keyboard input', async ({ page }) => {
       const activate = (control: Locator) => touch ? control.tap() : control.click()
-      const nav = (name: string) => activate(page.getByRole('navigation').getByRole('link', { name, exact: true }))
+      const nav = (name: string) => navigateFromMenu(page, name, touch)
       await page.goto('/library')
       await expect(page.getByRole('heading', { level: 1, name: 'Library' })).toBeVisible()
       await fits(page, width)
@@ -21,7 +21,7 @@ for (const [width, height, touch] of [[320, 740, true], [375, 812, true], [768, 
       await activate(page.getByRole('link', { name: 'Responsive fixture', exact: true }))
       await expect(page.getByRole('heading', { level: 1, name: 'Responsive fixture' })).toBeVisible()
       await fits(page, width)
-      await activate(page.getByText('Deck options', { exact: true }))
+      await activate(page.locator('.app-menu > summary'))
       await activate(page.getByRole('button', { name: 'Add word' }))
       await page.getByLabel('Term', { exact: true }).fill('deterministic')
       await fillMeaning(page, '确定性', 'adj.')
@@ -32,7 +32,7 @@ for (const [width, height, touch] of [[320, 740, true], [375, 812, true], [768, 
         term: longWord, meaning: '长释义 '.repeat(60) + 'uninterrupted'.repeat(20),
       }])).ok()).toBe(true)
       await page.reload()
-      const picker = page.getByLabel('Study list')
+      const picker = page.getByRole('combobox', { name: 'Study list', exact: true })
       await expect(picker.locator('option')).toHaveCount(2)
       const first = await picker.inputValue()
       const nextList = page.getByRole('button', { name: 'Next list' })
@@ -43,7 +43,7 @@ for (const [width, height, touch] of [[320, 740, true], [375, 812, true], [768, 
       if (touch) {
         await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
         const wordList = await page.getByRole('list', { name: 'Words', exact: true }).boundingBox()
-        const menu = await page.getByRole('navigation').boundingBox()
+        const menu = await page.getByRole('group', { name: 'Study actions' }).boundingBox()
         expect(wordList!.y + wordList!.height).toBeLessThanOrEqual(menu!.y)
       }
       await picker.selectOption(first)

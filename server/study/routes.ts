@@ -5,14 +5,16 @@ import type { AuthEnv, createAuthApi } from '../auth/routes.ts'
 import { fields, integer, InvalidInput, isUuid, object, validateTimezone } from '../../shared/contracts/validation.ts'
 import { stableJson } from '../../shared/contracts/json.ts'
 import { cleanDictionaryMeaning, cleanDictionaryReference, cleanPhonetics } from '../../shared/domain/dictionary.ts'
-import { LibraryError, listSizes, type DeckInput, type EntryInput } from '../../shared/domain/library.ts'
+import { LibraryError, listSizes, type DeckInput, type Entry, type EntryInput } from '../../shared/domain/library.ts'
 import { importFields, parseImport, previewImport, type FieldMapping, type ImportCandidate, type ImportedInput } from '../../shared/domain/library-import.ts'
-import { reviewRatings } from '../../shared/domain/review.ts'
+import { reviewCardId, reviewRatings } from '../../shared/domain/review.ts'
 import { createReviewScheduler, schedulerConfigSnapshot, type ReviewScheduler } from '../../shared/srs/scheduler.ts'
 import { createLearnService } from './learn.ts'
 import { createLibraryService } from './library.ts'
 import { createReviewService } from './review.ts'
 import { createStudyStore, StudyError } from './store.ts'
+import { studyActivity } from './activity.ts'
+import { dayBounds, weekStart } from './calendar.ts'
 
 type Validator<T> = (value: unknown) => T
 const invalid = (message = 'Invalid request arguments.'): never => { throw new InvalidInput(message) }
@@ -102,6 +104,49 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
     'library/decks': get([offset, limit], library.listDecks),
     'library/lists': get([id], library.getLists),
     'library/list': get([id, id], library.getList),
+    'library/words': get([id, offset, limit, choice('all', 'learned', 'unlearned', 'today', 'week'),
+      choice('added', 'learned', 'alphabetical'), optId], (deckId, from, size, filter, sort, anchor) => {
+      const deck = store.deck(deckId)
+      if (!deck) return null
+      const timezone = store.settings().timezone
+      const now = clock()
+      const [today] = dayBounds(now, timezone)
+      const week = weekStart(now, timezone)
+      const learnedAt = "json_extract(progress.body, '$.firstCompletedAt')"
+      const practicedAt = "json_extract(progress.body, '$.lastPracticedAt')"
+      const addedAt = "json_extract(entries.body, '$.createdAt')"
+      const source = 'FROM entries LEFT JOIN learn_progress AS progress ON progress.entry_id=entries.id WHERE entries.deck_id=@deckId AND active_term IS NOT NULL'
+      const totals = store.db.prepare(`SELECT count(*) AS "all", count(${learnedAt}) AS learned,
+        count(CASE WHEN ${practicedAt} BETWEEN @today AND @now THEN 1 END) AS today,
+        count(CASE WHEN ${practicedAt} BETWEEN @week AND @now THEN 1 END) AS week ${source}`)
+        .get({ deckId, today, week, now }) as { all: number; learned: number; today: number; week: number }
+      const counts = { ...totals, unlearned: totals.all - totals.learned }
+      const conditions = {
+        all: '', learned: `AND ${learnedAt} IS NOT NULL`, unlearned: `AND ${learnedAt} IS NULL`,
+        today: `AND ${practicedAt} BETWEEN @today AND @now`, week: `AND ${practicedAt} BETWEEN @week AND @now`,
+      }
+      const condition = conditions[filter]
+      const date = sort === 'learned' ? learnedAt : addedAt
+      const order = sort === 'alphabetical' ? 'active_term, entries.id' : `${date} DESC, active_term, entries.id`
+      const params = filter === 'today' ? { deckId, today, now } : filter === 'week' ? { deckId, week, now } : { deckId }
+      const anchorPosition = anchor ? store.db.prepare(`
+        SELECT position FROM (
+          SELECT entries.id, row_number() OVER (ORDER BY ${order}) - 1 AS position ${source} ${condition}
+        ) WHERE id=@anchor`).pluck().get({ ...params, anchor }) as number | undefined : undefined
+      const rows = store.db.prepare(`SELECT entries.body, ${date} AS groupedAt ${source} ${condition}
+        ORDER BY ${order} LIMIT @size OFFSET @from`).all({ ...params, size, from }) as { body: string; groupedAt: number | null }[]
+      const entries = rows.map(({ body, groupedAt }) => ({ entry: JSON.parse(body) as Entry, groupedAt }))
+      return { deck, count: counts[filter], counts, entries, timezone, anchorPosition }
+    }, true),
+    'library/word-detail': get([id, id], (deckId, entryId) => {
+      const entry = store.entry(entryId)
+      if (!entry || entry.deckId !== deckId || entry.deletedAt !== undefined) return null
+      const cardId = reviewCardId(entryId)
+      const reviews = store.db.prepare('SELECT reviewed_at FROM review_events WHERE card_id=? ORDER BY reviewed_at DESC, id DESC LIMIT 10')
+        .pluck().all(cardId) as number[]
+      return { entry, reviews, nextDueAt: store.card(cardId)?.dueAt,
+        learnedAt: store.entryProgress(entryId)?.firstCompletedAt, archived: store.deck(deckId)?.archivedAt !== undefined }
+    }),
     'library/rename-list': post([id, id, text(100)], library.renameList),
     'library/deck': get([id, text(240), choice('active', 'missing', 'dictionary', 'review', 'removed', 'all'), offset, limit], library.getDeck),
     'library/create-deck': post([deckInput], (input) => library.createDeck(input, clock())),
@@ -147,6 +192,7 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
     'review/score': post([id, cardId, choice(...reviewRatings), version],
       (id, card, rating, revision) => review.score(id, card, rating, revision, clock())),
     'progress/overview': get([], () => review.overview(undefined, clock())),
+    'progress/activity': get([], () => studyActivity(store, clock())),
     'settings/owner': get([], store.settings),
     'settings/daily': post([num(1, 100)], (daily) => store.saveSettings(daily, store.settings().timezone)),
     'settings/timezone': post([validateTimezone], (zone) => store.saveSettings(store.settings().dailyNewWords, zone)),

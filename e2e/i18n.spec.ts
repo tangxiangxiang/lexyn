@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { expect, test } from './fixtures'
+import { navigateFromMenu, expect, test } from './fixtures'
 
 test.use({ initialOwner: false, englishUI: false, locale: 'en-US', viewport: { width: 320, height: 740 } })
 
@@ -17,18 +17,18 @@ test('defaults to Simplified Chinese, switches without reload and remembers the 
   await page.getByLabel('确认密码').fill(password)
   await page.getByRole('button', { name: '创建管理员' }).click()
   await expect(page.getByRole('heading', { name: '词库为空' })).toBeVisible()
-  await page.getByRole('link', { name: '设置', exact: true }).click()
+  await navigateFromMenu(page, '设置')
   await page.getByText('English', { exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
   await expect(page.locator('html')).toHaveAttribute('lang', 'en')
   await expect(page).toHaveTitle('Settings · Lexyn')
   await page.reload()
   await expect(page.getByRole('radio', { name: 'English' })).toBeChecked()
-  await page.getByRole('link', { name: 'Progress', exact: true }).click()
+  await navigateFromMenu(page, 'Progress')
   await expect(page.getByText('Learned for the first time today')).toBeVisible()
-  await page.getByRole('link', { name: 'Settings', exact: true }).click()
+  await navigateFromMenu(page, 'Settings')
   await page.getByText('简体中文', { exact: true }).click()
-  await page.getByRole('link', { name: '复习', exact: true }).click()
+  await navigateFromMenu(page, '复习')
   await expect(page.getByText('待首次回忆')).toBeVisible()
   await expect(page).toHaveTitle('复习 · Lexyn')
 })

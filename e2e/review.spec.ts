@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test'
-import { expect, libraryAction, test, writeStudy } from './fixtures'
+import { navigateFromMenu, expect, libraryAction, test, writeStudy } from './fixtures'
 import type Database from 'better-sqlite3'
 import type { ReviewCard, ReviewEvent, ReviewSession } from '../shared/domain/review'
 import { createReviewScheduler, rebuildCardFromEvents, restoreCard, schedulerGrades } from '../shared/srs/scheduler'
@@ -63,7 +63,7 @@ function readReview(db: Database.Database) {
 }
 
 async function openReview(page: Page) {
-  await page.getByRole('link', { name: 'Review', exact: true }).click()
+  await navigateFromMenu(page, 'Review')
   await expect(page.getByRole('heading', { name: 'Review', exact: true })).toBeVisible()
 }
 
@@ -177,7 +177,7 @@ test('learns from Library, restores a revealed answer and scores on the server w
   expect(readReview(backend.db)).toEqual({ events, cards, sessions })
   expect(backend.db.prepare('SELECT count(*) FROM practice_events').pluck().get()).toBe(1)
 
-  await page.getByRole('link', { name: 'Progress', exact: true }).click()
+  await navigateFromMenu(page, 'Progress')
   await expect(stat(page, 'Learned for the first time today')).toHaveText('1')
   await expect(stat(page, 'Reviews rated today')).toHaveText('1')
   await expect(stat(page, 'Due reviews')).toHaveText('0')

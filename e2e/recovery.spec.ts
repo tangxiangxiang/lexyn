@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { serve } from '@hono/node-server'
 import type { Page } from '@playwright/test'
-import { expect, libraryAction, password, signIn, test, username } from './fixtures'
+import { navigateFromMenu, expect, libraryAction, password, signIn, test, username } from './fixtures'
 import { createApp } from '../server/app'
 import { lockDataDirectory, openDatabase } from '../server/db/database'
 import type { LibraryExport } from '../shared/contracts/library'
@@ -51,9 +51,9 @@ async function start(dataDir: string, port = 0) {
   } }
 }
 
-const settings = (page: Page) => page.getByRole('navigation').getByRole('link', { name: 'Settings' }).click()
+const settings = (page: Page) => navigateFromMenu(page, 'Settings')
 async function newDeck(page: Page, name: string, csv: string) {
-  await page.getByRole('navigation').getByRole('link', { name: 'Library' }).click()
+  await navigateFromMenu(page, 'Library')
   await page.getByRole('button', { name: 'New deck' }).click()
   await page.getByLabel('Deck name').fill(name)
   await page.getByRole('button', { name: 'Save', exact: true }).click()
@@ -77,7 +77,7 @@ async function study(page: Page, amount: number) {
     await expect(page.getByRole('heading', { name: spelling, exact: true })).toHaveCount(0)
   }
   await expect(page.getByText('Session complete', { exact: true })).toBeVisible()
-  await page.getByRole('navigation').getByRole('link', { name: 'Review' }).click()
+  await navigateFromMenu(page, 'Review')
   await page.getByRole('button', { name: 'Start review' }).click()
   for (let index = 0; index < amount; index++) {
     await page.getByRole('button', { name: 'Show answer' }).click()
@@ -108,12 +108,12 @@ test('restores a server JSON export with archived and removed history for fresh 
     await page.goto('/library')
     await newDeck(page, 'JSON current deck', 'consensus,共识\nquorum,法定人数\nreplica,副本')
     await study(page, 3)
-    await page.getByRole('navigation').getByRole('link', { name: 'Library' }).click()
+    await navigateFromMenu(page, 'Library')
     await page.getByRole('link', { name: 'JSON current deck', exact: true }).click()
     await libraryAction(page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'quorum', exact: true }) }), 'Remove word')
     await page.locator('.library-dialog').getByRole('button', { name: 'Remove word' }).click()
     await newDeck(page, 'JSON archived deck', 'wal,日志')
-    await page.getByRole('link', { name: 'Back to Library' }).click()
+    await navigateFromMenu(page, 'Library')
     await libraryAction(page.getByRole('listitem').filter({ has: page.getByRole('link', { name: 'JSON archived deck', exact: true }) }), 'Archive deck', 'Book options')
     await page.locator('.library-dialog').getByRole('button', { name: 'Archive deck' }).click()
     await settings(page)

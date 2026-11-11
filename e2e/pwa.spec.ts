@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { serve } from '@hono/node-server'
 import type { Page } from '@playwright/test'
-import { expect, libraryAction, fillMeaning, password, signIn, studyRequest, test, username } from './fixtures'
+import { navigateFromMenu, expect, libraryAction, fillMeaning, password, signIn, studyRequest, test, username } from './fixtures'
 import { createApp } from '../server/app'
 import { initializeOwner } from '../server/auth/owner'
 import { openDatabase } from '../server/db/database'
@@ -136,7 +136,7 @@ test('stages a new shell while open, retains the old shell on install failure an
     await signIn(page)
     await createWord(page, 'PWA update data')
     await copyOne(page)
-    await page.getByRole('link', { name: 'Review', exact: true }).click()
+    await navigateFromMenu(page, 'Review')
     await rateGood(page)
     expect(await counts(page)).toEqual([1, 1])
     const path = join(web, 'sw.js')

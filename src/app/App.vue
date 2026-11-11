@@ -5,13 +5,20 @@ import { darkTheme, NAlert, NButton, NConfigProvider, zhCN, dateZhCN, type Globa
 import { RouterLink, RouterView } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import AuthPage from '../features/auth/AuthPage.vue'
-import { navigation } from '../router'
 import { provideAppearance } from '../ui/appearance'
 import { checkSession, connection, refreshStudy, session, setupRequired } from '../api/client'
 import { pwaUpdateWaiting } from '../pwa'
 
 const { locale } = useI18n()
 const { dark } = provideAppearance()
+const studyModes = [
+  { path: '/study', title: 'Current book', icon: 'library' },
+  { path: '/library', title: 'Library', icon: 'library' },
+  { path: '/learn', title: 'Learn', icon: 'learn' },
+  { path: '/review', title: 'Review', icon: 'review' },
+  { path: '/progress', title: 'Progress', icon: 'progress' },
+  { path: '/settings', title: 'Settings', icon: 'settings' },
+] as const
 const themeOverrides = computed<GlobalThemeOverrides>(() => ({
   common: {
     primaryColor: dark.value ? '#a5d4b8' : '#285b47',
@@ -51,22 +58,27 @@ onUnmounted(() => {
   <NConfigProvider :theme="dark ? darkTheme : null" :theme-overrides="themeOverrides"
     :locale="locale === 'zh' ? zhCN : undefined" :date-locale="locale === 'zh' ? dateZhCN : undefined">
     <AuthPage v-if="!session" :dark="dark" :service-status="t(serviceStatus)" @retry="reconnect" />
-    <div v-else class="app-shell" :data-theme="dark ? 'dark' : 'light'">
+    <div v-else class="app-shell" :class="{ 'reader-shell': $route.name === 'library-deck' }" :data-theme="dark ? 'dark' : 'light'">
       <a class="skip-link" href="#main">{{ t('Skip to content') }}</a>
-      <aside class="sidebar">
-        <RouterLink class="brand" to="/library" :aria-label="t('Lexyn home')">
+      <header class="app-header">
+        <RouterLink class="brand" to="/study" :aria-label="t('Lexyn home')">
           <img src="/favicon.svg" width="36" height="36" alt="">
           <span>Lexyn</span>
         </RouterLink>
-        <nav class="nav" :aria-label="t('Main navigation')">
-          <RouterLink v-for="item in navigation" :key="item.path" :to="item.path"
-            :class="{ 'nav-section-active': item.path === '/library' && $route.name === 'library-deck',
-              'nav-study': item.path === '/learn' || item.path === '/review' }">
-            <AppIcon :name="item.icon" />
-            <span>{{ t(item.title) }}</span>
-          </RouterLink>
+        <nav :aria-label="t('Main navigation')">
+          <details class="app-menu" @keydown.esc.stop="($event.currentTarget as HTMLDetailsElement).open = false">
+            <summary class="icon-control" :aria-label="t('Menu')"><AppIcon name="menu" /></summary>
+            <div class="app-menu-links">
+              <RouterLink v-for="mode in studyModes" :key="mode.path" :to="mode.path"
+                @click="($event.currentTarget as HTMLElement).closest('details')?.removeAttribute('open')">
+                <AppIcon :name="mode.icon" />
+                <span>{{ t(mode.title) }}</span>
+              </RouterLink>
+              <div v-if="$route.name === 'library-deck'" id="reader-menu-actions"></div>
+            </div>
+          </details>
         </nav>
-      </aside>
+      </header>
       <div class="main-column">
         <p v-if="pwaUpdateWaiting" class="update-notice">{{ t('New version available. Finish your work, then close all Lexyn tabs and reopen.') }}</p>
         <main id="main" class="main" tabindex="-1">

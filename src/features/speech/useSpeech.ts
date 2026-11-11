@@ -9,7 +9,7 @@ export const speechSettings = {
   save: (values: SpeechSettingsUpdate) => requestSpeech<SpeechSettings>('settings', 'PUT', values),
 }
 
-export function useSpeech(target: () => Target, identity: () => string, preload: () => boolean) {
+export function useSpeech(target: () => Target, identity: () => string, preload: () => boolean, onEnded?: () => void) {
   const state = ref<'idle' | 'loading' | 'ready' | 'playing' | 'error'>('idle')
   const error = ref('')
   let pending: AbortController | undefined
@@ -91,7 +91,11 @@ export function useSpeech(target: () => Target, identity: () => string, preload:
       const audio = new Audio(url)
       player = audio
       audio.playbackRate = playbackRate
-      audio.onended = () => { if (player === audio) release() }
+      audio.onended = () => {
+        if (player !== audio) return
+        release()
+        onEnded?.()
+      }
       audio.onerror = () => { if (player === audio) playbackFailed('Speech could not be played. Try again.') }
       await start(audio)
     } catch (reason) {
@@ -112,5 +116,5 @@ export function useSpeech(target: () => Target, identity: () => string, preload:
     })
   }, { immediate: true })
   onScopeDispose(release)
-  return { state, error, toggle }
+  return { state, error, toggle, stop: release }
 }

@@ -132,36 +132,82 @@
 }
 .library-menu > div .n-button { justify-content: flex-start; min-height: 38px; padding: 5px 9px; }
 .library-menu > div .n-button:hover { background: var(--hover-surface); }
-.reader-actions .library-menu > div, .word-menu > div { inset-inline-start: auto; inset-inline-end: 0; }
-
-.deck-reader { gap: 12px; }
-.deck-reader-topline {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
+.reader-shell {
+  --reader-width: 720px;
+  --reader-gutter: max(8px, env(safe-area-inset-left), env(safe-area-inset-right));
+  --reader-surface: #fff;
+  --reader-row: #f4f8fb;
+  --reader-cover: #e9eef2;
+  --reader-muted: #647181;
+  color: #263447;
+  background: var(--reader-surface);
 }
-.deck-reader-topline .library-back { white-space: nowrap; font-size: .9rem; }
-.deck-name-muted { min-width: 0; overflow: hidden; color: var(--muted); font-size: .82rem; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
-.deck-reader-count { margin: -5px 0 0; text-align: center; }
-.reader-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; }
-.reader-actions > .n-button { min-width: 38px; }
+.reader-shell[data-theme="dark"] {
+  --reader-surface: var(--paper);
+  --reader-row: #222d2b;
+  --reader-cover: #2b3635;
+  --reader-muted: #aab7b4;
+  color: var(--ink);
+}
+.reader-shell .app-header {
+  position: absolute;
+  z-index: 6;
+  top: calc(8px + env(safe-area-inset-top));
+  left: calc(max(var(--reader-gutter), (100% - var(--reader-width)) / 2) + 5px);
+  padding: 0;
+}
+.reader-shell .brand { display: none; }
+.reader-shell .app-menu-links { inset-inline: 0 auto; }
+.reader-menu-actions { display: grid; border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
+.reader-menu-actions .n-button { justify-content: flex-start; min-height: 44px; padding-inline: 12px; color: var(--muted); }
+.reader-shell .main { padding: 0 var(--reader-gutter) calc(76px + env(safe-area-inset-bottom)); }
+.reader-shell .main > .n-alert, .reader-shell .update-notice { margin-inline-start: 50px; }
+.deck-reader { max-width: var(--reader-width); gap: 10px; }
+.reader-dock {
+  position: fixed;
+  z-index: 5;
+  inset: auto 0 0;
+  max-width: var(--reader-width);
+  margin-inline: auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px;
+  padding: 8px max(14px, var(--reader-gutter)) calc(8px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--reader-row);
+  background: var(--reader-surface);
+}
+.reader-list-chip {
+  min-width: 0;
+  min-height: 44px;
+  overflow: hidden;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--reader-row);
+  color: inherit;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.reader-actions { display: flex; align-items: center; justify-content: flex-end; gap: 3px; min-width: 0; }
+.reader-actions:first-child { margin-inline-start: auto; }
 
 .list-reader-toolbar {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: 54px 14% minmax(0, 1fr) 14% 54px;
   align-items: center;
-  gap: 7px;
+  gap: 2px;
   min-width: 0;
-  padding-block: 5px;
-  border-block: 1px solid var(--line);
+  padding-block: 8px;
 }
-.list-step { min-width: 38px; min-height: 38px; font-size: 1.3rem; }
-.list-current-heading { justify-self: center; max-width: min(100%, 260px); min-width: 0; margin: 0; }
-.list-current { max-width: 100%; min-width: 0; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.reader-learn-link { justify-self: end; color: var(--accent); font-size: .85rem; font-weight: 650; text-decoration: none; white-space: nowrap; }
-.reader-learn-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.list-step:disabled { opacity: .26; cursor: default; background: transparent; }
+.list-step:first-child { grid-column: 2; }
+.list-current, .reader-toolbar-title { grid-column: 3; min-width: 0; text-align: center; overflow-wrap: anywhere; }
+.list-current { min-height: 44px; border: 0; color: inherit; background: transparent; font: inherit; font-size: 1.125rem; font-weight: 650; cursor: pointer; }
+.list-current span { font-size: .8em; }
+.reader-search { grid-column: 5; }
 .list-reader-hidden-select {
   position: absolute;
   width: 1px;
@@ -172,7 +218,6 @@
   white-space: nowrap;
   border: 0;
 }
-.list-reader-meta { margin: -3px 0 0; color: var(--muted); font-size: .8rem; text-align: center; }
 .list-picker-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
@@ -198,19 +243,27 @@
 .list-picker-option span, .list-picker-option small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-picker-option small { color: var(--muted); font-size: .72rem; }
 
-.vocabulary-list { list-style: none; margin: 0; padding: 0 clamp(10px, 3vw, 24px); min-width: 0; }
-.vocabulary-list > li + li { border-top: 1px solid var(--line); }
+.vocabulary-list { display: grid; gap: 8px; list-style: none; margin: 0; padding: 0; min-width: 0; }
 .vocabulary-row {
   display: grid;
-  grid-template-columns: 2rem minmax(0, .95fr) minmax(0, 1.25fr) auto;
-  align-items: start;
-  gap: clamp(8px, 2vw, 18px);
-  padding-block: 15px;
+  grid-template-columns: 32px minmax(0, .78fr) minmax(0, 1.22fr);
+  align-items: center;
+  gap: clamp(5px, 1vw, 12px);
+  min-height: 72px;
+  padding: 5px 6px;
+  border-radius: 10px;
+  background: var(--reader-row);
 }
 .word-side, .word-meaning { min-width: 0; }
+.word-side { grid-column: 2; grid-row: 1; }
+.word-side .phonetics { font-size: .8rem; color: var(--reader-muted); }
 .vocabulary-row h3 { margin: 0 0 4px; font-size: clamp(1.1rem, 2.5vw, 1.4rem); font-weight: 620; line-height: 1.25; overflow-wrap: anywhere; }
-.word-meaning { line-height: 1.6; overflow-wrap: anywhere; }
+.word-meaning { grid-column: 3; grid-row: 1; position: relative; align-content: center; min-height: 62px; padding: 5px 6px; line-height: 1.35; overflow-wrap: anywhere; }
 .word-meaning .library-preserve { margin: 0; }
+.word-meaning .dictionary-group.dictionary-compact:not(.dictionary-no-pos) {
+  grid-template-columns: fit-content(2.4rem) minmax(0, 1fr);
+  gap: .25rem;
+}
 .meaning-toggle {
   margin-bottom: 5px;
   padding: 1px 0;
@@ -222,25 +275,18 @@
   cursor: pointer;
 }
 .meaning-toggle:hover { text-decoration: underline; text-underline-offset: 3px; }
-.word-number { margin-top: 4px; color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
-.word-menu summary { justify-content: center; min-width: 40px; font-size: 1.15rem; }
+.word-number, .word-menu { grid-column: 1; grid-row: 1; align-self: start; }
+.word-number, .word-menu summary { justify-content: center; text-align: center; color: var(--reader-muted); font-size: .85rem; font-variant-numeric: tabular-nums; }
+.word-menu summary { padding: 0; min-height: 44px; }
 .word-menu summary::after { content: none; }
-
-@media (max-width: 720px) {
-  .reader-actions .library-menu > div { inset-inline-start: 0; inset-inline-end: auto; }
-}
-
+.word-menu > div { inset-inline: 0 auto; }
+.word-meaning.meaning-hidden { border-radius: 8px; background: var(--reader-cover); }
+.word-meaning .meaning-toggle { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; color: var(--reader-muted); border-radius: inherit; }
+.word-meaning:not(.meaning-hidden) .meaning-toggle { font-size: 0; }
+.word-meaning .meaning-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (max-width: 520px) {
-  .deck-reader-topline { grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; }
-  .deck-reader-topline .library-back { max-width: 24px; overflow: hidden; font-size: 0; }
-  .deck-reader-topline .library-back::before { content: '←'; font-size: 1rem; }
-  .list-reader-toolbar { grid-template-columns: auto minmax(0, 1fr) auto; }
-  .reader-learn-link { grid-column: 1 / -1; justify-self: center; padding-block: 3px; }
-  .list-reader-meta { text-align: start; }
-  .vocabulary-list { padding-inline: 8px; }
-  .vocabulary-row { grid-template-columns: 1.5rem minmax(0, .95fr) minmax(0, 1.2fr) auto; gap: 7px; padding-block: 13px; }
-  .vocabulary-row h3 { font-size: 1.05rem; }
-  .word-number { font-size: .72rem; }
+  .vocabulary-row h3 { font-size: 1.125rem; }
+  .word-meaning { font-size: .875rem; }
   .library-menu summary, .library-menu > div .n-button { min-height: 44px; }
 }
 
