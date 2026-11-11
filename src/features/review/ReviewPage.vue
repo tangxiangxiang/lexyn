@@ -125,7 +125,6 @@ function selectDeck(id: string | null) {
   <section class="page review-page">
     <header class="page-intro">
       <h1>{{ t('Review') }}</h1>
-      <p>{{ t('Recall the English word, then rate how well you remembered it.') }}</p>
     </header>
 
     <NAlert v-if="error" type="error" role="alert">{{ translateError(error) }} <NButton text @click="reloadRound(); reloadOverview()">{{ t('Reload session') }}</NButton></NAlert>

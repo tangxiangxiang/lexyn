@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t, translateError } from '../../i18n/useI18n'
 import { computed, ref } from 'vue'
-import { NAlert, NButton, NCard, NEmpty, NProgress } from 'naive-ui'
+import { NAlert, NButton, NCard, NEmpty } from 'naive-ui'
 import { RouterLink } from 'vue-router'
 import type { Deck } from '../../../shared/domain/library'
 import AppIcon from '../../components/AppIcon.vue'
@@ -83,14 +83,11 @@ function exportAll() {
         <article class="book">
           <div class="library-row-copy">
             <h2><RouterLink :to="{ name: 'library-deck', params: { deckId: deck.id } }">{{ deck.name }}</RouterLink></h2>
-            <p v-if="deck.description" class="library-preserve">{{ deck.description }}</p>
             <p class="library-muted">{{ wordCount(count) }} · {{ t('{count} lists', { count: listCount }) }}</p>
           </div>
-          <div v-if="listCount" class="book-progress">
-            <NProgress type="line" :percentage="Math.round(learnedCount / count * 100)" :show-indicator="false"
-              :aria-label="t('Learning progress')" />
-            <p class="library-muted">{{ t('{completed} of {total} lists complete', { completed: completedLists, total: listCount }) }}</p>
-          </div>
+          <p v-if="listCount" class="library-muted book-progress-copy">
+            {{ t('{completed} of {total} lists complete', { completed: completedLists, total: listCount }) }}
+          </p>
           <div class="library-actions">
             <NButton v-if="archived" secondary :disabled="busy" @click="restore(deck.id)">{{ t('Restore deck') }}</NButton>
             <template v-else>

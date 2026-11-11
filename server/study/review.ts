@@ -13,6 +13,11 @@ export function createReviewService(store: StudyStore, engine: ReviewScheduler) 
     const progress = store.progress()
     const learned = new Set(progress.filter((row) => row.firstCompletedAt !== undefined).map(({ entryId }) => entryId))
     const cards = new Map(store.cards().map((card) => [card.id, card]))
+    const listByEntry = new Map<string, string>()
+    for (const row of store.db.prepare('SELECT entry_id AS entryId, list_id AS listId FROM deck_list_members').all() as { entryId: string; listId: string }[]) {
+      listByEntry.set(row.entryId, row.listId)
+    }
+    const listStats = new Map<string, { due: number; firstRecall: number; nextDueAt?: number }>()
     const items: { entryId: string; dueAt: number; priority: number }[] = []
     let due = 0
     let firstRecall = 0
@@ -20,19 +25,26 @@ export function createReviewService(store: StudyStore, engine: ReviewScheduler) 
     for (const entry of store.entries(deckId)) {
       if (entry.deletedAt !== undefined || !active.has(entry.deckId) || !learned.has(entry.id)
         || !recallPrompt(entry.meaning, entry.term)) continue
+      const listId = listByEntry.get(entry.id)
+      const stats = listId ? (listStats.get(listId) ?? { due: 0, firstRecall: 0 }) : undefined
       const card = cards.get(reviewCardId(entry.id))
       if (!card) {
         firstRecall++
+        if (stats) stats.firstRecall++
         items.push({ entryId: entry.id, dueAt: 0, priority: 2 })
       } else if (card.dueAt <= now) {
         due++
+        if (stats) stats.due++
         items.push({ entryId: entry.id, dueAt: card.dueAt, priority: card.scheduleStatus === 'learning' ? 0 : 1 })
       } else {
         nextDueAt = Math.min(nextDueAt ?? card.dueAt, card.dueAt)
+        if (stats) stats.nextDueAt = Math.min(stats.nextDueAt ?? card.dueAt, card.dueAt)
       }
+      if (listId) listStats.set(listId, stats!)
     }
     items.sort((a, b) => a.priority - b.priority || a.dueAt - b.dueAt || a.entryId.localeCompare(b.entryId))
-    return { decks, items, due, firstRecall, nextDueAt, progress }
+    return { decks, items, due, firstRecall, nextDueAt, progress,
+      listStats: [...listStats].map(([listId, stats]) => ({ listId, ...stats })) }
   }
 
   function target(id: string | undefined, now: number) {
@@ -91,13 +103,14 @@ export function createReviewService(store: StudyStore, engine: ReviewScheduler) 
 
   return {
     overview(deckId: string | undefined, now: number) {
-      const { decks, due, firstRecall, nextDueAt, progress } = queue(deckId, now)
+      const { decks, due, firstRecall, nextDueAt, progress, listStats } = queue(deckId, now)
       const [start, nextDayAt] = dayBounds(now, store.settings().timezone)
       const ratedToday = store.db.prepare(`SELECT count(*) FROM review_events
         WHERE reviewed_at >= ? AND reviewed_at < ?
         ${deckId ? "AND json_extract(body, '$.deckId')=?" : ''}`).pluck()
         .get(start, nextDayAt, ...(deckId ? [deckId] : [])) as number
       return { decks, due, firstRecall, nextDueAt, ratedToday, nextDayAt, checkedAt: now,
+        listStats,
         learnedToday: progress.filter(({ firstCompletedAt }) => firstCompletedAt !== undefined
           && firstCompletedAt >= start && firstCompletedAt < nextDayAt).length }
     },

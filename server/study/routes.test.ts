@@ -222,7 +222,10 @@ test('commits PracticeEvent, progress, session and receipt together and enforces
   expect(count('practice_events')).toBe(1)
   expect(count('review_cards')).toBe(0)
   expect((await post('learn/start', [deck.id, 'copy', [other.id], true])).status).toBe(409)
-  expect(await data(get('progress/overview'))).toMatchObject({ learnedToday: 1, firstRecall: 1, ratedToday: 0 })
+  const listOverview = await data(get('progress/overview'))
+  expect(listOverview).toMatchObject({ learnedToday: 1, firstRecall: 1, ratedToday: 0 })
+  const { lists } = await data(get('library/lists', [deck.id]))
+  expect(listOverview.listStats).toEqual([expect.objectContaining({ listId: lists[0].id, due: 0, firstRecall: 1 })])
   now += 1000
   expect(await data(get('learn/daily', [deck.id]))).toMatchObject({ completedToday: 0, candidates: [other] })
   expect(await data(get('progress/overview'))).toMatchObject({ learnedToday: 0, firstRecall: 1 })

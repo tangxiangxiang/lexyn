@@ -3,8 +3,9 @@ import DictionaryMeaningView from '../dictionary/DictionaryMeaningView.vue'
 import PhoneticsView from '../dictionary/PhoneticsView.vue'
 import { t, translateError } from '../../i18n/useI18n'
 import { computed, ref, watch } from 'vue'
-import { NAlert, NButton, NEmpty, NInput, NProgress, NTag } from 'naive-ui'
+import { NAlert, NButton, NEmpty, NInput, NTag } from 'naive-ui'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import AppIcon from '../../components/AppIcon.vue'
 import { hasRecallPrompt, type DeckListSummary, type Entry } from '../../../shared/domain/library'
 import { hasFinalMeaning } from '../../../shared/domain/dictionary'
 import { session } from '../../api/client'
@@ -37,6 +38,8 @@ const removing = ref<Entry>()
 const importing = ref(false)
 const renaming = ref<DeckListSummary>()
 const newListName = ref('')
+const listPickerOpen = ref(false)
+const hiddenMeanings = ref<Set<string>>(new Set())
 const feedback = ref('')
 const page = ref(1)
 const pageSize = 50
@@ -57,6 +60,7 @@ const selected = computed(() => lists.value.find(({ id }) => id === route.query.
   ?? lists.value.find(({ id }) => id === overview.value?.nextListId))
 watch(selected, (list) => {
   if (!list || list.deckId !== props.deckId) return
+  hiddenMeanings.value = new Set()
   rememberedList.value = list.id
   try { localStorage.setItem(storageKey.value, list.id) } catch { /* The URL keeps the current selection. */ }
 })
@@ -95,7 +99,24 @@ function closeSearch() {
 
 function selectList(id: string) {
   closeSearch()
+  listPickerOpen.value = false
   void router.replace({ query: { ...route.query, listId: id } })
+}
+
+function selectNative(event: Event) {
+  const id = (event.currentTarget as HTMLSelectElement).value
+  if (id) selectList(id)
+}
+
+function toggleMeaning(id: string) {
+  const next = new Set(hiddenMeanings.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  hiddenMeanings.value = next
+}
+
+function meaningHidden(id: string) {
+  return hiddenMeanings.value.has(id)
 }
 
 function listStatus(list: DeckListSummary) {
@@ -142,7 +163,6 @@ function exportDeck() {
 
 <template>
   <section class="page library-page deck-reader">
-    <RouterLink to="/library" class="library-back">{{ t('← Back to Library') }}</RouterLink>
     <NAlert v-if="loadError" type="error" role="alert">
       {{ t('Lexyn could not read this deck.') }} <NButton text @click="reload">{{ t('Retry') }}</NButton>
     </NAlert>
@@ -152,14 +172,11 @@ function exportDeck() {
       <p>{{ t('This deck is unavailable on the server.') }}</p>
     </template>
     <template v-else>
-      <header class="page-intro library-heading">
-        <div class="library-row-copy">
-          <h1>{{ overview.deck.name }}</h1>
-          <p v-if="overview.deck.description" class="library-preserve">{{ overview.deck.description }}</p>
-          <p>{{ wordCount(activeCount) }} · {{ t('{completed} of {total} lists complete', { completed: overview.completedLists, total: overview.listCount }) }}</p>
-        </div>
-        <div class="library-actions reader-actions">
-          <NButton v-if="!searching" text @click="searching = true">{{ t('Search and filters') }}</NButton>
+      <div class="deck-reader-topline">
+        <RouterLink to="/library" class="library-back">{{ t('← Back to Library') }}</RouterLink>
+        <h1 class="deck-name-muted">{{ overview.deck.name }}</h1>
+        <div class="reader-actions">
+          <NButton v-if="!searching" text :aria-label="t('Search and filters')" @click="searching = true"><AppIcon name="search" /></NButton>
           <NButton v-else text @click="closeSearch">{{ t('Back to study list') }}</NButton>
           <NButton v-if="archived" secondary :disabled="busy" @click="restoreDeck">{{ t('Restore deck') }}</NButton>
           <details name="library-options" class="library-menu">
@@ -174,7 +191,8 @@ function exportDeck() {
             </div>
           </details>
         </div>
-      </header>
+      </div>
+      <p class="deck-reader-count library-muted">{{ wordCount(activeCount) }} · {{ t('{count} lists', { count: overview.listCount }) }}</p>
       <NAlert v-if="archived" type="info">{{ t('This deck is archived. Restore it to add, edit, or restore words.') }}</NAlert>
       <NAlert v-if="error" type="error" role="alert">{{ translateError(error) }}</NAlert>
       <NAlert v-if="feedback" type="success" aria-live="polite">{{ t(feedback) }}</NAlert>
@@ -188,30 +206,38 @@ function exportDeck() {
           <VocabularyBatch v-if="!archived" :key="deckId" :deck-id="deckId" :show-entry="filter === 'missing' || filter === 'dictionary'" />
         </div>
       </template>
-      <div v-else-if="selected" class="study-plan">
-        <div class="list-picker">
-          <label for="deck-list">{{ t('Study list') }}</label>
-          <select id="deck-list" :value="selected.id" @change="selectList(($event.target as HTMLSelectElement).value)">
-            <option v-for="list in lists" :key="list.id" :value="list.id">
-              {{ list.name }} · {{ t(listStatus(list)) }}
-            </option>
-          </select>
-          <div class="library-actions">
-            <NButton :disabled="!previous" @click="previous && selectList(previous.id)">{{ t('Previous list') }}</NButton>
-            <NButton :disabled="!next" @click="next && selectList(next.id)">{{ t('Next list') }}</NButton>
+      <div v-else-if="selected" class="list-reader-toolbar">
+        <NButton class="list-step" :disabled="!previous" :aria-label="t('Previous list')" @click="previous && selectList(previous.id)">‹</NButton>
+        <h2 class="list-current-heading">
+          <NButton class="list-current" @click="listPickerOpen = true">
+            {{ selected.name }} <span aria-hidden="true">⌄</span>
+          </NButton>
+        </h2>
+        <!-- Keep a native control in the accessibility tree and for keyboard/selectOption users. -->
+        <select id="deck-list" class="list-reader-hidden-select" :value="selected.id" :aria-label="t('Study list')" @change="selectNative">
+          <option v-for="list in lists" :key="list.id" :value="list.id">{{ list.name }}</option>
+        </select>
+        <NButton class="list-step" :disabled="!next" :aria-label="t('Next list')" @click="next && selectList(next.id)">›</NButton>
+        <RouterLink v-if="!archived" class="reader-learn-link" :to="{ path: '/learn', query: { deckId, listId: selected.id } }">
+          {{ t(selected.id === overview.activeListId || (selected.learned > 0 && selected.learned < selected.count)
+            ? 'Continue learning' : selected.learned === selected.count ? 'Practice this list' : 'Start learning') }}
+        </RouterLink>
+        <LibraryDialog v-if="listPickerOpen" :title="t('Choose a study list')" @close="listPickerOpen = false">
+          <div class="list-picker-grid" role="list" :aria-label="t('Study lists')">
+            <button v-for="list in lists" :key="list.id" type="button"
+              class="list-picker-option" :class="{ selected: list.id === selected.id }"
+              :aria-current="list.id === selected.id ? 'true' : undefined" @click="selectList(list.id)">
+              <span>{{ list.name }}</span>
+              <small>{{ list.learned === list.count ? '✓' : list.learned ? '·' : '' }} {{ t(listStatus(list)) }}</small>
+            </button>
           </div>
-        </div>
-        <div class="list-focus">
-          <h2>{{ selected.name }}</h2>
-          <p>{{ t('{learned} of {total} words learned', { learned: selected.learned, total: selected.count }) }} · {{ t(listStatus(selected)) }}</p>
-          <NProgress type="line" :percentage="Math.round(selected.learned / selected.count * 100)"
-            :show-indicator="false" :aria-label="t('Learning progress')" />
-          <RouterLink v-if="!archived" class="book-continue" :to="{ path: '/learn', query: { deckId, listId: selected.id } }">
-            {{ t(selected.id === overview.activeListId || (selected.learned > 0 && selected.learned < selected.count)
-              ? 'Continue learning' : selected.learned === selected.count ? 'Practice this list' : 'Start learning') }}
-          </RouterLink>
-        </div>
+        </LibraryDialog>
       </div>
+      <p v-if="selected" class="list-reader-meta">
+        {{ t('{learned} of {total} words learned', { learned: selected.learned, total: selected.count }) }}
+        · {{ t(listStatus(selected)) }}
+        <span aria-hidden="true"> · {{ t('{completed} of {total} lists complete', { completed: overview.completedLists, total: overview.listCount }) }}</span>
+      </p>
 
       <NAlert v-if="searching ? searchError : listError" type="error" role="alert">
         {{ t('Lexyn could not read these words.') }} <NButton text @click="searching ? reloadSearch() : reloadWords()">{{ t('Retry') }}</NButton>
@@ -226,12 +252,18 @@ function exportDeck() {
         <li v-for="(entry, row) in visible" :key="entry.id" role="listitem">
           <article class="vocabulary-row">
             <span class="word-number" aria-hidden="true">{{ String((searching ? (page - 1) * pageSize : 0) + row + 1).padStart(2, '0') }}</span>
-            <div class="library-row-copy">
+            <div class="word-side">
               <h3>{{ entry.term }}</h3>
               <PhoneticsView :phonetics="entry.phonetics" :legacy="entry.phonetic" />
-              <DictionaryMeaningView v-if="hasFinalMeaning(entry.dictionaryMeaning)" :meaning="entry.dictionaryMeaning!" compact />
-              <p v-else-if="hasRecallPrompt(entry)" class="library-preserve">{{ entry.meaning }}</p>
-              <NTag v-else-if="searching" size="small" type="warning">{{ t('Needs meaning') }}</NTag>
+            </div>
+            <div class="word-meaning">
+              <button v-if="hasRecallPrompt(entry)" type="button" class="meaning-toggle" :aria-expanded="!meaningHidden(entry.id)"
+                @click="toggleMeaning(entry.id)">{{ meaningHidden(entry.id) ? t('Show meaning') : t('Hide meaning') }}</button>
+              <template v-if="!meaningHidden(entry.id)">
+                <DictionaryMeaningView v-if="hasFinalMeaning(entry.dictionaryMeaning)" :meaning="entry.dictionaryMeaning!" compact />
+                <p v-else-if="hasRecallPrompt(entry)" class="library-preserve">{{ entry.meaning }}</p>
+                <NTag v-else-if="searching" size="small" type="warning">{{ t('Needs meaning') }}</NTag>
+              </template>
               <p v-if="searching && entry.termChangedAt !== undefined" class="library-muted">
                 {{ t('Spelling changed. Existing review history and schedule are retained.') }}
               </p>
