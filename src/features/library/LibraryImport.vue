@@ -7,11 +7,14 @@ import {
   type FieldMapping, type ImportSource, type TextMode,
 } from './import'
 import LibraryDialog from './LibraryDialog.vue'
+import ListSizeField from './ListSizeField.vue'
 import { useLibraryAction } from './library-ui'
+import { listSizes } from '../../../shared/domain/library'
 import { library } from './api'
 import { useLibraryQuery } from './useLibraryQuery'
 
-const props = defineProps<{ deckId: string }>()
+const props = defineProps<{ deckId: string; listSize?: number }>()
+const listSize = ref<number | null>(props.listSize ?? listSizes.default)
 const emit = defineEmits<{ close: []; imported: [message: string] }>()
 const file = shallowRef<Awaited<ReturnType<typeof readImportFile>>>()
 const source = shallowRef<ImportSource>()
@@ -66,7 +69,7 @@ function changeTextMode(mode: TextMode) {
 async function confirm() {
   const current = preview.value.result
   if (!current || !rowsToWrite.value) return
-  const result = await run(() => library.importEntries(props.deckId, current.candidates, overwrite.value ? 'overwrite' : 'skip'))
+  const result = await run(() => library.importEntries(props.deckId, current.candidates, overwrite.value ? 'overwrite' : 'skip', listSize.value ?? undefined))
   if (result) emit('imported', t('Imported {added} new, updated {updated}, skipped {duplicates} duplicates and {invalid} invalid rows.', {
     added: result.added, updated: result.updated, duplicates: current.valid - result.added - result.updated, invalid: current.invalid,
   }))
@@ -77,6 +80,7 @@ async function confirm() {
   <LibraryDialog :title="t('Import words')" :busy="busy" @close="emit('close')">
     <div class="library-form">
       <p class="library-dialog-copy">{{ t('Choose a UTF-8 TXT or CSV file up to 5 MiB and 10,000 records.') }}</p>
+      <ListSizeField id="import-list-size" v-model="listSize" :disabled="busy" />
       <label for="library-import-file">{{ t('Vocabulary file') }}</label>
       <input id="library-import-file" type="file" accept=".txt,.csv,text/plain,text/csv"
         :disabled="busy" @change="selectFile">

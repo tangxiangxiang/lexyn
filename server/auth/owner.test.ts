@@ -123,7 +123,7 @@ test.each([
   const db = new Database(':memory:')
   try {
     migrate(db)
-    db.exec(`DROP TABLE vocabulary_jobs; DROP TABLE speech_credentials; DROP TABLE speech_settings; DROP TABLE speech_assets;
+    db.exec(`DROP TABLE deck_list_members; DROP TABLE deck_lists; DROP INDEX entries_id_deck; DROP TABLE vocabulary_jobs; DROP TABLE speech_credentials; DROP TABLE speech_settings; DROP TABLE speech_assets;
       ALTER TABLE owner DROP COLUMN username; PRAGMA user_version=3;`)
     const id = randomUUID()
     const salt = randomBytes(32).toString('hex')

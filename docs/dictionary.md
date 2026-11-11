@@ -39,13 +39,13 @@ node dist-server/server/dictionary/cli.js /import/ecdict.csv <ECDICT-commit-SHA>
 
 应使用 docker compose run --rm 或等价方式，确保同一个 lexyn-data 卷可写且主应用未占用维护锁。不要把约 66MB CSV 复制进容器内只有 32MB 的 /tmp tmpfs。导入完成后重启 Lexyn。
 
-SQLite Online Backup 只备份 lexyn.sqlite，不自动包含 dictionaries/ecdict.sqlite。可在 NAS 上单独备份该词典文件，或者保存官方 CSV 与 SHA-256，以便重新生成。词条已保存的释义与来源标签仍会进入 Lexyn JSON v5。
+SQLite Online Backup 只备份 lexyn.sqlite，不自动包含 dictionaries/ecdict.sqlite。可在 NAS 上单独备份该词典文件，或者保存官方 CSV 与 SHA-256，以便重新生成。词条已保存的释义与来源标签仍会进入 Lexyn JSON v6。
 
 ## ECDICT 与最终释义
 
 - ECDICT 是可选、只读的生成参考。日常 Library、Learn、Review 和词条编辑器不直接展示原始词典内容，也不会把解析后的 ECDICT 内容直接当作最终释义。
 - 新词保存后，服务器异步调用 MiniMax。词典已安装时，请求同时包含该词的 ECDICT 原文；未安装或未收录时，MiniMax 可独立生成。词典导入、查询和 AI 释义都不会改写 ECDICT 数据库。
-- 词条保存的 `Entry.meaning` 是结构化释义的完整文本投影。`Entry.dictionaryMeaning` 保存最终的词性、完整义项、来源和生成元信息；`Entry.dictionaryReference` 保存用于该词的 ECDICT 原文快照及版本。两者随 JSON v5 导出和恢复。
+- 词条保存的 `Entry.meaning` 是结构化释义的完整文本投影。`Entry.dictionaryMeaning` 保存最终的词性、完整义项、来源和生成元信息；`Entry.dictionaryReference` 保存用于该词的 ECDICT 原文快照及版本。两者随 JSON v6 导出和恢复。
 - ECDICT 解析依据显式词性与领域标记，兼容 CSV 中实际换行和字面 `\\n`。标准列表中的逗号可拆为多个义项；括号、引号和有歧义的子句保留为原始片段。解析结果只作为 AI 输入，最终结构由模型生成并经服务端校验。
 - 再次优化释义时，服务端读取当前最新保存的完整释义作为主要输入，并附上 ECDICT 原文作为辅助依据。人工修改与 AI 生成没有来源优先级；每次保存递增 Entry revision。若 AI 响应返回时 revision 已变化，会拒绝写入并保留较新的释义。
 - Library、Learn 和 Review 读取最终完整释义；Review 正面显示完整中文释义，揭晓后显示英文答案和完整释义。旧 `explanation`、`example`、`note` 字段仍可兼容保存，但不在日常学习界面展示。

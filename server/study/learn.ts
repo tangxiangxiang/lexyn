@@ -61,37 +61,51 @@ export function createLearnService(store: StudyStore) {
 
   const oldest = (a: { createdAt: number; id: string }, b: typeof a) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)
 
+  function entriesInScope(deckId?: string, listId?: string) {
+    if (!listId) return store.entries(deckId).sort(oldest)
+    if (!deckId || !store.lists.get(deckId, listId)) throw new StudyError('List not found in this deck.', 404)
+    return store.lists.entries(deckId, listId)
+  }
+
   return {
-    getDailyState(deckId: string | undefined, now: number) {
+    getDailyState(deckId: string | undefined, now: number, listId?: string) {
       const { quota, completedToday, day, progress } = dayState(now)
       const decks = store.decks().filter((deck) => deck.archivedAt === undefined)
       const deckIds = new Set(decks.filter((deck) => !deckId || deckId === deck.id).map(({ id }) => id))
       const learned = new Map(progress.filter((item) => item.firstCompletedAt !== undefined).map((item) => [item.entryId, item]))
       const activeSession = store.openLearn()
       const locked = new Set(activeSession?.entryIds.slice(activeSession.currentIndex))
-      const entries = store.entries(deckId).filter((entry) => entry.deletedAt === undefined && deckIds.has(entry.deckId))
+      const entries = entriesInScope(deckId, listId).filter((entry) => entry.deletedAt === undefined && deckIds.has(entry.deckId))
       const candidates = entries.filter((entry) => !learned.has(entry.id) && !locked.has(entry.id))
-        .sort(oldest).slice(0, Math.max(0, quota - completedToday))
+        .slice(0, Math.max(0, quota - completedToday))
       const practiceCandidates = entries.filter((entry) => learned.has(entry.id))
         .sort((a, b) => learned.get(a.id)!.lastPracticedAt - learned.get(b.id)!.lastPracticedAt || oldest(a, b)).slice(0, 10)
-      return { quota, completedToday, day, decks, activeSession, candidates, practiceCandidates }
+      const lists = listId && deckId ? store.lists.summaries(deckId) : []
+      const list = lists.find(({ id }) => id === listId)
+      const nextList = list && lists.find(({ order, count }) => order > list.order && count > 0)
+      return { quota, completedToday, day, decks, activeSession, candidates, practiceCandidates, list, nextList }
     },
-    startSession(deckId: string, mode: LearnMode, entryIds: string[], newWords: boolean, now: number) {
+    startSession(deckId: string, mode: LearnMode, entryIds: string[], newWords: boolean, now: number, listId?: string) {
       const active = store.openLearn()
-      if (active) return active
+      if (active) {
+        if (listId && (active.listId !== listId || active.deckId !== deckId)) {
+          throw new StudyError('Another Learn session is open. Continue or end it before starting this list.', 409)
+        }
+        return active
+      }
       const deck = store.deck(deckId)
       if (!deck || deck.archivedAt !== undefined) throw new StudyError('Choose an active deck to start learning.')
       const expected = new Set(entryIds)
       const { quota, completedToday, day, progress } = dayState(now)
       const completed = new Set(progress.filter((item) => item.firstCompletedAt !== undefined).map(({ entryId }) => entryId))
-      const available = store.entries(deckId).filter((entry) => expected.has(entry.id) && entry.deletedAt === undefined
-        && completed.has(entry.id) !== newWords).sort(oldest)
+      const available = entriesInScope(deckId, listId).filter((entry) => expected.has(entry.id) && entry.deletedAt === undefined
+        && completed.has(entry.id) !== newWords)
       if (!available.length || available.length !== expected.size || expected.size !== entryIds.length) {
         throw new StudyError('The selected words changed. Reload today’s Learn list.', 409)
       }
       if (newWords && completedToday + available.length > quota) throw new StudyError('The daily new word limit changed.', 409)
       return store.saveLearn({
-        sessionId: randomUUID(), deckId, mode, entryIds: available.map(({ id }) => id), currentIndex: 0,
+        sessionId: randomUUID(), deckId, listId, mode, entryIds: available.map(({ id }) => id), currentIndex: 0,
         startedAt: now, updatedAt: now, status: 'active', dailyKey: day,
         firstCompletedEntryIds: [], currentEntryStartedAt: now, currentAttempts: 0, currentAssisted: false,
       })

@@ -2,7 +2,7 @@ import { libraryFormatVersion, type LibraryExport } from '../contracts/library.t
 import { fields, integer, isUuid, object, time, validateCardState, validateEntity, validateEvent, validateTimezone } from '../contracts/validation.ts'
 import { stableJson } from '../contracts/json.ts'
 import type { LearnProgress } from '../domain/learning.ts'
-import type { Entry } from '../domain/library.ts'
+import { listSizes, type DeckList, type DeckListMember, type Entry } from '../domain/library.ts'
 import { REVIEW_DIRECTION, reviewCardId, type ReviewCard, type ReviewCardState, type ReviewEvent } from '../domain/review.ts'
 import { createReviewScheduler, rebuildCardFromEvents, schedulerConfigSnapshot } from '../srs/scheduler.ts'
 
@@ -46,9 +46,10 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
   try { raw = JSON.parse(text) } catch { throw new Error('The file is not valid JSON.') }
   const root = object(raw)
   const version = root.formatVersion
-  requireValid(root.format === 'lexyn-library' && (version === 4 || version === libraryFormatVersion),
-    'Only Lexyn library backup formats v4 and v5 are supported.')
-  fields(root, 'format formatVersion exportedAt metadata decks entries practiceEvents learnProgress settings reviewCards reviewEvents schedulerConfig')
+  requireValid(root.format === 'lexyn-library' && (version === 4 || version === 5 || version === libraryFormatVersion),
+    'Only Lexyn library backup formats v4, v5 and v6 are supported.')
+  fields(root, 'format formatVersion exportedAt metadata decks entries practiceEvents learnProgress settings reviewCards reviewEvents schedulerConfig'
+    + (version === libraryFormatVersion ? ' lists listMembers' : ''))
   const meta = object(root.metadata)
   fields(meta, 'scope')
   requireValid(meta.scope === 'library' || meta.scope === 'deck', 'Unsupported backup metadata.')
@@ -60,7 +61,10 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
   const config = schedulerConfigSnapshot(await createReviewScheduler())
   requireValid(stableJson(root.schedulerConfig) === stableJson(config), 'Unsupported scheduler configuration.')
 
-  const decks = rows<LibraryExport['decks'][number]>(root.decks, 'decks', (deck) => validateEntity(deck, 'deck'))
+  const decks = rows<LibraryExport['decks'][number]>(root.decks, 'decks', (deck) => {
+    requireValid(version === libraryFormatVersion || deck.listSize === undefined, 'List size requires backup format v6.')
+    return validateEntity(deck, 'deck')
+  })
   const deckIds = new Set(decks.map(({ id }) => id))
   requireValid(meta.scope !== 'deck' || decks.length === 1, 'A deck backup must contain exactly one deck.')
   const activeTerms = new Set<string>()
@@ -76,6 +80,30 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
     return id
   })
   const entryDecks = new Map(entries.map(({ id, deckId }) => [id, deckId]))
+  if (version === libraryFormatVersion) {
+    const lists = rows<DeckList>(root.lists, 'deck lists', (list) => {
+      fields(list, 'id deckId name order')
+      requireValid(isUuid(list.id) && isUuid(list.deckId) && deckIds.has(list.deckId)
+        && typeof list.name === 'string' && list.name === list.name.trim() && list.name.length > 0 && list.name.length <= 100
+        && integer(list.order, 1), 'Invalid deck list.')
+      return list.id
+    })
+    uniqueSlots(lists, ({ deckId, order }) => `${deckId}:${order}`, 'Duplicate list order in a deck.')
+    const listCounts = new Map<string, number>()
+    for (const { deckId } of lists) listCounts.set(deckId, (listCounts.get(deckId) ?? 0) + 1)
+    requireValid(lists.every(({ deckId, order }) => order <= listCounts.get(deckId)!), 'List order is incomplete.')
+    const listDecks = new Map(lists.map(({ id, deckId }) => [id, deckId]))
+    const members = rows<DeckListMember>(root.listMembers, 'list members', (member) => {
+      fields(member, 'entryId listId position')
+      requireValid(isUuid(member.entryId) && isUuid(member.listId) && listDecks.has(member.listId)
+        && entryDecks.get(member.entryId) === listDecks.get(member.listId)
+        && integer(member.position, 1, listSizes.max), 'Invalid list membership.')
+      return member.entryId
+    })
+    uniqueSlots(members, ({ listId, position }) => `${listId}:${position}`, 'Duplicate position in a list.')
+    requireValid(members.length === entries.length && new Set(members.map(({ listId }) => listId)).size === lists.length,
+      'List membership is incomplete.')
+  }
   function checkEntry(record: Record<string, unknown>) {
     requireValid(isUuid(record.entryId) && isUuid(record.deckId) && entryDecks.get(record.entryId) === record.deckId,
       'Study history refers to a missing entry or the wrong deck.')

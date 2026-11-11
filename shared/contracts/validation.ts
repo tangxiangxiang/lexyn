@@ -1,6 +1,6 @@
 import { stableJson } from './json.ts'
 import { cleanDictionaryMeaning, cleanDictionaryReference, cleanPhonetics } from '../domain/dictionary.ts'
-import { cleanDeck, cleanEntry, normalizeTerm } from '../domain/library.ts'
+import { cleanDeck, listSizes, cleanEntry, normalizeTerm } from '../domain/library.ts'
 import { REVIEW_DIRECTION, reviewCardId, type ReviewCardState, type ReviewSchedulerConfig } from '../domain/review.ts'
 import { isReviewRating, restoreCard } from '../srs/scheduler.ts'
 
@@ -54,11 +54,12 @@ export function validateEntity(payload: Record<string, unknown>, kind: 'deck' | 
     throw new InvalidInput('Invalid library record revision or time.')
   }
   if (kind === 'deck') {
-    fields(payload, 'id name description createdAt updatedAt revision archivedAt')
+    fields(payload, 'id name description listSize createdAt updatedAt revision archivedAt')
     const name = string(payload, 'name')!
     const description = string(payload, 'description', true)
     const clean = cleanDeck({ name, description })
-    if (name !== clean.name || description !== clean.description || (payload.archivedAt !== undefined && !time(payload.archivedAt))) {
+    if ((payload.listSize !== undefined && !integer(payload.listSize, listSizes.min, listSizes.max))
+      || name !== clean.name || description !== clean.description || (payload.archivedAt !== undefined && !time(payload.archivedAt))) {
       throw new InvalidInput('Invalid deck fields.')
     }
     return payload.id

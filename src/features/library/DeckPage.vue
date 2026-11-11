@@ -3,20 +3,24 @@ import DictionaryMeaningView from '../dictionary/DictionaryMeaningView.vue'
 import PhoneticsView from '../dictionary/PhoneticsView.vue'
 import { t, translateError } from '../../i18n/useI18n'
 import { computed, ref, watch } from 'vue'
-import { NAlert, NButton, NCard, NEmpty, NInput, NTag } from 'naive-ui'
-import { RouterLink } from 'vue-router'
-import { hasRecallPrompt, type Entry } from '../../../shared/domain/library'
+import { NAlert, NButton, NEmpty, NInput, NProgress, NTag } from 'naive-ui'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { hasRecallPrompt, type DeckListSummary, type Entry } from '../../../shared/domain/library'
 import { hasFinalMeaning } from '../../../shared/domain/dictionary'
+import { session } from '../../api/client'
 import LibraryConfirm from './LibraryConfirm.vue'
+import LibraryDialog from './LibraryDialog.vue'
 import LibraryEditor from './LibraryEditor.vue'
 import LibraryImport from './LibraryImport.vue'
 import VocabularyBatch from './VocabularyBatch.vue'
-import { downloadLibrary, useLibraryAction, wordCount } from './library-ui'
+import { closeLibraryMenu, downloadLibrary, useLibraryAction, wordCount } from './library-ui'
 import { library } from './api'
 import type { StudyEndpoints } from '../../../shared/contracts/study'
 import { useLibraryQuery } from './useLibraryQuery'
 
 const props = defineProps<{ deckId: string }>()
+const route = useRoute()
+const router = useRouter()
 const { busy, error, run } = useLibraryAction()
 const filter = ref<'active' | 'missing' | 'dictionary' | 'review' | 'removed'>('active')
 const filters = [
@@ -26,38 +30,92 @@ const filters = [
   { value: 'review', label: 'Suggested check' },
   { value: 'removed', label: 'Removed' },
 ] as const
+const searching = ref(false)
 const query = ref('')
 const editing = ref<{ entry?: Entry }>()
 const removing = ref<Entry>()
 const importing = ref(false)
+const renaming = ref<DeckListSummary>()
+const newListName = ref('')
 const feedback = ref('')
 const page = ref(1)
 const pageSize = 50
-const args = computed<StudyEndpoints['library/deck']['args']>(() =>
-  [props.deckId, query.value.slice(0, 240), filter.value, (page.value - 1) * pageSize, pageSize])
-const { data, error: loadError, reload } = useLibraryQuery(args, library.getDeck, (key) => key[0])
-const activeCount = computed(() => data.value?.activeCount ?? 0)
-const pages = computed(() => Math.max(1, Math.ceil((data.value?.total ?? 0) / pageSize)))
-const visible = computed(() => data.value?.entries ?? [])
-const archived = computed(() => data.value?.deck.archivedAt !== undefined)
+
+const { data: overview, error: loadError, reload } = useLibraryQuery(() => props.deckId, library.getLists)
+const lists = computed(() => overview.value?.lists.filter(({ count }) => count > 0) ?? [])
+const activeCount = computed(() => lists.value.reduce((sum, list) => sum + list.count, 0))
+const archived = computed(() => overview.value?.deck.archivedAt !== undefined)
+const storageKey = computed(() => `lexyn.list.${session.value?.ownerId}.${props.deckId}`)
+const rememberedList = ref<string>()
+watch(storageKey, (key) => {
+  try { rememberedList.value = localStorage.getItem(key) ?? undefined }
+  catch { rememberedList.value = undefined }
+}, { immediate: true, flush: 'sync' })
+
+const selected = computed(() => lists.value.find(({ id }) => id === route.query.listId)
+  ?? lists.value.find(({ id }) => id === rememberedList.value)
+  ?? lists.value.find(({ id }) => id === overview.value?.nextListId))
+watch(selected, (list) => {
+  if (!list || list.deckId !== props.deckId) return
+  rememberedList.value = list.id
+  try { localStorage.setItem(storageKey.value, list.id) } catch { /* The URL keeps the current selection. */ }
+})
+const index = computed(() => lists.value.findIndex(({ id }) => id === selected.value?.id))
+const previous = computed(() => lists.value[index.value - 1])
+const next = computed(() => lists.value[index.value + 1])
+const listArgs = computed<StudyEndpoints['library/list']['args'] | undefined>(() =>
+  !searching.value && selected.value ? [props.deckId, selected.value.id] : undefined)
+const { data: words, error: listError, reload: reloadWords } = useLibraryQuery(listArgs,
+  (args, signal) => args ? library.getList(args, signal) : Promise.resolve([]), (args) => args?.[1])
+const searchArgs = computed<StudyEndpoints['library/deck']['args'] | undefined>(() => searching.value
+  ? [props.deckId, query.value.slice(0, 240), filter.value, (page.value - 1) * pageSize, pageSize] : undefined)
+const { data: results, error: searchError, reload: reloadSearch } = useLibraryQuery(searchArgs,
+  (args, signal) => args ? library.getDeck(args, signal) : Promise.resolve(null), (args) => JSON.stringify(args))
+const visible = computed(() => searching.value ? results.value?.entries : words.value)
+const pages = computed(() => Math.max(1, Math.ceil((results.value?.total ?? 0) / pageSize)))
 
 watch([query, filter], () => { page.value = 1 }, { flush: 'sync' })
-watch(data, (value) => { if (value) page.value = Math.min(page.value, pages.value) })
+watch(results, (value) => { if (value) page.value = Math.min(page.value, pages.value) })
 watch(() => props.deckId, () => {
   editing.value = undefined
   removing.value = undefined
+  renaming.value = undefined
   importing.value = false
   feedback.value = ''
   error.value = ''
+  closeSearch()
+}, { flush: 'sync' })
+
+function closeSearch() {
+  searching.value = false
   filter.value = 'active'
   query.value = ''
   page.value = 1
-}, { flush: 'sync' })
+}
+
+function selectList(id: string) {
+  closeSearch()
+  void router.replace({ query: { ...route.query, listId: id } })
+}
+
+function listStatus(list: DeckListSummary) {
+  return list.learned === list.count ? 'List complete'
+    : list.learned || list.id === overview.value?.activeListId ? 'Learning in progress' : 'Not started'
+}
 
 function saved(message: string) {
   feedback.value = message
   editing.value = undefined
   importing.value = false
+}
+
+async function saveListName() {
+  if (!renaming.value) return
+  const list = renaming.value
+  if (await run(async () => { await library.renameList(props.deckId, list.id, newListName.value); return true })) {
+    renaming.value = undefined
+    feedback.value = 'List renamed.'
+  }
 }
 
 function restoreWord(entry: Entry) {
@@ -69,7 +127,7 @@ function restoreWord(entry: Entry) {
 
 function restoreDeck() {
   void run(async () => {
-    await library.setDeckArchived(props.deckId, false, data.value!.deck.revision)
+    await library.setDeckArchived(props.deckId, false, overview.value!.deck.revision)
     feedback.value = 'Deck restored.'
   })
 }
@@ -83,89 +141,134 @@ function exportDeck() {
 </script>
 
 <template>
-  <section class="page library-page">
+  <section class="page library-page deck-reader">
     <RouterLink to="/library" class="library-back">{{ t('← Back to Library') }}</RouterLink>
     <NAlert v-if="loadError" type="error" role="alert">
       {{ t('Lexyn could not read this deck.') }} <NButton text @click="reload">{{ t('Retry') }}</NButton>
     </NAlert>
-    <p v-else-if="data === undefined" class="library-muted" aria-live="polite">{{ t('Loading deck…') }}</p>
-    <template v-else-if="data === null">
-      <header class="page-intro library-heading"><h1>{{ t('Deck not found') }}</h1></header>
-      <NCard>{{ t('This deck is unavailable on the server.') }}</NCard>
+    <p v-else-if="overview === undefined" class="library-muted" aria-live="polite">{{ t('Loading deck…') }}</p>
+    <template v-else-if="overview === null">
+      <header class="page-intro"><h1>{{ t('Deck not found') }}</h1></header>
+      <p>{{ t('This deck is unavailable on the server.') }}</p>
     </template>
     <template v-else>
       <header class="page-intro library-heading">
         <div class="library-row-copy">
-          <h1>{{ data.deck.name }}</h1>
-          <p v-if="data.deck.description" class="library-preserve">{{ data.deck.description }}</p>
-          <p>{{ wordCount(activeCount) }}</p>
+          <h1>{{ overview.deck.name }}</h1>
+          <p v-if="overview.deck.description" class="library-preserve">{{ overview.deck.description }}</p>
+          <p>{{ wordCount(activeCount) }} · {{ t('{completed} of {total} lists complete', { completed: overview.completedLists, total: overview.listCount }) }}</p>
         </div>
-        <div class="library-actions">
-          <NButton :disabled="busy" @click="exportDeck">{{ t('Export deck') }}</NButton>
-          <RouterLink :to="{ path: '/learn', query: { deckId } }" custom v-slot="{ href, navigate }">
-            <NButton tag="a" :href="href" :disabled="archived || activeCount === 0" @click="navigate">{{ t('Start learning') }}</NButton>
-          </RouterLink>
-          <NButton v-if="archived" type="primary" :disabled="busy" @click="restoreDeck">{{ t('Restore deck') }}</NButton>
-          <template v-else>
-            <NButton @click="importing = true">{{ t('Import words') }}</NButton>
-            <NButton type="primary" @click="editing = {}">{{ t('Add word') }}</NButton>
-          </template>
+        <div class="library-actions reader-actions">
+          <NButton v-if="!searching" text @click="searching = true">{{ t('Search and filters') }}</NButton>
+          <NButton v-else text @click="closeSearch">{{ t('Back to study list') }}</NButton>
+          <NButton v-if="archived" secondary :disabled="busy" @click="restoreDeck">{{ t('Restore deck') }}</NButton>
+          <details name="library-options" class="library-menu">
+            <summary>{{ t('Deck options') }}</summary>
+            <div @click="closeLibraryMenu">
+              <template v-if="!archived">
+                <NButton text @click="editing = {}">{{ t('Add word') }}</NButton>
+                <NButton text @click="importing = true">{{ t('Import words') }}</NButton>
+                <NButton v-if="selected" text @click="renaming = selected; newListName = selected.name">{{ t('Rename list') }}</NButton>
+              </template>
+              <NButton text :disabled="busy" @click="exportDeck">{{ t('Export deck') }}</NButton>
+            </div>
+          </details>
         </div>
       </header>
       <NAlert v-if="archived" type="info">{{ t('This deck is archived. Restore it to add, edit, or restore words.') }}</NAlert>
       <NAlert v-if="error" type="error" role="alert">{{ translateError(error) }}</NAlert>
       <NAlert v-if="feedback" type="success" aria-live="polite">{{ t(feedback) }}</NAlert>
-      <NInput v-model:value="query" clearable :placeholder="t('Search words or meanings')"
-        :input-props="{ 'aria-label': t('Search words or meanings'), type: 'search' }" />
-      <div class="library-toolbar" :aria-label="t('Word filters')">
-        <NButton v-for="option in filters" :key="option.value" secondary :aria-pressed="filter === option.value"
-          :type="filter === option.value ? 'primary' : 'default'" @click="filter = option.value">{{ t(option.label) }}</NButton>
-        <VocabularyBatch v-if="!archived" :key="deckId" :deck-id="deckId" :show-entry="filter === 'missing' || filter === 'dictionary'" />
+
+      <template v-if="searching">
+        <NInput v-model:value="query" clearable :placeholder="t('Search words or meanings')"
+          :input-props="{ 'aria-label': t('Search words or meanings'), type: 'search' }" />
+        <div class="library-toolbar" :aria-label="t('Word filters')">
+          <NButton v-for="option in filters" :key="option.value" secondary :aria-pressed="filter === option.value"
+            :type="filter === option.value ? 'primary' : 'default'" @click="filter = option.value">{{ t(option.label) }}</NButton>
+          <VocabularyBatch v-if="!archived" :key="deckId" :deck-id="deckId" :show-entry="filter === 'missing' || filter === 'dictionary'" />
+        </div>
+      </template>
+      <div v-else-if="selected" class="study-plan">
+        <div class="list-picker">
+          <label for="deck-list">{{ t('Study list') }}</label>
+          <select id="deck-list" :value="selected.id" @change="selectList(($event.target as HTMLSelectElement).value)">
+            <option v-for="list in lists" :key="list.id" :value="list.id">
+              {{ list.name }} · {{ t(listStatus(list)) }}
+            </option>
+          </select>
+          <div class="library-actions">
+            <NButton :disabled="!previous" @click="previous && selectList(previous.id)">{{ t('Previous list') }}</NButton>
+            <NButton :disabled="!next" @click="next && selectList(next.id)">{{ t('Next list') }}</NButton>
+          </div>
+        </div>
+        <div class="list-focus">
+          <h2>{{ selected.name }}</h2>
+          <p>{{ t('{learned} of {total} words learned', { learned: selected.learned, total: selected.count }) }} · {{ t(listStatus(selected)) }}</p>
+          <NProgress type="line" :percentage="Math.round(selected.learned / selected.count * 100)"
+            :show-indicator="false" :aria-label="t('Learning progress')" />
+          <RouterLink v-if="!archived" class="book-continue" :to="{ path: '/learn', query: { deckId, listId: selected.id } }">
+            {{ t(selected.id === overview.activeListId || (selected.learned > 0 && selected.learned < selected.count)
+              ? 'Continue learning' : selected.learned === selected.count ? 'Practice this list' : 'Start learning') }}
+          </RouterLink>
+        </div>
       </div>
-      <NCard v-if="!visible.length">
-        <NEmpty :description="query.trim() ? t('No words match this search')
-          : filter === 'removed' ? t('No removed words')
-          : filter === 'review' ? t('No words suggested for checking')
-          : filter === 'dictionary' ? t('No words need full meanings')
-          : filter === 'missing' ? t('No words need a meaning') : t('This deck has no words yet')" />
-      </NCard>
-      <ul v-else class="library-list" :aria-label="t('Words')">
-        <li v-for="entry in visible" :key="entry.id">
-          <NCard size="small" class="library-row-card">
-            <article class="library-row">
-              <div class="library-row-copy">
-                <h2>{{ entry.term }}</h2>
-                <p v-if="entry.termChangedAt !== undefined" class="library-muted">
-                  {{ t('Spelling changed. Existing review history and schedule are retained.') }}
-                </p>
-                <PhoneticsView :phonetics="entry.phonetics" :legacy="entry.phonetic" />
-                <DictionaryMeaningView v-if="hasFinalMeaning(entry.dictionaryMeaning)" :meaning="entry.dictionaryMeaning!" />
-                <p v-else-if="hasRecallPrompt(entry)" class="library-preserve">{{ entry.meaning }}</p>
-                <NTag v-if="!hasRecallPrompt(entry)" size="small" type="warning">{{ t('Needs meaning') }}</NTag>
-              </div>
-              <div v-if="!archived" class="library-actions">
-                <NButton v-if="filter === 'removed'" secondary :disabled="busy" @click="restoreWord(entry)">{{ t('Restore word') }}</NButton>
+
+      <NAlert v-if="searching ? searchError : listError" type="error" role="alert">
+        {{ t('Lexyn could not read these words.') }} <NButton text @click="searching ? reloadSearch() : reloadWords()">{{ t('Retry') }}</NButton>
+      </NAlert>
+      <p v-else-if="!visible && (searching || selected)" class="library-muted" aria-live="polite">{{ t('Loading words…') }}</p>
+      <NEmpty v-else-if="!visible?.length" :description="query.trim() ? t('No words match this search')
+        : searching && filter === 'removed' ? t('No removed words')
+        : searching && filter === 'review' ? t('No words suggested for checking')
+        : searching && filter === 'dictionary' ? t('No words need full meanings')
+        : searching && filter === 'missing' ? t('No words need a meaning') : t('This deck has no words yet')" />
+      <ol v-else class="vocabulary-list" role="list" :aria-label="t('Words')">
+        <li v-for="(entry, row) in visible" :key="entry.id" role="listitem">
+          <article class="vocabulary-row">
+            <span class="word-number" aria-hidden="true">{{ String((searching ? (page - 1) * pageSize : 0) + row + 1).padStart(2, '0') }}</span>
+            <div class="library-row-copy">
+              <h3>{{ entry.term }}</h3>
+              <PhoneticsView :phonetics="entry.phonetics" :legacy="entry.phonetic" />
+              <DictionaryMeaningView v-if="hasFinalMeaning(entry.dictionaryMeaning)" :meaning="entry.dictionaryMeaning!" compact />
+              <p v-else-if="hasRecallPrompt(entry)" class="library-preserve">{{ entry.meaning }}</p>
+              <NTag v-else-if="searching" size="small" type="warning">{{ t('Needs meaning') }}</NTag>
+              <p v-if="searching && entry.termChangedAt !== undefined" class="library-muted">
+                {{ t('Spelling changed. Existing review history and schedule are retained.') }}
+              </p>
+            </div>
+            <details v-if="!archived" name="library-options" class="library-menu word-menu">
+              <summary :aria-label="t('Options for {word}', { word: entry.term })">···</summary>
+              <div @click="closeLibraryMenu">
+                <NButton v-if="entry.deletedAt !== undefined" text :disabled="busy" @click="restoreWord(entry)">{{ t('Restore word') }}</NButton>
                 <template v-else>
-                  <NButton secondary @click="editing = { entry }">{{ t('Edit word') }}</NButton>
-                  <NButton secondary @click="removing = entry">{{ t('Remove word') }}</NButton>
+                  <NButton text @click="editing = { entry }">{{ t('Edit word') }}</NButton>
+                  <NButton text @click="removing = entry">{{ t('Remove word') }}</NButton>
                 </template>
               </div>
-            </article>
-          </NCard>
+            </details>
+          </article>
         </li>
-      </ul>
-      <div v-if="pages > 1" class="library-toolbar" :aria-label="t('Word pages')">
+      </ol>
+      <div v-if="searching && pages > 1" class="library-toolbar" :aria-label="t('Word pages')">
         <NButton :disabled="page === 1" @click="page--">{{ t('Previous') }}</NButton>
         <span class="library-muted">{{ t('Page {page} of {total}', { page, total: pages }) }}</span>
         <NButton :disabled="page === pages" @click="page++">{{ t('Next') }}</NButton>
       </div>
+      <LibraryDialog v-if="renaming" :title="t('Rename list')" @close="renaming = undefined">
+        <form class="library-form" @submit.prevent="saveListName">
+          <label for="study-list-name">{{ t('List name') }}</label>
+          <NInput v-model:value="newListName" :maxlength="100" :input-props="{ id: 'study-list-name' }" />
+          <NAlert v-if="error" type="error">{{ translateError(error) }}</NAlert>
+          <NButton attr-type="submit" type="primary" :disabled="busy || !newListName.trim()">{{ t('Save') }}</NButton>
+        </form>
+      </LibraryDialog>
       <LibraryEditor v-if="editing" :editor="{ type: 'entry', deckId, entry: editing.entry }"
         @close="editing = undefined" @saved="saved" />
       <LibraryConfirm v-if="removing" :title="t('Remove this word?')"
         :description="t('You can restore “{term}” from the Removed view.', { term: removing.term })" :label="t('Remove word')"
         :action="() => library.setEntryRemoved(deckId, removing!.id, true, removing!.revision)"
         @close="removing = undefined" @done="removing = undefined; feedback = 'Word moved to Removed.'" />
-      <LibraryImport v-if="importing" :deck-id="deckId"
+      <LibraryImport v-if="importing" :deck-id="deckId" :list-size="overview.deck.listSize"
         @close="importing = false" @imported="saved" />
     </template>
   </section>

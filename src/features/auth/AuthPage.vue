@@ -153,7 +153,15 @@ async function submit() {
   font-size: 0.9rem;
   font-weight: 700;
 }
-.auth-connection { position: absolute; top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); }
+.auth-connection {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  right: max(12px, env(safe-area-inset-right));
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  font-size: 11px;
+}
 .auth-card {
   width: min(100%, 380px);
   padding: clamp(18px, 6vw, 28px);

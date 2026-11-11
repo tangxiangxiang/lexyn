@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { serve } from '@hono/node-server'
-import { test as base, expect, type Page } from '@playwright/test'
+import { test as base, expect, type Locator, type Page } from '@playwright/test'
 import { createApp } from '../server/app'
 import { createBootstrapState } from '../server/auth/bootstrap'
 import { initializeOwner } from '../server/auth/owner'
@@ -19,7 +19,13 @@ export async function signIn(page: Page) {
   await page.getByLabel('Username', { exact: true }).fill(username)
   await page.getByLabel('Owner password').fill(password)
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect(page.locator('.service-status')).toHaveText('Connected')
+  await expect(page.getByRole('navigation', { name: 'Main navigation' })).toBeVisible()
+}
+
+export async function libraryAction(scope: Page | Locator, action: string, menu?: string) {
+  const summary = menu ? scope.locator('summary').filter({ hasText: menu }) : scope.locator('.word-menu summary')
+  await summary.click()
+  await scope.getByRole('button', { name: action, exact: true }).click()
 }
 
 /** Fill the current structured meaning editor without relying on the legacy short-meaning field. */

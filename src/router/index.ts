@@ -11,9 +11,9 @@ import SettingsPage from '../features/settings/SettingsPage.vue'
 import type { IconName } from '../ui/icons'
 
 export const navigation = [
-  { path: '/library', title: 'Library', icon: 'library', component: LibraryPage },
   { path: '/learn', title: 'Learn', icon: 'learn', component: LearnPage },
   { path: '/review', title: 'Review', icon: 'review', component: ReviewPage },
+  { path: '/library', title: 'Library', icon: 'library', component: LibraryPage },
   { path: '/progress', title: 'Progress', icon: 'progress', component: ProgressPage },
   { path: '/settings', title: 'Settings', icon: 'settings', component: SettingsPage },
 ] satisfies { path: string; title: string; icon: IconName; component: object }[]

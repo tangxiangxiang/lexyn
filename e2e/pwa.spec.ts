@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { serve } from '@hono/node-server'
 import type { Page } from '@playwright/test'
-import { expect, fillMeaning, password, signIn, studyRequest, test, username } from './fixtures'
+import { expect, libraryAction, fillMeaning, password, signIn, studyRequest, test, username } from './fixtures'
 import { createApp } from '../server/app'
 import { initializeOwner } from '../server/auth/owner'
 import { openDatabase } from '../server/db/database'
@@ -17,7 +17,7 @@ async function createWord(page: Page, name: string) {
   await page.getByLabel('Deck name').fill(name)
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   await page.getByRole('link', { name, exact: true }).click()
-  await page.getByRole('button', { name: 'Add word' }).click()
+  await libraryAction(page, 'Add word', 'Deck options')
   await page.getByLabel('Term', { exact: true }).fill('resilience')
   await fillMeaning(page, '韧性', 'n.')
   await page.getByRole('button', { name: 'Save', exact: true }).click()

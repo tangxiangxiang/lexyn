@@ -17,6 +17,7 @@ const details = computed(() => {
     ['Format version', file.formatVersion], ['Exported', new Date(file.exportedAt).toLocaleString(languageTag.value)],
     ['Decks', file.decks.length], ['Archived decks', file.decks.filter((deck) => deck.archivedAt !== undefined).length],
     ['Words', file.entries.length], ['Removed words', file.entries.filter((word) => word.deletedAt !== undefined).length],
+    ...(file.formatVersion === 6 ? [['Study lists', file.lists.length] as const] : []),
     ['Practice events', file.practiceEvents.length], ['Review events', file.reviewEvents.length],
   ] as const
 })

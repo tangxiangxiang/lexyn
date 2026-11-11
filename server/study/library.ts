@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { hasFinalMeaning } from '../../shared/domain/dictionary.ts'
 import { libraryFormatVersion, type LibraryExport } from '../../shared/contracts/library.ts'
 import { stableJson } from '../../shared/contracts/json.ts'
-import { cleanDeck, cleanEntry, normalizeTerm, type Deck, type DeckInput, type Entry, type EntryInput } from '../../shared/domain/library.ts'
+import { cleanDeck, cleanEntry, normalizeTerm, type DeckListSummary, type Deck, type DeckInput, type Entry, type EntryInput } from '../../shared/domain/library.ts'
 import type { LearnProgress, PracticeEvent } from '../../shared/domain/learning.ts'
 import type { ReviewEvent, ReviewSchedulerConfig } from '../../shared/domain/review.ts'
 import { manualMeaningFromImport, type DuplicateMode, type ImportPreview } from '../../shared/domain/library-import.ts'
@@ -17,6 +17,14 @@ function legacyDictionaryReference(entry?: Entry) {
   if (!meaning?.sourceWord || meaning.rawTranslation === undefined) return undefined
   return { sourceWord: meaning.sourceWord, sourceRevision: meaning.sourceRevision, translation: meaning.rawTranslation,
     definition: '', partOfSpeech: '', phonetic: '' }
+}
+
+function listProgress(lists: DeckListSummary[], activeListId?: string) {
+  const active = lists.filter(({ count }) => count > 0)
+  const completed = active.filter(({ count, learned }) => count === learned).length
+  return { listCount: active.length, completedLists: completed,
+    learnedCount: active.reduce((sum, list) => sum + list.learned, 0),
+    activeListId, nextListId: (active.find(({ id }) => id === activeListId) ?? active.find(({ count, learned }) => learned < count) ?? active.at(-1))?.id }
 }
 
 export function createLibraryService(store: StudyStore, config: ReviewSchedulerConfig) {
@@ -78,14 +86,40 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
 
   return {
     listDecks(offset: number, limit: number) {
-      const summaries = new Map(store.decks().map((deck) => [deck.id, { deck, count: 0, modifiedAt: deck.updatedAt }]))
-      for (const entry of store.entries()) {
-        const summary = summaries.get(entry.deckId)!
-        if (entry.deletedAt === undefined) summary.count++
-        summary.modifiedAt = Math.max(summary.modifiedAt, entry.updatedAt)
+      const counts = store.db.prepare(`SELECT deck_id AS deckId, COUNT(active_term) AS count,
+        MAX(json_extract(body, '$.updatedAt')) AS modifiedAt FROM entries GROUP BY deck_id`).all() as { deckId: string; count: number; modifiedAt: number }[]
+      const byDeck = new Map(counts.map((row) => [row.deckId, row]))
+      const lists = new Map<string, DeckListSummary[]>()
+      for (const list of store.lists.summaries()) {
+        const groups = lists.get(list.deckId)
+        if (groups) groups.push(list)
+        else lists.set(list.deckId, [list])
       }
-      return [...summaries.values()].sort((a, b) => b.modifiedAt - a.modifiedAt || a.deck.id.localeCompare(b.deck.id))
+      const session = store.openLearn()
+      return store.decks().map((deck) => {
+        const count = byDeck.get(deck.id)
+        const groups = lists.get(deck.id) ?? []
+        return { deck, count: count?.count ?? 0, modifiedAt: Math.max(deck.updatedAt, count?.modifiedAt ?? 0),
+          ...listProgress(groups, session?.deckId === deck.id ? session.listId : undefined) }
+      }).sort((a, b) => b.modifiedAt - a.modifiedAt || a.deck.id.localeCompare(b.deck.id))
         .slice(offset, offset + limit)
+    },
+    getLists(deckId: string) {
+      const deck = store.deck(deckId)
+      if (!deck) return null
+      const lists = store.lists.summaries(deckId)
+      const session = store.openLearn()
+      return { deck, lists, ...listProgress(lists, session?.deckId === deckId ? session.listId : undefined) }
+    },
+    getList(deckId: string, listId: string) {
+      if (!store.lists.get(deckId, listId)) throw new StudyError('List not found in this deck.', 404)
+      return store.lists.entries(deckId, listId)
+    },
+    renameList(deckId: string, listId: string, name: string) {
+      requireDeck(deckId)
+      if (!name.trim()) throw new StudyError('Enter a list name.')
+      const result = store.db.prepare('UPDATE deck_lists SET name=? WHERE id=? AND deck_id=?').run(name.trim(), listId, deckId)
+      if (!result.changes) throw new StudyError('List not found in this deck.', 404)
     },
     getDeck(id: string, query: string, filter: 'active' | 'missing' | 'dictionary' | 'review' | 'removed' | 'all', offset: number, limit: number) {
       const deck = store.deck(id)
@@ -111,7 +145,7 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
     updateDeck(id: string, input: DeckInput, revision: number, now: number) {
       const deck = requireDeck(id)
       checkRevision(deck, revision)
-      store.saveDeck({ ...revise(deck, now), ...cleanDeck(input) })
+      store.saveDeck({ ...revise(deck, now), ...cleanDeck({ ...input, listSize: input.listSize ?? deck.listSize }) })
     },
     setDeckArchived(id: string, archived: boolean, revision: number, now: number) {
       const deck = requireDeck(id, false)
@@ -124,10 +158,11 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       }
     },
     createEntry(deckId: string, input: EntryInput, now: number) {
-      requireDeck(deckId)
+      const deck = requireDeck(deckId)
       const entry = makeEntry(deckId, input, now)
       unique(deckId, entry.normalizedTerm)
       store.saveEntry(entry)
+      store.lists.append(deck, [entry.id])
       return entry
     },
     updateEntry(deckId: string, id: string, input: EntryInput, revision: number, now: number) {
@@ -146,8 +181,9 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       if (!removed) unique(deckId, entry.normalizedTerm, id)
       store.saveEntry({ ...revise(entry, now), deletedAt: removed ? now : undefined })
     },
-    importEntries(deckId: string, candidates: ImportPreview['candidates'], mode: DuplicateMode, now: number) {
-      requireDeck(deckId)
+    importEntries(deckId: string, candidates: ImportPreview['candidates'], mode: DuplicateMode, now: number, listSize?: number) {
+      const deck = requireDeck(deckId)
+      const newEntries: string[] = []
       const seen = new Set<string>()
       let added = 0
       let updated = 0
@@ -174,10 +210,14 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
           meaningSource: replaceMeaning ? 'manual' : previous?.meaningSource,
           meaningNeedsReview: replaceMeaning ? undefined : previous?.meaningNeedsReview,
         }
-        store.saveEntry(makeEntry(deckId, input, now, previous))
+        const entry = makeEntry(deckId, input, now, previous)
+        store.saveEntry(entry)
         if (previous) updated++
-        else added++
+        else { added++; newEntries.push(entry.id) }
       }
+      const grouping = listSize === undefined ? deck : { ...deck, listSize }
+      if (added && grouping.listSize !== deck.listSize) store.saveDeck(revise(grouping, now))
+      store.lists.append(grouping, newEntries)
       return { added, updated, skipped }
     },
     exportLibrary(deckId?: string): LibraryExport {
@@ -187,7 +227,7 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       return {
         format: 'lexyn-library', formatVersion: libraryFormatVersion, exportedAt: new Date().toISOString(),
         metadata: { scope: deckId ? 'deck' : 'library' },
-        decks, entries,
+        decks, entries, ...store.lists.export(deckId),
         practiceEvents: store.all<PracticeEvent>('SELECT body FROM practice_events').filter(({ entryId }) => ids.has(entryId)),
         learnProgress: store.all<LearnProgress>('SELECT body FROM learn_progress').filter(({ entryId }) => ids.has(entryId)),
         reviewCards: store.cards().filter(({ entryId }) => ids.has(entryId)),

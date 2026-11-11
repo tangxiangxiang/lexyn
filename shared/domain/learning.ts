@@ -23,6 +23,7 @@ export interface LearnProgress {
 }
 
 export interface LearnSession {
+  listId?: string
   sessionId: string
   deckId: string
   mode: LearnMode

@@ -10,6 +10,9 @@ export const library = {
       if (page.length < 200) return decks
     }
   },
+  getLists: (deckId: string, signal?: AbortSignal) => study('library/lists', [deckId], { signal }),
+  getList: (args: StudyEndpoints['library/list']['args'], signal?: AbortSignal) => study('library/list', args, { signal }),
+  renameList: (...args: StudyEndpoints['library/rename-list']['args']) => study('library/rename-list', args, { write: true }),
   getDeck: (args: StudyEndpoints['library/deck']['args'], signal?: AbortSignal) => study('library/deck', args, { signal }),
   createDeck: (...args: StudyEndpoints['library/create-deck']['args']) => study('library/create-deck', args, { write: true }),
   updateDeck: (...args: StudyEndpoints['library/update-deck']['args']) => study('library/update-deck', args, { write: true }),

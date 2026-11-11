@@ -11,10 +11,31 @@ interface LocalEntity {
 export interface DeckInput {
   name: string
   description?: string
+  listSize?: number
 }
 
 export interface Deck extends LocalEntity, DeckInput {
   archivedAt?: number
+}
+
+export const listSizes = { min: 1, default: 30, max: 100 } as const
+
+export interface DeckList {
+  id: string
+  deckId: string
+  name: string
+  order: number
+}
+
+export interface DeckListMember {
+  entryId: string
+  listId: string
+  position: number
+}
+
+export interface DeckListSummary extends DeckList {
+  count: number
+  learned: number
 }
 
 export interface EntryInput {
@@ -66,7 +87,7 @@ function clean(value: string | undefined, limit: number, label: string) {
 export function cleanDeck(input: DeckInput): DeckInput {
   const name = clean(input.name, 100, 'Deck name')
   if (!name) throw new LibraryError('Enter a deck name.')
-  return { name, description: clean(input.description, 1000, 'Description') || undefined }
+  return { name, description: clean(input.description, 1000, 'Description') || undefined, listSize: input.listSize }
 }
 
 export function cleanEntry(input: EntryInput): Omit<EntryInput, 'dictionaryMeaning' | 'dictionaryReference' | 'phonetics'>

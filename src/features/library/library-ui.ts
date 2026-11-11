@@ -1,6 +1,6 @@
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 import { library } from './api'
-import { t, useI18n } from '../../i18n/useI18n'
+import { t } from '../../i18n/useI18n'
 
 export function useLibraryAction() {
   const busy = ref(false)
@@ -37,7 +37,10 @@ export function downloadJson(value: unknown, filename: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-const { languageTag } = useI18n()
-const dateFormatter = computed(() => new Intl.DateTimeFormat(languageTag.value, { dateStyle: 'medium', timeStyle: 'short' }))
-export const formatModified = (time: number) => dateFormatter.value.format(time)
 export const wordCount = (count: number) => t(count === 1 ? '{count} word' : '{count} words', { count })
+
+export function closeLibraryMenu(event: MouseEvent) {
+  if ((event.target as HTMLElement).closest('button')) {
+    (event.currentTarget as HTMLElement).closest('details')?.removeAttribute('open')
+  }
+}

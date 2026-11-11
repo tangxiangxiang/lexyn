@@ -5,7 +5,7 @@ import type { AuthEnv, createAuthApi } from '../auth/routes.ts'
 import { fields, integer, InvalidInput, isUuid, object, validateTimezone } from '../../shared/contracts/validation.ts'
 import { stableJson } from '../../shared/contracts/json.ts'
 import { cleanDictionaryMeaning, cleanDictionaryReference, cleanPhonetics } from '../../shared/domain/dictionary.ts'
-import { LibraryError, type DeckInput, type EntryInput } from '../../shared/domain/library.ts'
+import { LibraryError, listSizes, type DeckInput, type EntryInput } from '../../shared/domain/library.ts'
 import { importFields, parseImport, previewImport, type FieldMapping, type ImportCandidate, type ImportedInput } from '../../shared/domain/library-import.ts'
 import { reviewRatings } from '../../shared/domain/review.ts'
 import { createReviewScheduler, schedulerConfigSnapshot, type ReviewScheduler } from '../../shared/srs/scheduler.ts'
@@ -34,8 +34,9 @@ const optId = optional(id)
 
 function deckInput(value: unknown): DeckInput {
   const row = object(value)
-  fields(row, 'name description')
-  return { name: text(100)(row.name), description: optional(text(1000))(row.description) }
+  fields(row, 'name description listSize')
+  return { name: text(100)(row.name), description: optional(text(1000))(row.description),
+    listSize: optional(num(listSizes.min, listSizes.max))(row.listSize) }
 }
 function wordFields(value: unknown, withMeaningMetadata = false) {
   const row = object(value)
@@ -79,11 +80,11 @@ function mapping(value: unknown): FieldMapping {
   return Object.fromEntries(Object.entries(row).map(([key, column]) => [key, num(0, 100_000)(column)]))
 }
 type Validators<T extends unknown[]> = { [K in keyof T]: Validator<T[K]> }
-function endpoint<T extends unknown[], R>(method: 'GET' | 'POST', validators: Validators<T>, run: (...args: T) => R, write = false) {
+function endpoint<T extends unknown[], R>(method: 'GET' | 'POST', validators: Validators<T>, run: (...args: T) => R, write = false, optionalTail = false) {
   return {
     method, write,
     run(raw: unknown) {
-      if (!Array.isArray(raw) || raw.length !== validators.length) return invalid()
+      if (!Array.isArray(raw) || (raw.length !== validators.length && !(optionalTail && raw.length === validators.length - 1))) return invalid()
       const args = validators.map((read, index) => read(raw[index])) as T
       return run(...args)
     },
@@ -95,10 +96,13 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
   const library = createLibraryService(store, schedulerConfigSnapshot(engine))
   const learn = createLearnService(store)
   const review = createReviewService(store, engine)
-  const get = <T extends unknown[], R>(args: Validators<T>, run: (...args: T) => R) => endpoint('GET', args, run)
-  const post = <T extends unknown[], R>(args: Validators<T>, run: (...args: T) => R) => endpoint('POST', args, run, true)
+  const get = <T extends unknown[], R>(args: Validators<T>, run: (...args: T) => R, optionalTail = false) => endpoint('GET', args, run, false, optionalTail)
+  const post = <T extends unknown[], R>(args: Validators<T>, run: (...args: T) => R, optionalTail = false) => endpoint('POST', args, run, true, optionalTail)
   return {
     'library/decks': get([offset, limit], library.listDecks),
+    'library/lists': get([id], library.getLists),
+    'library/list': get([id, id], library.getList),
+    'library/rename-list': post([id, id, text(100)], library.renameList),
     'library/deck': get([id, text(240), choice('active', 'missing', 'dictionary', 'review', 'removed', 'all'), offset, limit], library.getDeck),
     'library/create-deck': post([deckInput], (input) => library.createDeck(input, clock())),
     'library/update-deck': post([id, deckInput, version], (id, input, revision) => library.updateDeck(id, input, revision, clock())),
@@ -113,14 +117,14 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
         if (!store.deck(deck)) throw new StudyError('Deck not found.', 404)
         return previewImport(parseImport(source, format, mode), columns, store.entries(deck))
       }),
-    'library/import': post([id, list(importCandidate, 10_000), choice('skip', 'overwrite')],
-      (deck, candidates, mode) => library.importEntries(deck, candidates, mode, clock())),
+    'library/import': post([id, list(importCandidate, 10_000), choice('skip', 'overwrite'), optional(num(listSizes.min, listSizes.max))],
+      (deck, candidates, mode, size) => library.importEntries(deck, candidates, mode, clock(), size), true),
     'backup/library': get([optId], library.exportLibrary),
-    'learn/daily': get([optId], (id) => learn.getDailyState(id, clock())),
+    'learn/daily': get([optId, optId], (id, listId) => learn.getDailyState(id, clock(), listId), true),
     'learn/session': get([id], learn.getSession),
     'learn/history': get([id, offset, limit], learn.result),
-    'learn/start': post([id, choice('copy', 'dictation'), list(id, 100), bool],
-      (deck, mode, ids, fresh) => learn.startSession(deck, mode, ids, fresh, clock())),
+    'learn/start': post([id, choice('copy', 'dictation'), list(id, 100), bool, optId],
+      (deck, mode, ids, fresh, listId) => learn.startSession(deck, mode, ids, fresh, clock(), listId), true),
     'learn/mode': post([id, choice('copy', 'dictation'), version], (id, mode, revision) => learn.setMode(id, mode, revision, clock())),
     'learn/assist': post([id, id, version], (id, entry, revision) => learn.setAssisted(id, entry, revision, clock())),
     'learn/status': post([id, choice('paused', 'abandoned'), version], (id, status, revision) => learn.setStatus(id, status, revision, clock())),

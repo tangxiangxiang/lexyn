@@ -2,7 +2,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Page } from '@playwright/test'
 import type Database from 'better-sqlite3'
-import { expect, fillMeaning, test, writeStudy } from './fixtures'
+import { expect, libraryAction, fillMeaning, test, writeStudy } from './fixtures'
 import type { Entry } from '../shared/domain/library'
 import type { ImportCandidate } from '../shared/domain/library-import'
 import { createEcdict } from '../server/dictionary/ecdict'
@@ -48,7 +48,7 @@ async function installEcdict(directory: string, term: string, raw: string) {
 
 test('generates a meaning and both IPA accents in one request for a new word', async ({ page, backend }) => {
   const deckId = await createDeck(page)
-  await page.getByRole('button', { name: 'Add word' }).click()
+  await libraryAction(page, 'Add word', 'Deck options')
   await page.getByLabel('Term', { exact: true }).fill('command')
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   await expect.poll(() => savedEntry(backend.db, 'command')?.revision).toBe(2)
@@ -70,19 +70,19 @@ test('shows generic ECDICT IPA without a label and honors a clear from the edito
   await page.setViewportSize({ width: 320, height: 740 })
   await installEcdict(backend.directory, 'thread', 'n. 线；织物纤维')
   await createDeck(page)
-  await page.getByRole('button', { name: 'Add word' }).click()
+  await libraryAction(page, 'Add word', 'Deck options')
   await page.getByLabel('Term', { exact: true }).fill('thread')
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   const article = page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'thread', exact: true }) })
   await expect(article.locator('.phonetics span')).toHaveText(['/θred/'])
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320)
-  await article.getByRole('button', { name: 'Edit word' }).click()
+  await libraryAction(article, 'Edit word')
   const phonetic = page.getByLabel('Generic IPA', { exact: true })
   await expect(phonetic).toHaveValue('θred')
   await phonetic.clear()
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   await expect.poll(() => savedEntry(backend.db, 'thread')?.phoneticsCleared).toBe(true)
-  await article.getByRole('button', { name: 'Edit word' }).click()
+  await libraryAction(article, 'Edit word')
   await page.getByRole('button', { name: 'Optimize with AI', exact: true }).click()
   await expect.poll(() => savedEntry(backend.db, 'thread')?.revision).toBe(4)
   await expect(phonetic).toHaveValue('')
@@ -98,7 +98,7 @@ test('saves a new word before AI, then iterates from the latest human meaning wi
   const gate = new Promise<void>((resolve) => { release = resolve })
   backend.vocabulary.beforeReply = () => gate
   try {
-    await page.getByRole('button', { name: 'Add word' }).click()
+    await libraryAction(page, 'Add word', 'Deck options')
     await page.getByLabel('Term', { exact: true }).fill('thread')
     await page.getByRole('button', { name: 'Save', exact: true }).click()
     await expect.poll(() => backend.vocabulary.requests).toEqual([['thread']])
@@ -110,7 +110,7 @@ test('saves a new word before AI, then iterates from the latest human meaning wi
     })
 
     const article = page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'thread', exact: true }) })
-    await article.getByRole('button', { name: 'Edit word' }).click()
+    await libraryAction(article, 'Edit word')
     await fillMeaning(page, '用户手动编辑版本 B', 'n.')
     await page.getByRole('button', { name: 'Save', exact: true }).click()
     await expect.poll(() => savedEntry(backend.db, 'thread')?.meaning).toBe('n. 用户手动编辑版本 B')
@@ -123,7 +123,7 @@ test('saves a new word before AI, then iterates from the latest human meaning wi
   expect(savedEntry(backend.db, 'thread')).toMatchObject({ revision: 2, meaning: 'n. 用户手动编辑版本 B' })
 
   const article = page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'thread', exact: true }) })
-  await article.getByRole('button', { name: 'Edit word' }).click()
+  await libraryAction(article, 'Edit word')
   const meaning = page.getByLabel('Definition 1', { exact: true })
   await expect(meaning).toHaveValue('用户手动编辑版本 B')
   await page.getByRole('button', { name: 'Optimize with AI', exact: true }).click()
@@ -183,6 +183,7 @@ test('CSV meaning becomes the next AI iteration while the same-word ECDICT refer
 test('batch completion persists task progress and sends every target through MiniMax', async ({ page, backend }) => {
   const deckId = await createDeck(page)
   await createBlankWords(page, deckId, ['thread', 'queue', 'missing'])
+  await page.getByRole('button', { name: 'Search and filters' }).click()
   await page.getByRole('button', { name: 'Needs meaning', exact: true }).click()
   await page.getByRole('button', { name: 'AI fill missing meanings' }).click()
   await expect(page.getByText(/This task will process up to 3/)).toBeVisible()
@@ -195,6 +196,7 @@ test('batch completion persists task progress and sends every target through Min
     await expect(page.getByText('AI vocabulary task running')).toBeVisible()
     await expect.poll(() => backend.vocabulary.requests).toHaveLength(1)
     await page.reload()
+    await page.getByRole('button', { name: 'Search and filters' }).click()
     await page.getByRole('button', { name: 'View AI task progress' }).click()
     await expect(page.getByText('AI vocabulary task running')).toBeVisible()
     await expect(page.getByText('Total 3 · processed 0')).toBeVisible()
@@ -227,7 +229,7 @@ test('displays complete AI meanings while keeping raw ECDICT and legacy prose ou
   const entryId = created.data.id as string
   await page.reload()
   const article = page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'banana', exact: true }) })
-  await article.getByRole('button', { name: 'Edit word' }).click()
+  await libraryAction(article, 'Edit word')
   await page.getByRole('button', { name: 'Optimize with AI', exact: true }).click()
   await expect(page.getByLabel('Definition 1', { exact: true })).toHaveValue('香蕉')
   await expect(page.getByLabel('Definition 2', { exact: true })).toHaveValue('热带水果')

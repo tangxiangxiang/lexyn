@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test'
-import { expect, test, writeStudy } from './fixtures'
+import { expect, libraryAction, test, writeStudy } from './fixtures'
 import type Database from 'better-sqlite3'
 import type { ReviewCard, ReviewEvent, ReviewSession } from '../shared/domain/review'
 import { createReviewScheduler, rebuildCardFromEvents, restoreCard, schedulerGrades } from '../shared/srs/scheduler'
@@ -91,10 +91,12 @@ test('fills missing IPA in a rated word without changing its meaning or FSRS sch
   const gate = new Promise<void>((resolve) => { release = resolve })
   backend.vocabulary.beforeReply = () => gate
   try {
+    await page.getByRole('button', { name: 'Search and filters' }).click()
     await page.getByRole('button', { name: 'AI fill missing IPA' }).click()
     await page.getByRole('button', { name: 'Fill missing IPA (1)' }).click()
     await expect.poll(() => backend.vocabulary.requests).toEqual([['command']])
     await page.reload()
+    await page.getByRole('button', { name: 'Search and filters' }).click()
     await page.getByRole('button', { name: 'View AI task progress' }).click()
     await expect(page.getByRole('heading', { name: 'AI fill missing IPA', exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Stop AI task' }).click()
@@ -289,7 +291,7 @@ test('network failure keeps the card for retry and removing the next word does n
   const library = await page.context().newPage()
   await library.goto(deckUrl)
   const article = library.getByRole('article').filter({ has: library.getByRole('heading', { name: removed.term, exact: true }) })
-  await article.getByRole('button', { name: 'Remove word' }).click()
+  await libraryAction(article, 'Remove word')
   await library.locator('.library-dialog').getByRole('button', { name: 'Remove word' }).click()
   await expect(article).toHaveCount(0)
   await page.reload()

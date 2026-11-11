@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { seedDeckLists } from '../../study/lists.ts'
 
 const studySchema = `
   CREATE TABLE decks (
@@ -164,6 +165,27 @@ const migrations: ({ version: number; sql: string } | { version: number; apply: 
         PRIMARY KEY (owner_id, deck_id)
       ) STRICT;
     `,
+  },
+  {
+    version: 10,
+    apply(db) {
+      db.exec(`
+        CREATE UNIQUE INDEX entries_id_deck ON entries(id, deck_id);
+        CREATE TABLE deck_lists (
+          id TEXT PRIMARY KEY NOT NULL, deck_id TEXT NOT NULL REFERENCES decks(id),
+          name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 100),
+          list_order INTEGER NOT NULL CHECK (list_order > 0),
+          UNIQUE (deck_id, list_order), UNIQUE (id, deck_id)
+        ) STRICT;
+        CREATE TABLE deck_list_members (
+          entry_id TEXT PRIMARY KEY NOT NULL, list_id TEXT NOT NULL, deck_id TEXT NOT NULL,
+          position INTEGER NOT NULL CHECK (position > 0), UNIQUE (list_id, position),
+          FOREIGN KEY (entry_id, deck_id) REFERENCES entries(id, deck_id),
+          FOREIGN KEY (list_id, deck_id) REFERENCES deck_lists(id, deck_id)
+        ) STRICT;
+      `)
+      seedDeckLists(db)
+    },
   },
 ]
 

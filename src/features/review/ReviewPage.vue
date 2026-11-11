@@ -133,7 +133,7 @@ function selectDeck(id: string | null) {
       {{ t('Your review data could not be loaded from the server.') }}
       <NButton text @click="reloadRound(); reloadOverview()">{{ t('Try again') }}</NButton>
     </NAlert>
-    <NCard v-else-if="round?.session.status === 'active'" class="review-card">
+    <NCard v-else-if="round?.session.status === 'active'" class="review-card review-study-card" :bordered="false">
       <div v-if="round.word" ref="focusTarget" tabindex="-1" class="review-recall" @keydown="onKeydown"
         @compositionstart="composing = true" @compositionend="composing = false" @focusout="composing = false">
         <p class="library-muted">{{ t('Card {current} of {total}', { current: round.session.currentIndex + 1, total: round.session.total }) }}
@@ -217,7 +217,8 @@ function selectDeck(id: string | null) {
 .review-card { max-width: 760px; }
 .review-recall:focus-visible { outline-offset: 5px; }
 .review-meaning, .review-term, .review-example { white-space: pre-wrap; overflow-wrap: anywhere; }
-.review-meaning { font-size: 1.25rem; }
+.review-meaning { font-size: clamp(1.15rem, 2.4vw, 1.5rem); line-height: 1.7; }
+.review-study-card { border-top: 2px solid var(--accent); }
 .review-term { font-size: clamp(1.75rem, 6vw, 3rem); }
 .review-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .review-session-actions { margin-top: 16px; }

@@ -4,7 +4,7 @@ import type { LearnSession } from '../../../shared/domain/learning'
 
 export type LearnSessionRecord = LearnSession & { revision: number }
 export const learn = {
-  getDailyState: (id: string | undefined, signal?: AbortSignal) => study('learn/daily', [id], { signal }),
+  getDailyState: (args: StudyEndpoints['learn/daily']['args'], signal?: AbortSignal) => study('learn/daily', args, { signal }),
   getSession: (id: string, signal?: AbortSignal) => study('learn/session', [id], { signal }),
   result: (id: string, signal?: AbortSignal) => study('learn/history', [id, 0, 100], { signal }),
   startSession: (...args: StudyEndpoints['learn/start']['args']) => study('learn/start', args, { write: true }),

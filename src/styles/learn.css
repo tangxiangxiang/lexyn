@@ -9,6 +9,8 @@
 .learn-mode-picker { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; }
 .learn-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
 .learn-session-top { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: .875rem; font-weight: 600; }
+.learn-session-top > :first-child { min-width: 0; overflow-wrap: anywhere; }
+.learn-session-top > :last-child { flex-shrink: 0; }
 .learn-card { display: grid; gap: 18px; }
 .learn-meaning { margin-top: 24px; color: var(--ink); font-size: clamp(1.2rem, 3vw, 1.55rem); line-height: 1.5; white-space: pre-wrap; }
 .learn-muted { color: var(--muted); }
@@ -32,3 +34,6 @@
   .learn-actions > .n-button { min-height: 42px; }
   .learn-quota-row { align-items: flex-start; flex-direction: column; }
 }
+
+.learn-list-context { display: grid; gap: 4px; color: var(--muted); font-size: .9rem; }
+.learn-list-context .library-back { overflow-wrap: anywhere; }

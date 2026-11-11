@@ -18,10 +18,13 @@ import PronunciationButton from '../speech/PronunciationButton.vue'
 const route = useRoute()
 const router = useRouter()
 const selectedDeckId = ref(typeof route.query.deckId === 'string' ? route.query.deckId : '')
+const selectedListId = computed(() => typeof route.query.listId === 'string' ? route.query.listId : undefined)
+watch(() => route.query.deckId, (deckId) => { selectedDeckId.value = typeof deckId === 'string' ? deckId : '' })
 const mode = ref<LearnMode>('copy')
 const sessionId = computed(() => typeof route.query.session === 'string' ? route.query.session : undefined)
 const { data: home, error: homeLoadError, reload: reloadHome } =
-  useLibraryQuery(() => selectedDeckId.value || undefined, learn.getDailyState)
+  useLibraryQuery(() => [selectedDeckId.value || undefined, selectedListId.value] as [string | undefined, string | undefined],
+    learn.getDailyState, (args) => args.join('/'))
 const { data: current, error: sessionLoadError, reload: reloadSession } =
   useLibraryQuery(sessionId, (id, signal) => id ? learn.getSession(id, signal) : Promise.resolve(null))
 const { data: result } = useLibraryQuery(() => sessionId.value,
@@ -60,6 +63,14 @@ const dailyRemaining = computed(() => Math.max(0, (home.value?.quota ?? 10) - (h
 const newWordCount = computed(() => Math.min(eligibleCount.value, dailyRemaining.value))
 const deckOptions = computed(() => (home.value?.decks ?? []).map((deck) => ({ label: deck.name, value: deck.id })))
 const learnHome = computed(() => !sessionId.value || current.value === null)
+function learnQuery(deckId?: string, listId?: string, session?: string) {
+  return { deckId, listId, session }
+}
+
+function listLink(deckId: string, listId: string) {
+  return { name: 'library-deck', params: { deckId }, query: { listId } }
+}
+
 watch(() => home.value?.quota, (quota) => { if (quota !== undefined) dailyWords.value = quota })
 
 watch(() => current.value?.session.mode, (value) => { if (value) mode.value = value }, { immediate: true })
@@ -110,8 +121,8 @@ watch([current, busy], ([snapshot, pending]) => {
 
 function startSession(deckId: string, sessionMode: LearnMode, candidates: EntryRecord[], newWords: boolean) {
   void run(async () => {
-    const session = await learn.startSession(deckId, sessionMode, candidates.map(({ id }) => id), newWords)
-    await router.push({ path: '/learn', query: { deckId: session.deckId, session: session.sessionId } })
+    const session = await learn.startSession(deckId, sessionMode, candidates.map(({ id }) => id), newWords, selectedListId.value)
+    await router.push({ path: '/learn', query: learnQuery(session.deckId, session.listId, session.sessionId) })
   })
 }
 
@@ -131,7 +142,7 @@ function continueSession(session: LearnSessionRecord) {
   void run(async () => {
     const resumed = await learn.continueSession(session.sessionId, session.revision)
     if (resumed) {
-      await router.push({ path: '/learn', query: { deckId: resumed.deckId, session: resumed.sessionId } })
+      await router.push({ path: '/learn', query: learnQuery(resumed.deckId, resumed.listId, resumed.sessionId) })
     }
   })
 }
@@ -139,7 +150,7 @@ function continueSession(session: LearnSessionRecord) {
 function abandonSession(session: LearnSessionRecord) {
   void run(async () => {
     await learn.setStatus(session.sessionId, 'abandoned', session.revision)
-    await router.replace({ path: '/learn', query: selectedDeckId.value ? { deckId: selectedDeckId.value } : {} })
+    await router.replace({ path: '/learn', query: learnQuery(selectedDeckId.value || undefined, selectedListId.value) })
     localMessage.value = 'Your completed practice stays in your learning history.'
     await reloadHome()
   })
@@ -148,7 +159,7 @@ function abandonSession(session: LearnSessionRecord) {
 function pauseSession(session: LearnSessionRecord) {
   void run(async () => {
     await learn.setStatus(session.sessionId, 'paused', session.revision)
-    await router.replace({ path: '/learn', query: { deckId: session.deckId, session: session.sessionId } })
+    await router.replace({ path: '/learn', query: learnQuery(session.deckId, session.listId, session.sessionId) })
     await reloadSession()
   })
 }
@@ -156,7 +167,7 @@ function pauseSession(session: LearnSessionRecord) {
 function endSession(session: LearnSessionRecord) {
   void run(async () => {
     await learn.setStatus(session.sessionId, 'paused', session.revision)
-    await router.push({ path: '/learn', query: { deckId: session.deckId } })
+    await router.push({ path: '/learn', query: learnQuery(session.deckId, session.listId) })
     await reloadHome()
   })
 }
@@ -212,8 +223,10 @@ async function saveDailyWords(value: number | null) {
 
 <template>
   <section class="page learn-page">
-    <RouterLink v-if="sessionId" class="library-back" to="/learn">{{ t('← Learn home') }}</RouterLink>
-    <header class="page-intro"><h1>{{ t('Learn') }}</h1><p>{{ t('Meet new words and get comfortable using them.') }}</p></header>
+    <RouterLink v-if="sessionId && current?.session.listId && current.session.status !== 'completed'"
+      class="library-back" :to="listLink(current.session.deckId, current.session.listId)">← {{ t('Back to study list') }}</RouterLink>
+    <RouterLink v-else-if="sessionId && !current?.session.listId" class="library-back" to="/learn">{{ t('← Learn home') }}</RouterLink>
+    <header class="page-intro"><h1>{{ t('Learn') }}</h1></header>
     <template v-if="learnHome">
       <NAlert v-if="homeLoadError" type="error" role="alert">
         {{ t('Your learning data could not be loaded from the server.') }} <NButton text @click="reloadHome">{{ t('Try again') }}</NButton>
@@ -225,9 +238,15 @@ async function saveDailyWords(value: number | null) {
             <p class="learn-overline">{{ t('{count} of {quota} new words completed today', { count: home.completedToday, quota: home.quota }) }}</p>
             <NProgress type="line" :percentage="Math.min(100, Math.round(home.completedToday / home.quota * 100))"
               :show-indicator="false" :aria-label="t('Today\'s first learning progress')" />
-            <label for="learn-deck">{{ t('Word deck') }}</label>
-            <NSelect v-model:value="selectedDeckId" :options="deckOptions" clearable
-              :placeholder="t('Choose a deck')" :aria-label="t('Choose a deck')" />
+            <div v-if="home.list" class="learn-list-context">
+              <RouterLink :to="listLink(home.list.deckId, home.list.id)" class="library-back">{{ home.list.name }}</RouterLink>
+              <p>{{ t('{learned} of {total} words learned', { learned: home.list.learned, total: home.list.count }) }}</p>
+            </div>
+            <template v-else>
+              <label for="learn-deck">{{ t('Word deck') }}</label>
+              <NSelect v-model:value="selectedDeckId" :options="deckOptions" clearable
+                :placeholder="t('Choose a deck')" :aria-label="t('Choose a deck')" />
+            </template>
             <div class="learn-quota-row">
               <div><h2>{{ t('Daily new words') }}</h2><p>{{ t('One shared limit across your active decks.') }}</p></div>
               <NInputNumber :value="dailyWords" :min="1" :max="100" :step="1" :disabled="busy"
@@ -237,6 +256,9 @@ async function saveDailyWords(value: number | null) {
         </NCard>
         <NCard v-if="home.activeSession" class="learn-session-choice">
           <h2>{{ t('Continue your session?') }}</h2>
+          <p v-if="home.list && home.activeSession.listId !== home.list.id" class="library-muted">
+            {{ t('An unfinished session is open outside this list.') }}
+          </p>
           <p class="library-muted">{{ t('{completed} first completions · word {current} of {total} · {mode}', {
               completed: home.activeSession.firstCompletedEntryIds.length,
               current: Math.min(home.activeSession.currentIndex + 1, home.activeSession.entryIds.length),
@@ -295,8 +317,15 @@ async function saveDailyWords(value: number | null) {
       <p>{{ t(result.attempts === 1 ? '{count} submitted answer' : '{count} submitted answers', { count: result.attempts }) }}
         · {{ t(result.assisted === 1 ? '{count} assisted answer' : '{count} assisted answers', { count: result.assisted }) }}</p>
       <div class="learn-actions">
-        <NButton type="primary" @click="router.push({ path: '/learn', query: selectedDeckId ? { deckId: selectedDeckId } : {} })">{{ t('Continue learning') }}</NButton>
-        <NButton @click="router.push('/library')">{{ t('Return to Library') }}</NButton>
+        <template v-if="current.session.listId">
+          <RouterLink class="book-continue" :to="listLink(current.session.deckId, current.session.listId)">{{ t('Return to study list') }}</RouterLink>
+          <RouterLink v-if="home?.nextList && home.list?.count && home.list.learned === home.list.count" class="library-back"
+            :to="listLink(current.session.deckId, home.nextList.id)">{{ t('Next list') }} · {{ home.nextList.name }}</RouterLink>
+        </template>
+        <template v-else>
+          <NButton type="primary" @click="router.push({ path: '/learn', query: learnQuery(current.session.deckId) })">{{ t('Continue learning') }}</NButton>
+          <NButton @click="router.push('/library')">{{ t('Return to Library') }}</NButton>
+        </template>
       </div>
     </NCard>
     <template v-else-if="current?.session">
@@ -316,7 +345,7 @@ async function saveDailyWords(value: number | null) {
       </NAlert>
       <NCard v-else-if="activeWord && current.entry" class="learn-card" @keydown="onKeydown">
         <div class="learn-session-top">
-          <span>{{ current.session.mode === 'copy' ? t('Copy · 跟写') : t('Dictation · 听写') }}</span>
+          <span>{{ current.session.mode === 'copy' ? t('Copy · 跟写') : t('Dictation · 听写') }}<template v-if="home?.list"> · {{ home.list.name }}</template></span>
           <span>{{ current.session.currentIndex + 1 }} / {{ current.session.entryIds.length }}</span>
         </div>
         <NProgress type="line" :percentage="progressValue" :show-indicator="false" :aria-label="t('Session progress')" />

@@ -6,7 +6,7 @@ test('starts at Library and supports every route and deep-link reload', async ({
   await page.goto('/')
   await expect(page).toHaveURL(/\/library$/)
   await expect(page.getByRole('heading', { name: 'Your library is empty' })).toBeVisible()
-  await expect(page.locator('.service-status')).toHaveText('Connected')
+  await expect(page.locator('.service-status')).toHaveCount(0)
 
   const navigation = page.getByRole('navigation', { name: 'Main navigation' })
   for (const title of ['Learn', 'Review', 'Progress', 'Settings', 'Library']) {
@@ -61,7 +61,7 @@ test('shows a recoverable page error and keeps navigation available when the API
   await page.unroute(decks)
   await page.getByRole('button', { name: 'Retry connection' }).click()
   await expect(page.getByRole('heading', { name: 'Your library is empty' })).toBeVisible()
-  await expect(page.locator('.service-status')).toHaveText('Connected')
+  await expect(page.locator('.service-status')).toHaveCount(0)
 })
 
 for (const [name, width, height] of [

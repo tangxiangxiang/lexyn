@@ -320,3 +320,91 @@ test('rejects a rating for a changed reveal, then preserves the rating after arc
   expect(await data(get('review/overview', [null]))).toMatchObject({ decks: [], due: 0, firstRecall: 0 })
   expect(await data(get('backup/library', [deck.id]))).toMatchObject({ reviewEvents: [scored.event] })
 })
+
+test('imports 1,665 unique words in file order and reads only the selected list', async () => {
+  const deck = await data(post('library/create-deck', [{ name: 'Large book' }]))
+  expect(await data(get('library/lists', [deck.id]))).toMatchObject({ listCount: 0, lists: [] })
+  const terms = Array.from({ length: 1665 }, (_, index) => `term-${1665 - index}`)
+  const source = [terms[0], ...terms, terms[5]].join('\n')
+  const preview = await data(post('library/import-preview', [deck.id, source, 'txt', 'words', { term: 0 }]))
+  expect(await data(post('library/import', [deck.id, preview.candidates, 'skip']))).toEqual({ added: 1665, updated: 0, skipped: 0 })
+  const { lists } = await data(get('library/lists', [deck.id]))
+  expect(lists).toHaveLength(56)
+  expect(lists.map(({ count }: { count: number }) => count)).toEqual([...Array(55).fill(30), 15])
+  expect(lists[0]).toMatchObject({ name: 'List 01', order: 1, learned: 0 })
+  expect(lists[55]).toMatchObject({ name: 'List 56', order: 56, learned: 0 })
+  for (const list of [lists[0], lists[1], lists[55]]) {
+    const words = await data(get('library/list', [deck.id, list.id]))
+    expect(words.map(({ term }: { term: string }) => term)).toEqual(terms.slice((list.order - 1) * 30, list.order * 30))
+  }
+  const appended = await data(post('library/create-entry', [deck.id, { term: 'extra' }]))
+  const updated = await data(get('library/lists', [deck.id]))
+  expect(updated.lists.slice(0, 55)).toEqual(lists.slice(0, 55))
+  expect(updated.lists[55]).toMatchObject({ id: lists[55].id, count: 16 })
+  expect((await data(get('library/list', [deck.id, lists[55].id]))).at(-1)).toEqual(appended)
+})
+
+test('keeps scoped practice, list completion, the daily limit and first recall independent', async () => {
+  const deck = await data(post('library/create-deck', [{ name: 'Book', listSize: 2 }]))
+  const preview = await data(post('library/import-preview', [deck.id, 'zebra\t斑马\nant\t蚂蚁\nbird\t鸟', 'txt', 'tab', { term: 0, meaning: 1 }]))
+  await data(post('library/import', [deck.id, preview.candidates, 'skip']))
+  const { lists: [first, second] } = await data(get('library/lists', [deck.id]))
+  const [zebra, ant] = await data(get('library/list', [deck.id, first.id]))
+  const [bird] = await data(get('library/list', [deck.id, second.id]))
+  await data(post('settings/daily', [1]))
+  expect((await data(get('learn/daily', [deck.id, first.id]))).candidates).toEqual([zebra])
+  expect((await post('learn/start', [deck.id, 'copy', [bird.id], true, first.id])).status).toBe(409)
+  const session = await data(post('learn/start', [deck.id, 'copy', [zebra.id], true, first.id]))
+  expect(session).toMatchObject({ listId: first.id, entryIds: [zebra.id] })
+  expect((await post('learn/start', [deck.id, 'copy', [bird.id], true, second.id])).status).toBe(409)
+  await data(post('learn/attempt', [session.sessionId, zebra.id, zebra.term, session.revision]))
+  await data(post('learn/finish', [session.sessionId, zebra.id, 'completed', session.revision + 1]))
+  expect((await data(get('learn/daily', [deck.id, second.id]))).candidates).toEqual([])
+  expect(await data(get('library/lists', [deck.id]))).toMatchObject({ completedLists: 0, lists: [{ learned: 1 }, { learned: 0 }] })
+  expect((await data(get('review/overview', [deck.id]))).firstRecall).toBe(1)
+  expect(count('practice_events')).toBe(1)
+
+  now += 86_400_000
+  const secondSession = await data(post('learn/start', [deck.id, 'copy', [bird.id], true, second.id]))
+  await data(post('learn/attempt', [secondSession.sessionId, bird.id, bird.term, secondSession.revision]))
+  await data(post('learn/finish', [secondSession.sessionId, bird.id, 'completed', secondSession.revision + 1]))
+  await data(post('library/create-entry', [deck.id, { term: 'fox' }]))
+  const overview = await data(get('library/lists', [deck.id]))
+  expect(overview).toMatchObject({ completedLists: 1, lists: [
+    { id: first.id, count: 2, learned: 1 }, { id: second.id, count: 1, learned: 1 }, { count: 1, learned: 0 },
+  ] })
+  expect((await data(get('library/list', [deck.id, first.id]))).map(({ id }: { id: string }) => id)).toEqual([zebra.id, ant.id])
+})
+
+test('migration backfills stable membership without rewriting word bodies, study histories or FSRS cards', async () => {
+  const review = await setupReview()
+  await data(post('review/score', [review.sessionId, review.currentCardId, 'good', review.revision]))
+  const before = await data(get('backup/library', [null]))
+  const { id } = before.decks[0]
+  const entry = before.entries[0]
+  const insert = db.prepare('INSERT INTO entries (id, deck_id, active_term, body, revision) VALUES (?, ?, ?, ?, ?)')
+  const ids = [entry.id]
+  for (let i = 0; i < 31; i++) {
+    const id = randomUUID()
+    const term = `legacy-${i}`
+    ids.push(id)
+    insert.run(id, entry.deckId, term, JSON.stringify({ ...entry, id, term, normalizedTerm: term }), entry.revision)
+  }
+  const legacy = await data(get('backup/library', [null]))
+  db.exec(`DROP TABLE deck_list_members; DROP TABLE deck_lists; DROP INDEX entries_id_deck;
+    PRAGMA user_version=9; CREATE TABLE deck_list_members (marker TEXT);`)
+  expect(() => migrate(db)).toThrow('already exists')
+  expect(db.pragma('user_version', { simple: true })).toBe(9)
+  expect(db.prepare("SELECT 1 FROM sqlite_schema WHERE name='deck_lists'").get()).toBeUndefined()
+  db.exec('DROP TABLE deck_list_members')
+  migrate(db)
+  const upgraded = await data(get('backup/library', [null]))
+  for (const key of ['decks', 'entries', 'learnProgress', 'practiceEvents', 'reviewCards', 'reviewEvents']) {
+    expect(upgraded[key]).toEqual(legacy[key])
+  }
+  const { lists } = await data(get('library/lists', [id]))
+  expect(lists.map(({ count }: { count: number }) => count)).toEqual([30, 2])
+  expect((await data(get('library/list', [id, lists[0].id]))).map(({ id }: { id: string }) => id)).toEqual(ids.sort().slice(0, 30))
+  migrate(db)
+  expect(await data(get('library/lists', [id]))).toMatchObject({ lists })
+})

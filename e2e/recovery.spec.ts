@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { serve } from '@hono/node-server'
 import type { Page } from '@playwright/test'
-import { expect, password, signIn, test, username } from './fixtures'
+import { expect, libraryAction, password, signIn, test, username } from './fixtures'
 import { createApp } from '../server/app'
 import { lockDataDirectory, openDatabase } from '../server/db/database'
 import type { LibraryExport } from '../shared/contracts/library'
@@ -58,7 +58,7 @@ async function newDeck(page: Page, name: string, csv: string) {
   await page.getByLabel('Deck name').fill(name)
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   await page.getByRole('link', { name, exact: true }).click()
-  await page.getByRole('button', { name: 'Import words' }).click()
+  await libraryAction(page, 'Import words', 'Deck options')
   await page.getByLabel('Vocabulary file').setInputFiles({ name: 'words.csv', mimeType: 'text/csv', buffer: Buffer.from(`term,meaning\n${csv}`) })
   await page.getByRole('button', { name: /^Import \d+ words?$/ }).click()
   await expect(page.getByRole('heading', { name: csv.split(',')[0], exact: true })).toBeVisible()
@@ -110,13 +110,11 @@ test('restores a server JSON export with archived and removed history for fresh 
     await study(page, 3)
     await page.getByRole('navigation').getByRole('link', { name: 'Library' }).click()
     await page.getByRole('link', { name: 'JSON current deck', exact: true }).click()
-    await page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'quorum', exact: true }) })
-      .getByRole('button', { name: 'Remove word' }).click()
+    await libraryAction(page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'quorum', exact: true }) }), 'Remove word')
     await page.locator('.library-dialog').getByRole('button', { name: 'Remove word' }).click()
     await newDeck(page, 'JSON archived deck', 'wal,日志')
     await page.getByRole('link', { name: 'Back to Library' }).click()
-    await page.getByRole('listitem').filter({ has: page.getByRole('link', { name: 'JSON archived deck', exact: true }) })
-      .getByRole('button', { name: 'Archive deck' }).click()
+    await libraryAction(page.getByRole('listitem').filter({ has: page.getByRole('link', { name: 'JSON archived deck', exact: true }) }), 'Archive deck', 'Book options')
     await page.locator('.library-dialog').getByRole('button', { name: 'Archive deck' }).click()
     await settings(page)
     await page.getByRole('textbox', { name: 'Daily new words' }).fill('23')

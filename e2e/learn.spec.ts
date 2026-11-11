@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test'
-import { expect, fillMeaning, test, writeStudy } from './fixtures'
+import { expect, libraryAction, fillMeaning, test, writeStudy } from './fixtures'
 import type { LearnSession, PracticeEvent } from '../shared/domain/learning'
 import type Database from 'better-sqlite3'
 
@@ -21,7 +21,7 @@ async function makeDeckWithWords(page: Page, spellingHints = false) {
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   await page.getByRole('link', { name: 'Learn Systems' }).click()
   for (const [term, meaning] of [['concurrency', '并发'], ['deadlock', '死锁']]) {
-    await page.getByRole('button', { name: 'Add word' }).click()
+    await libraryAction(page, 'Add word', 'Deck options')
     await page.getByLabel('Term', { exact: true }).fill(term)
     await fillMeaning(page, spellingHints ? term + ' ' + meaning : meaning)
     if (spellingHints) {
@@ -216,7 +216,7 @@ test('automatically skips removed words and completes the remaining queue withou
   const library = await page.context().newPage()
   await library.goto(deckUrl)
   const word = library.getByRole('article').filter({ has: library.getByRole('heading', { name: 'deadlock' }) })
-  await word.getByRole('button', { name: 'Remove word' }).click()
+  await libraryAction(word, 'Remove word')
   await library.locator('.library-dialog').getByRole('button', { name: 'Remove word' }).click()
   await expect(word).toHaveCount(0)
 
@@ -271,7 +271,7 @@ test('pauses when the deck is archived and resumes with the same answer after re
   const sessionUrl = page.url()
 
   await page.getByRole('link', { name: 'Library', exact: true }).click()
-  await page.getByRole('button', { name: 'Archive deck' }).click()
+  await libraryAction(page, 'Archive deck', 'Book options')
   await page.locator('.library-dialog').getByRole('button', { name: 'Archive deck' }).click()
   await expect(page.getByRole('heading', { name: 'Your library is empty' })).toBeVisible()
   await page.goto(sessionUrl)
@@ -279,6 +279,8 @@ test('pauses when the deck is archived and resumes with the same answer after re
   expect(records(backend.db, 'learn_sessions')).toMatchObject([{ status: 'paused', currentAttempts: 1 }])
   await page.getByRole('link', { name: 'Open deck' }).click()
   await page.getByRole('button', { name: 'Restore deck' }).click()
+  await expect(page.getByText('Deck options', { exact: true })).toBeVisible()
+  await page.getByText('Deck options', { exact: true }).click()
   await expect(page.getByRole('button', { name: 'Add word' })).toBeVisible()
   await page.goto(sessionUrl)
   await page.getByRole('button', { name: 'Resume' }).click()

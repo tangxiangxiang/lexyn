@@ -3,10 +3,11 @@ import { computed, reactive, ref } from 'vue'
 import { NAlert, NButton, NInput } from 'naive-ui'
 import { t, translateError } from '../../i18n/useI18n'
 import { hasFinalMeaning, meaningFromSenses, type DictionaryMeaning, type PhoneticVariants } from '../../../shared/domain/dictionary'
-import { normalizeTerm, type Deck, type Entry } from '../../../shared/domain/library'
+import { listSizes, normalizeTerm, type Deck, type Entry } from '../../../shared/domain/library'
 import { refreshStudy } from '../../api/client'
 import DictionaryMeaningEditor from '../dictionary/DictionaryMeaningEditor.vue'
 import LibraryDialog from './LibraryDialog.vue'
+import ListSizeField from './ListSizeField.vue'
 import { useLibraryAction } from './library-ui'
 import { library } from './api'
 import { vocabulary } from './vocabulary-api'
@@ -17,6 +18,7 @@ const editor = props.editor
 const deck = editor.type === 'deck' ? editor.deck : undefined
 const entry = editor.type === 'entry' ? editor.entry : undefined
 const title = editor.type === 'deck' ? (deck ? 'Edit deck' : 'New deck') : (entry ? 'Edit word' : 'Add word')
+const listSize = ref<number | null>(listSizes.default)
 const deckForm = reactive({ name: deck?.name ?? '', description: deck?.description ?? '' })
 const legacyMeaning: DictionaryMeaning | undefined = entry?.meaning.trim()
   ? { senses: [{ partOfSpeech: '', definitions: [entry.meaning], source: 'manual' }] }
@@ -109,7 +111,7 @@ async function save() {
   const saved = await run(async () => {
     if (editor.type === 'deck') {
       if (deck) await library.updateDeck(deck.id, deckForm, deck.revision)
-      else await library.createDeck(deckForm)
+      else await library.createDeck({ ...deckForm, listSize: listSize.value ?? listSizes.default })
       return { message: deck ? 'Deck updated.' : 'Deck created.' }
     }
     if (entry) {
@@ -137,6 +139,7 @@ async function save() {
         <label for="library-deck-description">{{ t('Description') }} <small>{{ t('optional') }}</small></label>
         <NInput v-model:value="deckForm.description" type="textarea" :rows="3" :maxlength="1000" :disabled="busy"
           :input-props="{ id: 'library-deck-description' }" />
+        <ListSizeField v-if="!deck" id="new-deck-list-size" v-model="listSize" :disabled="busy" />
       </template>
       <template v-else>
         <label for="library-word-term">{{ t('Term') }}</label>

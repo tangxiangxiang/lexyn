@@ -60,20 +60,14 @@ onUnmounted(() => {
         </RouterLink>
         <nav class="nav" :aria-label="t('Main navigation')">
           <RouterLink v-for="item in navigation" :key="item.path" :to="item.path"
-            :class="{ 'nav-section-active': item.path === '/library' && $route.name === 'library-deck' }">
+            :class="{ 'nav-section-active': item.path === '/library' && $route.name === 'library-deck',
+              'nav-study': item.path === '/learn' || item.path === '/review' }">
             <AppIcon :name="item.icon" />
             <span>{{ t(item.title) }}</span>
           </RouterLink>
         </nav>
-        <p class="sidebar-note">{{ t('Learn. Recall. Retain.') }}</p>
       </aside>
       <div class="main-column">
-        <header class="topbar">
-          <span class="topbar-label">{{ t('Vocabulary studio') }}</span>
-          <span class="service-status" role="status" :data-status="serviceStatus">
-            {{ t(serviceStatus) }}
-          </span>
-        </header>
         <p v-if="pwaUpdateWaiting" class="update-notice">{{ t('New version available. Finish your work, then close all Lexyn tabs and reopen.') }}</p>
         <main id="main" class="main" tabindex="-1">
           <NAlert v-if="connection === 'unavailable'" type="error" role="alert">

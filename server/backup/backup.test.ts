@@ -12,6 +12,8 @@ import { createApp } from '../app.ts'
 import { initializeOwner, createAuth } from '../auth/owner.ts'
 import { lockDataDirectory, openDatabase } from '../db/database.ts'
 import { latestDatabaseVersion } from '../db/migrations/index.ts'
+import { createLibraryService } from '../study/library.ts'
+import { createStudyStore } from '../study/store.ts'
 import { restoreLibrary } from './library.ts'
 import { createSqliteBackup, restoreSqliteBackup, verifySqliteBackup } from './sqlite.ts'
 
@@ -60,7 +62,7 @@ test('rejects corrupted or incomplete v4 JSON without accepting partial history'
   await expect(parse({ ...good, entries: [{ ...good.entries[0], phoneticsNeedsReview: 'true' }] }))
     .rejects.toThrow('Invalid phonetics metadata')
   await expect(prepareLibraryRestore('{')).rejects.toThrow('not valid JSON')
-  await expect(parse({ ...good, formatVersion: 2 })).rejects.toThrow('formats v4 and v5')
+  await expect(parse({ ...good, formatVersion: 2 })).rejects.toThrow('formats v4, v5 and v6')
   await expect(parse({ ...good, entries: [] })).rejects.toThrow('missing entry')
   await expect(parse({ ...good, reviewEvents: [] })).rejects.toThrow('incomplete')
   await expect(parse({ ...good, reviewEvents: [...good.reviewEvents, ...good.reviewEvents] })).rejects.toThrow('Duplicate ID')
@@ -94,12 +96,13 @@ test('rolls back JSON restore including library and history and retries into the
     await expect(parse({ ...backup, entries: [{ ...backup.entries[0], dictionaryMeaning: broken }] })).rejects.toThrow('Invalid dictionary meaning')
     db.exec("CREATE TRIGGER fail_restore BEFORE INSERT ON review_events BEGIN SELECT RAISE(ABORT, 'restore fault'); END")
     expect(() => restoreLibrary(db, plan)).toThrow('restore fault')
-    for (const table of ['decks', 'entries', 'practice_events', 'review_events', 'review_cards', 'learn_progress', 'owner_settings']) {
+    for (const table of ['decks', 'entries', 'deck_lists', 'deck_list_members', 'practice_events', 'review_events', 'review_cards', 'learn_progress', 'owner_settings']) {
       expect(db.prepare(`SELECT count(*) FROM ${table}`).pluck().get()).toBe(0)
     }
     db.exec('DROP TRIGGER fail_restore')
     restoreLibrary(db, plan)
     expect(db.prepare('SELECT count(*) FROM review_events').pluck().get()).toBe(1)
+    expect(db.prepare('SELECT position FROM deck_list_members WHERE entry_id=?').pluck().get(backup.entries[0].id)).toBe(1)
     expect(JSON.parse(db.prepare("SELECT json_extract(body, '$.dictionaryMeaning') FROM entries").pluck().get() as string))
       .toEqual(dictionaryMeaning)
     expect(JSON.parse(db.prepare("SELECT json_extract(body, '$.dictionaryReference') FROM entries").pluck().get() as string))
@@ -156,4 +159,27 @@ test('backs up WAL contents, rejects corruption and preserves an offline target 
     try { expect(unchanged.prepare('SELECT count(*) FROM review_events').pluck().get()).toBe(1) }
     finally { unchanged.close() }
   } finally { live.close(); unlock(); await rm(root, { recursive: true, force: true }) }
+})
+
+test('validates v6 list ownership, coverage and positions and preserves list IDs in JSON restore', async () => {
+  const legacy = await fixture()
+  const list = { id: randomUUID(), deckId: legacy.decks[0].id, name: 'Audit chapter', order: 1 }
+  const member = { listId: list.id, entryId: legacy.entries[0].id, position: 1 }
+  const backup: LibraryExport = { ...legacy, formatVersion: 6, lists: [list], listMembers: [member] }
+  await expect(parse({ ...backup, listMembers: [] })).rejects.toThrow('List membership is incomplete')
+  await expect(parse({ ...backup, lists: [{ ...list, deckId: randomUUID() }] })).rejects.toThrow('Invalid deck list')
+  await expect(parse({ ...backup, listMembers: [{ ...member, listId: randomUUID() }] })).rejects.toThrow('Invalid list membership')
+  await expect(parse({ ...backup, listMembers: [{ ...member, position: 0 }] })).rejects.toThrow('Invalid list membership')
+  const directory = await mkdtemp(join(tmpdir(), 'lexyn-lists-restore-'))
+  const db = openDatabase(directory)
+  try {
+    await initializeOwner(db, 'test-admin', 'test-owner-password')
+    restoreLibrary(db, await parse(backup))
+    const ownerId = db.prepare('SELECT id FROM owner').pluck().get() as string
+    const library = createLibraryService(createStudyStore(db, ownerId), backup.schedulerConfig)
+    const snapshot = library.exportLibrary(list.deckId)
+    expect(snapshot).toMatchObject({ formatVersion: 6, lists: [list], listMembers: [member], metadata: { scope: 'deck' } })
+    expect(snapshot.reviewCards).toEqual(backup.reviewCards)
+    expect(snapshot.entries).toEqual(backup.entries)
+  } finally { db.close(); await rm(directory, { recursive: true, force: true }) }
 })

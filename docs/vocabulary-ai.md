@@ -29,4 +29,4 @@ MiniMax-M3.1-Flash 在同一次请求中返回词性分组、完整中文义项�
 
 ## 备份
 
-JSON v5 包含结构化最终释义、完整 `meaning` 投影、音标、必要的 ECDICT 快照、词条修订号及学习与复习历史。v4 备份仍可恢复；完整恢复由服务端 CLI 再次校验。SQLite 在线备份包含服务端业务数据，但不包含独立的 `dictionaries/ecdict.sqlite` 文件。安装和更新词典请参阅 [ECDICT 安装文档](dictionary.md)。
+JSON v6 包含结构化最终释义、完整 `meaning` 投影、音标、必要的 ECDICT 快照、词条修订号及学习与复习历史。v4/v5 备份仍可恢复；完整恢复由服务端 CLI 再次校验。SQLite 在线备份包含服务端业务数据，但不包含独立的 `dictionaries/ecdict.sqlite` 文件。安装和更新词典请参阅 [ECDICT 安装文档](dictionary.md)。

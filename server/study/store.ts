@@ -1,3 +1,4 @@
+import { createListStore } from './lists.ts'
 import type Database from 'better-sqlite3'
 import { createHash } from 'node:crypto'
 import type { Deck, Entry } from '../../shared/domain/library.ts'
@@ -32,6 +33,7 @@ export function createStudyStore(db: Database.Database, ownerId: string) {
 
   return {
     db,
+    lists: createListStore(db),
     all,
     one,
     request<T>(id: string, payload: string, action: () => T): T {

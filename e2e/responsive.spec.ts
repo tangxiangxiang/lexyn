@@ -1,5 +1,5 @@
 import type { Locator, Page } from '@playwright/test'
-import { expect, fillMeaning, test } from './fixtures'
+import { expect, fillMeaning, test, writeStudy } from './fixtures'
 
 async function fits(page: Page, width: number) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
@@ -16,14 +16,38 @@ for (const [width, height, touch] of [[320, 740, true], [375, 812, true], [768, 
       await fits(page, width)
       await activate(page.getByRole('button', { name: 'New deck' }))
       await page.getByLabel('Deck name').fill('Responsive fixture')
+      await page.getByLabel('Words per list').fill('1')
       await activate(page.getByRole('button', { name: 'Save', exact: true }))
       await activate(page.getByRole('link', { name: 'Responsive fixture', exact: true }))
       await expect(page.getByRole('heading', { level: 1, name: 'Responsive fixture' })).toBeVisible()
       await fits(page, width)
+      await activate(page.getByText('Deck options', { exact: true }))
       await activate(page.getByRole('button', { name: 'Add word' }))
       await page.getByLabel('Term', { exact: true }).fill('deterministic')
       await fillMeaning(page, '确定性', 'adj.')
       await activate(page.getByRole('button', { name: 'Save', exact: true }))
+      const path = new URL(page.url()).pathname
+      const longWord = 'uninterrupted'.repeat(10)
+      expect((await writeStudy(page, 'library/create-entry', [path.split('/').at(-1), {
+        term: longWord, meaning: '长释义 '.repeat(60) + 'uninterrupted'.repeat(20),
+      }])).ok()).toBe(true)
+      await page.reload()
+      const picker = page.getByLabel('Study list')
+      await expect(picker.locator('option')).toHaveCount(2)
+      const first = await picker.inputValue()
+      const nextList = page.getByRole('button', { name: 'Next list' })
+      if (touch) await nextList.tap()
+      else await nextList.press('Enter')
+      await expect(page.getByRole('heading', { name: longWord })).toBeVisible()
+      await fits(page, width)
+      if (touch) {
+        await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+        const wordList = await page.getByRole('list', { name: 'Words', exact: true }).boundingBox()
+        const menu = await page.getByRole('navigation').boundingBox()
+        expect(wordList!.y + wordList!.height).toBeLessThanOrEqual(menu!.y)
+      }
+      await picker.selectOption(first)
+      await expect(page.getByRole('heading', { name: 'deterministic' })).toBeVisible()
       await activate(page.getByRole('link', { name: 'Start learning' }))
       await activate(page.getByText('Dictation', { exact: true }))
       await expect(page.getByRole('button', { name: 'Learn 1 new word' })).toBeEnabled()
