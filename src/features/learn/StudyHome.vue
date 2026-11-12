@@ -7,7 +7,8 @@ import { study } from '../../api/client'
 import { t, translateError } from '../../i18n/useI18n'
 import { useLibraryQuery } from '../library/useLibraryQuery'
 import { useLibraryAction } from '../library/library-ui'
-import { learn, learnSessionRoute } from './api'
+import { allStudyRoute, learn, learnSessionRoute } from './api'
+import { review, reviewSessionRoute } from '../review/api'
 import { useReviewOverview } from '../review/useReviewOverview'
 import { library } from '../library/api'
 import type { Entry } from '../../../shared/domain/library'
@@ -39,9 +40,7 @@ const { data, error, reload } = useLibraryQuery(
 const { data: reviewData, error: reviewError, reload: reloadReview } = useReviewOverview(() => props.deckId)
 const { data: activity } = useLibraryQuery(() => null, (_, signal) => study('progress/activity', [], { signal }))
 const streak = computed(() => activity.value?.streak)
-const pending = computed(() => data.value
-  ? Math.min(data.value.candidates.length, Math.max(0, data.value.quota - data.value.completedToday))
-  : undefined)
+const pending = computed(() => data.value?.pendingNew)
 const reviewPending = computed(() => reviewData.value ? reviewData.value.due + reviewData.value.firstRecall : undefined)
 const totalPending = computed(() => pending.value !== undefined && reviewPending.value !== undefined
   ? pending.value + reviewPending.value
@@ -60,10 +59,14 @@ const segments = computed(() => {
   // Queue sizes belong in the readout; they must not change the ring geometry.
   return { learn: ringSegment(0, 180), review: ringSegment(180, 360) }
 })
-const startWithReview = computed(() => selection.value === 'review' || (
-  selection.value === 'all' && pending.value === 0 && !!reviewPending.value
-  && data.value?.activeSession?.deckId !== props.deckId
-))
+const startReady = computed(() => ({
+  all: data.value && reviewData.value,
+  learn: data.value,
+  review: reviewData.value,
+})[selection.value])
+watch(() => reviewData.value?.nextDayAt, (value, previous) => {
+  if (value !== undefined && previous !== undefined && value !== previous) void reload()
+})
 const book = computed(() => ({ name: 'library-deck', params: { deckId: props.deckId } }))
 
 watch([() => props.deckId, searchText, searchFocused, searchRetry], ([deckId, text, focused], _previous, onCleanup) => {
@@ -118,37 +121,37 @@ function ringSegment(from: number, to: number) {
 
 function start() {
   startMessage.value = ''
-  if (startWithReview.value) {
-    if (!reviewPending.value) {
-      startMessage.value = 'No study items are ready right now.'
-      return
-    }
-    void router.push({ path: '/review', query: { deckId: props.deckId } })
+  const deckId = props.deckId
+  if (selection.value === 'all') {
+    void router.push(allStudyRoute(deckId))
     return
   }
-  const daily = data.value
-  if (!daily) return
-  const deckId = props.deckId
-  const active = daily.activeSession
-  if (active?.deckId === deckId && active.status === 'active') {
-    void router.push(learnSessionRoute(active))
-  } else if (active?.deckId === deckId && active.status === 'paused') {
-    void run(async () => {
-      const snapshot = await learn.getSession(active.sessionId)
-      if (!snapshot) return
-      const resumed = await learn.continueSession(snapshot.session.sessionId, snapshot.session.revision)
-      await router.push(learnSessionRoute(resumed))
-    })
-  } else if (active) {
-    void router.push({ path: '/learn', query: { deckId } })
-  } else if (!pending.value) {
-    startMessage.value = 'No study items are ready right now.'
-  } else {
-    void run(async () => {
+  void run(async () => {
+    if (selection.value === 'review') {
+      const next = await review.start(deckId, true)
+      if (deckId !== props.deckId) return
+      if (next.kind === 'round') await router.push(reviewSessionRoute(next.round.session))
+      else if (next.kind === 'conflict') await router.push({ path: '/review', query: { deckId } })
+      else startMessage.value = 'No study items are ready right now.'
+      return
+    }
+    const daily = await learn.getDailyState([deckId, undefined])
+    if (deckId !== props.deckId) return
+    const active = daily.activeSession
+    if (active && daily.hasNewWordSession) {
+      const session = active.status === 'paused'
+        ? await learn.continueSession(active.sessionId, active.revision)
+        : active
+      await router.push(learnSessionRoute(session))
+    } else if (active) {
+      await router.push({ path: '/learn', query: { deckId } })
+    } else if (!daily.pendingNew) {
+      startMessage.value = 'No study items are ready right now.'
+    } else {
       const session = await learn.startSession(deckId, learningPreferences.value.defaultMode, daily.candidates.map(({ id }) => id), true, undefined)
       await router.push(learnSessionRoute(session))
-    })
-  }
+    }
+  })
 }
 
 function selectQueue(queue: 'all' | 'learn' | 'review') {
@@ -231,7 +234,7 @@ function retrySearch() {
         </NAlert>
         <NAlert v-if="startError" type="error" role="alert">{{ translateError(startError) }}</NAlert>
         <NAlert v-if="startMessage" type="info" role="status">{{ t(startMessage) }}</NAlert>
-        <button class="spell-glass spell-start" type="button" :disabled="busy || (startWithReview ? !reviewData : !data)"
+        <button class="spell-glass spell-start" type="button" :disabled="busy || !startReady"
           @click="start">{{ t('Start') }}</button>
       </div>
     </div>

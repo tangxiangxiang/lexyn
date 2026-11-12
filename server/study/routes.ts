@@ -9,6 +9,7 @@ import { LibraryError, listSizes, type DeckInput, type Entry, type EntryInput } 
 import { importFields, parseImport, previewImport, type FieldMapping, type ImportCandidate, type ImportedInput } from '../../shared/domain/library-import.ts'
 import { reviewCardId, reviewRatings } from '../../shared/domain/review.ts'
 import { createReviewScheduler, schedulerConfigSnapshot, type ReviewScheduler } from '../../shared/srs/scheduler.ts'
+import { createAllStudy } from './all.ts'
 import { createLearnService } from './learn.ts'
 import { createLibraryService } from './library.ts'
 import { createReviewService } from './review.ts'
@@ -106,6 +107,7 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
   const library = createLibraryService(store, schedulerConfigSnapshot(engine))
   const learn = createLearnService(store)
   const review = createReviewService(store, engine)
+  const allStudy = createAllStudy(store, learn, review)
   const get = <T extends unknown[], R>(args: Validators<T>, run: (...args: T) => R, optionalTail = false) => endpoint('GET', args, run, false, optionalTail)
   const post = <T extends unknown[], R>(args: Validators<T>, run: (...args: T) => R, optionalTail = false) => endpoint('POST', args, run, true, optionalTail)
   return {
@@ -191,6 +193,7 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
     'library/import': post([id, list(importCandidate, 10_000), choice('skip', 'overwrite'), optional(num(listSizes.min, listSizes.max))],
       (deck, candidates, mode, size) => library.importEntries(deck, candidates, mode, clock(), size), true),
     'backup/library': get([optId], library.exportLibrary),
+    'learn/all': post([id, choice('copy', 'dictation'), optId], (deck, mode, flow) => allStudy(deck, mode, clock(), flow), true),
     'learn/daily': get([optId, optId], (id, listId) => learn.getDailyState(id, clock(), listId), true),
     'learn/free': get([], learn.freeState),
     'learn/start-free': post([id, choice('copy', 'dictation'), optId],
@@ -213,8 +216,10 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
     'learn/finish': post([id, id, choice('completed', 'skipped'), version],
       (id, entry, outcome, revision) => learn.finishCurrent(id, entry, outcome, revision, clock())),
     'review/overview': get([optId], (deck) => review.overview(deck, clock())),
-    'review/session': get([optId], (deck) => review.round(deck, clock())),
-    'review/start': post([optId], (deck) => review.start(deck, clock())),
+    'review/session': get([optId], (deck) => review.legacyRound(deck, clock())),
+    'review/scoped': get([optId, optId], (deck, sessionId) => review.round(deck, clock(), sessionId)),
+    'review/open': get([], review.openSession),
+    'review/start': post([optId, optional(bool)], (deck, resume) => review.start(deck, clock(), resume), true),
     'review/repair': post([id, version], (id, revision) => review.repair(id, revision, clock())),
     'review/status': post([id, choice('active', 'paused', 'abandoned'), version],
       (id, status, revision) => review.setStatus(id, status, revision, clock())),

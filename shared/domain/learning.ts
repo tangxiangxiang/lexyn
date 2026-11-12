@@ -27,6 +27,7 @@ export interface LearnProgress {
 }
 
 export interface LearnSession {
+  studyFlowId?: string
   source?: PracticeSource
   spelling?: SpellingPreferences
   currentKeyboard?: KeyboardLayout

@@ -8,6 +8,7 @@ import type { spellingKeyboard } from '../../../shared/domain/spelling'
 import type { PronunciationAccent } from '../../ui/pronunciationAccent'
 import SpellingDisplay from './SpellingDisplay.vue'
 import SpellingFeedback from './SpellingFeedback.vue'
+import SpellingTiles from './SpellingTiles.vue'
 import SpellingKeyboard from './SpellingKeyboard.vue'
 import { createLetterSpeech } from './letterSpeech'
 
@@ -242,15 +243,7 @@ function onKeydown(event: KeyboardEvent) {
       <NButton ref="nextButton" type="primary" :disabled="busy" @click="advance">{{ t('Next word') }}</NButton>
     </div>
     <div class="spell-keyboard-area">
-      <div class="spell-answer-tiles" :class="{ 'spell-answer-correct': correct }">
-        <span class="visually-hidden" role="status">{{ correct ? t('Spelling correct') : typo !== undefined ? t('Incorrect letter. Try the word again.') : '' }}</span>
-        <Transition name="spell-tiles">
-          <div v-if="typed.length" class="spell-answer-row" role="group" :aria-label="t('Your spelling so far')">
-            <span v-for="(letter, index) in typed" :key="index" class="spell-answer-tile"
-              :class="{ 'spell-answer-tile-incorrect': index === typo }">{{ letter === ' ' ? '·' : letter }}</span>
-          </div>
-        </Transition>
-      </div>
+      <SpellingTiles :letters="typed" :typo="typo" :correct="correct" />
       <SpellingKeyboard v-if="keyboardVisible" :key="keys.layout + mode" :keys="keys" :disabled="locked || composing"
         :show-symbols-directly="!!term && mode === 'copy'" @key="edit" @erase="edit('', true)" />
     </div>

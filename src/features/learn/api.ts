@@ -4,11 +4,15 @@ import type { LearnSession } from '../../../shared/domain/learning'
 
 export type LearnSessionRecord = LearnSession & { revision: number }
 
-export function learnSessionRoute(session: LearnSession, stage?: 'read' | 'spell') {
+export function allStudyRoute(deckId: string, flow?: string) {
+  return { path: '/study/all', query: { deckId, flow } }
+}
+
+export function learnSessionRoute(session: LearnSession, stage?: 'read' | 'spell', flow?: string) {
   const reading = session.mode === 'copy' && (stage === 'read' || (!stage && session.currentAttempts === 0))
   return {
     path: reading ? '/learn/read' : '/learn/spell',
-    query: { deckId: session.deckId, listId: session.listId, session: session.sessionId, free: session.source === 'free' ? '1' : undefined },
+    query: { deckId: session.deckId, listId: session.listId, session: session.sessionId, flow, free: session.source === 'free' ? '1' : undefined },
   }
 }
 

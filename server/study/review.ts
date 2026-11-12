@@ -90,18 +90,23 @@ export function createReviewService(store: StudyStore, engine: ReviewScheduler) 
   }
 
   function snapshot(session: Versioned<ReviewSession> | undefined, now: number) {
-    if (!session || session.status === 'abandoned') return null
+    if (!session) return null
     const word = session.status === 'active' ? target(session.entryIds[session.currentIndex], now) : undefined
     const revealed = !!word && session.currentRevealed && session.revealedEntryRevision === word.entry.revision
     const answer = word && revealed ? word.entry : undefined
-    const rated = store.db.prepare("SELECT count(*) FROM review_events WHERE json_extract(body, '$.sessionId')=?")
-      .pluck().get(session.sessionId) as number
+    const counts = store.db.prepare(`SELECT count(*) AS rated,
+      count(json_extract(body, '$.previousCardState')) AS dueRated
+      FROM review_events WHERE json_extract(body, '$.sessionId')=?`).get(session.sessionId) as { rated: number; dueRated: number }
     const { entryIds, ...cursor } = session
-    return { session: { ...cursor, total: entryIds.length }, revealed, rated, word: word && { prompt: word.prompt, card: !!word.card,
+    return { session: { ...cursor, total: entryIds.length }, revealed, ...counts, firstRecallRated: counts.rated - counts.dueRated, word: word && { prompt: word.prompt, card: !!word.card,
       entryRevision: word.entry.revision, answer } }
   }
 
   return {
+    openSession() {
+      const session = store.openReview()
+      return session && { sessionId: session.sessionId, deckId: session.deckId, revision: session.revision, status: session.status }
+    },
     overview(deckId: string | undefined, now: number) {
       const { decks, due, firstRecall, nextDueAt, progress, listStats } = queue(deckId, now)
       const { timezone, reviewResetMinutes } = store.settings()
@@ -116,17 +121,37 @@ export function createReviewService(store: StudyStore, engine: ReviewScheduler) 
         learnedToday: progress.filter(({ firstCompletedAt }) => firstCompletedAt !== undefined
           && firstCompletedAt >= learnStart && firstCompletedAt < learnEnd).length }
     },
-    round(deckId: string | undefined, now: number) {
-      return snapshot(store.openReview() ?? store.one<Versioned<ReviewSession>>(
-        'SELECT body FROM review_sessions WHERE deck_id IS ? ORDER BY updated_at DESC, id LIMIT 1', deckId ?? null), now)
+    round(deckId: string | undefined, now: number, sessionId?: string) {
+      const open = store.openReview()
+      const selected = sessionId ? store.review(sessionId) : open?.deckId === deckId && open ? open
+        : store.one<Versioned<ReviewSession>>(
+          'SELECT body FROM review_sessions WHERE deck_id IS ? ORDER BY updated_at DESC, rowid DESC LIMIT 1', deckId ?? null)
+      return snapshot(selected?.deckId === deckId ? selected : undefined, now)
     },
-    start(deckId: string | undefined, now: number) {
-      if (store.openReview()) return
+    legacyRound(deckId: string | undefined, now: number) {
+      const session = store.openReview() ?? store.one<Versioned<ReviewSession>>(
+        'SELECT body FROM review_sessions WHERE deck_id IS ? ORDER BY updated_at DESC, rowid DESC LIMIT 1', deckId ?? null)
+      return snapshot(session?.status === 'abandoned' ? undefined : session, now)
+    },
+    start(deckId: string | undefined, now: number, resume = false, studyFlowId?: string) {
+      const open = store.openReview()
+      if (open && open.deckId !== deckId) return {
+        kind: 'conflict' as const,
+        session: { sessionId: open.sessionId, deckId: open.deckId, status: open.status, revision: open.revision },
+      }
+      if (open) {
+        const updated = resume ? reconcile({ ...open, status: 'active', updatedAt: now,
+          studyFlowId: studyFlowId ?? open.studyFlowId }, now) : open
+        const changed = resume && (updated.status !== open.status || updated.currentIndex !== open.currentIndex
+          || updated.currentCardId !== open.currentCardId || updated.studyFlowId !== open.studyFlowId)
+        return { kind: 'round' as const, round: snapshot(changed ? store.saveReview(updated) : open, now)! }
+      }
       const { items } = queue(deckId, now)
-      if (!items.length) return
-      store.saveReview({ sessionId: randomUUID(), deckId, entryIds: items.map(({ entryId }) => entryId),
+      if (!items.length) return { kind: 'empty' as const }
+      const session = store.saveReview({ sessionId: randomUUID(), deckId, studyFlowId, entryIds: items.map(({ entryId }) => entryId),
         currentIndex: 0, currentCardId: reviewCardId(items[0].entryId), currentRevealed: false,
         startedAt: now, updatedAt: now, status: 'active' })
+      return { kind: 'round' as const, round: snapshot(session, now)! }
     },
     repair(id: string, revision: number, now: number) {
       const session = requireSession(id, revision)

@@ -15,8 +15,10 @@ import { ApiError, writeDailyNewWords } from '../../api/client'
 import { useLibraryQuery } from '../library/useLibraryQuery'
 import { useLibraryAction } from '../library/library-ui'
 import { pronunciationAccent } from '../../ui/pronunciationAccent'
-import { learn, learnSessionRoute, type LearnSessionRecord } from './api'
+import { allStudyRoute, learn, learnSessionRoute, type LearnSessionRecord } from './api'
 import PronunciationButton from '../speech/PronunciationButton.vue'
+import { useReviewOverview } from '../review/useReviewOverview'
+import { review, reviewSessionRoute } from '../review/api'
 import { settingsRoute } from '../settings/navigation'
 import AppIcon from '../../components/AppIcon.vue'
 import SessionMenu from '../../components/SessionMenu.vue'
@@ -24,6 +26,7 @@ import { learningPreferences, setDefaultLearnMode } from '../../ui/learningPrefe
 
 const route = useRoute()
 const router = useRouter()
+const flow = computed(() => typeof route.query.flow === 'string' ? route.query.flow : undefined)
 const selectedDeckId = ref(typeof route.query.deckId === 'string' ? route.query.deckId : '')
 const selectedListId = computed(() => typeof route.query.listId === 'string' ? route.query.listId : undefined)
 watch(() => route.query.deckId, (deckId) => { selectedDeckId.value = typeof deckId === 'string' ? deckId : '' })
@@ -64,14 +67,35 @@ const repeatCount = computed(() => home.value?.practiceCandidates.length ?? 0)
 const dailyRemaining = computed(() => Math.max(0, (home.value?.quota ?? 10) - (home.value?.completedToday ?? 0)))
 const newWordCount = computed(() => Math.min(eligibleCount.value, dailyRemaining.value))
 const deckOptions = computed(() => (home.value?.decks ?? []).map((deck) => ({ label: deck.name, value: deck.id })))
+const reviewDeck = computed(() => current.value?.session.status === 'completed' && !free.value
+  ? current.value.session.deckId : undefined)
+const { data: reviewOverview } = useReviewOverview(reviewDeck)
+const hasReviews = computed(() => reviewDeck.value && reviewOverview.value && (reviewOverview.value.due + reviewOverview.value.firstRecall) > 0)
 const learnHome = computed(() => !sessionId.value || current.value === null)
 
 watch([() => route.path, current], ([path, snapshot]) => {
   if (snapshot?.session.status === 'active'
     && (path === '/learn' || (path === '/learn/read' && snapshot.session.mode === 'dictation'))) {
-    void router.replace(learnSessionRoute(snapshot.session))
+    void router.replace(learnSessionRoute(snapshot.session, undefined, flow.value))
   }
 })
+watch([current, flow], ([snapshot, id]) => {
+  const session = snapshot?.session
+  if (id && session?.studyFlowId === id && (session.status === 'completed' || session.status === 'abandoned')) {
+    void router.replace(allStudyRoute(session.deckId, id))
+  }
+})
+
+function startReview() {
+  const deck = reviewDeck.value
+  if (!deck) return
+  void run(async () => {
+    const next = await review.start(deck, true)
+    if (next.kind === 'round') await router.push(reviewSessionRoute(next.round.session))
+    else await router.push({ path: '/review', query: { deckId: deck } })
+  })
+}
+
 function learnQuery(deckId?: string, listId?: string, session?: string) {
   return { deckId, listId, session, free: free.value ? '1' : undefined }
 }
@@ -123,7 +147,7 @@ function continueSession(session: LearnSessionRecord) {
   void run(async () => {
     const resumed = await learn.continueSession(session.sessionId, session.revision)
     if (resumed) {
-      await router.push(learnSessionRoute(resumed, stage))
+      await router.push(learnSessionRoute(resumed, stage, flow.value))
     }
   })
 }
@@ -147,7 +171,7 @@ function pauseSession(session: LearnSessionRecord) {
 
 function endSession(session: LearnSessionRecord) {
   void run(async () => {
-    if (session.source === 'free') {
+    if (session.source === 'free' || flow.value && session.studyFlowId === flow.value) {
       await learn.setStatus(session.sessionId, 'abandoned', session.revision)
       return
     }
@@ -374,7 +398,10 @@ async function saveDailyWords(value: number | null) {
         }) }}
       </p>
       <p v-if="result.difficult.length" class="library-muted">{{ t('Words to practice again') }} · {{ result.difficult.join(', ') }}</p>
+      <NAlert v-if="error" type="error" role="alert">{{ translateError(error) }}</NAlert>
       <div class="learn-actions">
+        <RouterLink v-if="!free" to="/study" class="library-back">{{ t('Back to study') }}</RouterLink>
+        <NButton v-if="hasReviews" :disabled="busy" @click="startReview">{{ t('Start review') }}</NButton>
         <RouterLink v-if="free" class="book-continue" :to="{ path: '/learn', query: learnQuery(current.session.deckId, current.session.listId) }">
           {{ t('Free spelling') }}
         </RouterLink>
@@ -403,7 +430,7 @@ async function saveDailyWords(value: number | null) {
       </NAlert>
       <NAlert v-else-if="current.session.status === 'paused'" type="info">
         {{ t('Session paused.') }} <NButton text @click="continueSession(current.session)">{{ t('Resume') }}</NButton>
-        <NButton v-if="free" text @click="endSession(current.session)">{{ t('End session') }}</NButton>
+        <NButton v-if="free || flow" text @click="endSession(current.session)">{{ t('End session') }}</NButton>
       </NAlert>
       <article v-else-if="activeWord && reading" class="spell-reading-word">
         <div class="spell-reading-tools">

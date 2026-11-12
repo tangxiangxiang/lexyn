@@ -751,3 +751,7 @@
   .spell-home-tools { gap: 4px; }
   .spell-practice .learn-term { font-size: 2.2rem; }
 }
+
+.study-result { display: grid; gap: 14px; }
+.study-result-grid { display: flex; flex-wrap: wrap; margin-block: 8px; }
+.study-result-grid > div { flex: 1 1 100px; }

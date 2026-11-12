@@ -532,3 +532,88 @@ test('free spelling and ending a free round leave an existing FSRS card, review 
   })
   expect(snapshot()).toEqual(before)
 })
+
+test('starts scoped Review directly, resumes a revealed paused card and reports a different scope without changing it', async () => {
+  const round = await setupReview()
+  const other = await data(post('library/create-deck', [{ name: 'Another book' }]))
+  await data(post('review/status', [round.sessionId, 'paused', round.revision]))
+  const paused = await data(get('review/open'))
+
+  expect(await data(post('review/start', [other.id, true]))).toEqual({ kind: 'conflict', session: paused })
+  expect(await data(get('review/scoped', [other.id, round.sessionId]))).toBeNull()
+  expect(await data(get('review/open'))).toEqual(paused)
+  const resumed = await data(post('review/start', [round.deckId, true]))
+  expect(resumed).toMatchObject({
+    kind: 'round', round: { session: { sessionId: round.sessionId, currentCardId: round.currentCardId, status: 'active' },
+      revealed: true, word: { answer: { term: 'cache' } } },
+  })
+  expect(count('review_events')).toBe(0)
+  expect(await data(post('review/start', [round.deckId, true]))).toEqual(resumed)
+})
+
+test('All prioritizes FSRS reviews, recovers its handoff and counts first learning separately', async () => {
+  const original = await setupReview()
+  const deck = original.deckId
+  await data(post('review/score', [original.sessionId, original.currentCardId, 'easy', original.revision]))
+  async function seedWord(term: string, meaning: string, rating?: string) {
+    const entry = await data(post('library/create-entry', [deck, { term, meaning }]))
+    const session = await data(post('learn/start', [deck, 'copy', [entry.id], true]))
+    await data(post('learn/attempt', [session.sessionId, entry.id, term, session.revision]))
+    const current = await data(get('learn/session', [session.sessionId]))
+    await data(post('learn/finish', [session.sessionId, entry.id, 'completed', current.session.revision]))
+    if (rating) {
+      const { round } = await data(post('review/start', [deck, true]))
+      await data(post('review/reveal', [round.session.sessionId, round.session.currentCardId, entry.revision, round.session.revision]))
+      const shown = await data(get('review/scoped', [deck, round.session.sessionId]))
+      await data(post('review/score', [shown.session.sessionId, shown.session.currentCardId, rating, shown.session.revision]))
+    }
+  }
+  await seedWord('mutex', '互斥锁', 'again')
+  await seedWord('thread', '线程')
+  const newWord = await data(post('library/create-entry', [deck, { term: 'buffer', meaning: '缓冲区' }]))
+  const latestDue = db.prepare("SELECT max(json_extract(body, '$.dueAt')) FROM review_cards").pluck().get() as number
+  now = latestDue + 1000
+  expect(await data(get('review/overview', [deck]))).toMatchObject({ due: 2, firstRecall: 1 })
+  expect(await data(get('learn/daily', [deck]))).toMatchObject({ pendingNew: 1 })
+
+  const started = await data(post('learn/all', [deck, 'copy']))
+  expect(started.kind).toBe('review')
+  expect(await data(post('learn/all', [deck, 'copy']))).toEqual(started)
+  for (const [prompt, card] of [['互斥锁', true], ['缓存', true], ['线程', false]]) {
+    const { session, word } = await data(get('review/scoped', [deck, started.session.sessionId]))
+    expect(word).toEqual({ prompt, card, entryRevision: 1 })
+    await data(post('review/reveal', [session.sessionId, session.currentCardId, word.entryRevision, session.revision]))
+    const shown = await data(get('review/scoped', [deck, session.sessionId]))
+    await data(post('review/score', [session.sessionId, session.currentCardId, 'easy', shown.session.revision]))
+  }
+
+  // A second device has only the selected deck, not the flow URL.
+  const next = await data(post('learn/all', [deck, 'copy']))
+  expect(next).toMatchObject({ kind: 'learn', flowId: started.flowId, session: { entryIds: [newWord.id] } })
+  expect(await data(post('learn/all', [deck, 'copy', started.flowId]))).toEqual(next)
+  await data(post('learn/attempt', [next.session.sessionId, newWord.id, 'buffer', next.session.revision]))
+  const learning = await data(get('learn/session', [next.session.sessionId]))
+  await data(post('learn/finish', [next.session.sessionId, newWord.id, 'completed', learning.session.revision]))
+  expect(await data(post('learn/all', [deck, 'copy', started.flowId]))).toEqual({
+    kind: 'complete', flowId: started.flowId, reviewed: 3, learned: 1, pending: 1, ended: false,
+  })
+  expect(count('review_events')).toBe(5)
+  expect(count('review_cards')).toBe(3)
+})
+
+test('All still reviews on a non-study day and can end without allocating new words', async () => {
+  const round = await setupReview()
+  await data(post('library/create-entry', [round.deckId, { term: 'buffer', meaning: '缓冲区' }]))
+  await data(post('settings/timezone', ['UTC']))
+  await data(post('settings/plan', [10, 2, 210]))
+  now = Date.parse('2026-11-15T12:00:00Z') // Sunday
+  expect(await data(get('learn/daily', [round.deckId]))).toMatchObject({ quota: 0, pendingNew: 0 })
+  const started = await data(post('learn/all', [round.deckId, 'copy']))
+  expect(started).toMatchObject({ kind: 'review', session: { sessionId: round.sessionId, currentRevealed: true } })
+  await data(post('review/status', [started.session.sessionId, 'abandoned', started.session.revision]))
+  expect(await data(post('learn/all', [round.deckId, 'copy', started.flowId]))).toMatchObject({
+    kind: 'complete', reviewed: 0, learned: 0, pending: 1, ended: true,
+  })
+  expect(count('learn_sessions')).toBe(1)
+  expect(count('review_events')).toBe(0)
+})

@@ -237,6 +237,7 @@ test('manual ratings ignore spelling and block shortcuts in input, during IME, o
   await learnWords(page, [{ term: 'deadlock', meaning: '死锁' }])
   await openReview(page)
   await page.getByRole('button', { name: 'Start review' }).click()
+  await page.getByRole('button', { name: 'Spell the word' }).click()
   const input = page.getByRole('textbox', { name: 'Type your recall' })
   const card = page.locator('.review-recall')
   await input.press('Space')

@@ -109,12 +109,16 @@ export function createLearnService(store: StudyStore) {
       const entries = entriesInScope(deckId, listId).filter((entry) => entry.deletedAt === undefined && deckIds.has(entry.deckId))
       const candidates = entries.filter((entry) => !learned.has(entry.id) && !locked.has(entry.id))
         .slice(0, Math.max(0, quota - completedToday))
+      const sameScope = activeSession?.deckId === deckId && (!listId || listId === activeSession?.listId)
+      const reservedNew = sameScope ? entries.filter(({ id }) => locked.has(id) && !learned.has(id)).length : 0
+      const hasNewWordSession = !!(activeSession && sameScope && (reservedNew || activeSession.firstCompletedEntryIds.length))
+      const pendingNew = hasNewWordSession ? Math.min(Math.max(0, quota - completedToday), reservedNew) : candidates.length
       const practiceCandidates = entries.filter((entry) => learned.has(entry.id))
         .sort((a, b) => learned.get(a.id)!.lastPracticedAt - learned.get(b.id)!.lastPracticedAt || oldest(a, b)).slice(0, 10)
       const lists = listId && deckId ? store.lists.summaries(deckId) : []
       const list = lists.find(({ id }) => id === listId)
       const nextList = list && lists.find(({ order, count }) => order > list.order && count > 0)
-      return { quota, dailyNewWords, completedToday, day, decks, activeSession: activeSession && publicSession(activeSession), candidates, practiceCandidates, list, nextList }
+      return { quota, dailyNewWords, completedToday, day, pendingNew, hasNewWordSession, decks, activeSession: activeSession && publicSession(activeSession), candidates, practiceCandidates, list, nextList }
     },
     freeState() {
       const active = store.openLearn('free')
@@ -138,10 +142,10 @@ export function createLearnService(store: StudyStore) {
         firstCompletedEntryIds: [], currentEntryStartedAt: now, currentAttempts: 0, currentAssisted: false,
       })))
     },
-    startSession(deckId: string, mode: LearnMode, entryIds: string[], newWords: boolean, now: number, listId?: string) {
+    startSession(deckId: string, mode: LearnMode, entryIds: string[], newWords: boolean, now: number, listId?: string, studyFlowId?: string) {
       const active = store.openLearn()
       if (active) {
-        if (listId && (active.listId !== listId || active.deckId !== deckId)) {
+        if (active.deckId !== deckId || listId && active.listId !== listId) {
           throw new StudyError('Another Learn session is open. Continue or end it before starting this list.', 409)
         }
         return publicSession(active)
@@ -158,7 +162,7 @@ export function createLearnService(store: StudyStore) {
       }
       if (newWords && completedToday + available.length > quota) throw new StudyError('The daily new word limit changed.', 409)
       return publicSession(store.saveLearn(withDefaultHints({
-        spelling: store.spellingSettings(), currentHints: [],
+        studyFlowId, spelling: store.spellingSettings(), currentHints: [],
         sessionId: randomUUID(), deckId, listId, mode, entryIds: available.map(({ id }) => id), currentIndex: 0,
         startedAt: now, updatedAt: now, status: 'active', dailyKey: day,
         firstCompletedEntryIds: [], currentEntryStartedAt: now, currentAttempts: 0, currentAssisted: false,

@@ -5,6 +5,7 @@ import EmptyPage from '../components/EmptyPage.vue'
 import DeckPage from '../features/library/DeckPage.vue'
 import SettingsPage from '../features/settings/SettingsPage.vue'
 import LibraryPage from '../features/library/LibraryPage.vue'
+import AllStudyPage from '../features/learn/AllStudyPage.vue'
 import LearnPage from '../features/learn/LearnPage.vue'
 import ReviewPage from '../features/review/ReviewPage.vue'
 import ProgressPage from '../features/progress/ProgressPage.vue'
@@ -17,6 +18,7 @@ export const router = createRouter({
   routes: [
     { path: '/', redirect: '/study' },
     { path: '/study', component: LibraryPage, props: { resumeCurrentBook: true }, meta: { title: 'Current book', shell: 'full' } },
+    { path: '/study/all', component: AllStudyPage, meta: { title: 'Words to study' } },
     { path: '/library', component: LibraryPage, meta: { title: 'Library', shell: 'full' } },
     { path: '/library/built-in/:bookId?', name: 'library-builtin-books', component: BuiltinBooksPage, meta: { title: 'Built-in wordbooks', shell: 'full' } },
     { path: '/learn', component: LearnPage, meta: { title: 'Learn' } },

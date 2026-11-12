@@ -63,6 +63,8 @@ export interface ReviewEvent {
 }
 
 export interface ReviewSession {
+  studyFlowId?: string
+  studyFlowFinished?: boolean
   sessionId: string
   deckId?: string
   entryIds: string[]

@@ -76,6 +76,13 @@ for (const [width, height, touch] of [[320, 740, true], [375, 812, true], [430, 
       await expect(page.getByText('Session complete', { exact: true })).toBeVisible()
       await nav('Review')
       await activate(page.getByRole('button', { name: 'Start review' }))
+      await activate(page.getByRole('button', { name: 'Spell the word' }))
+      const reviewKeyboard = page.getByRole('group', { name: 'On-screen keyboard' })
+      await activate(reviewKeyboard.getByRole('button', { name: 'd', exact: true }))
+      await expect(page.getByRole('textbox', { name: 'Type your recall' })).toHaveValue('d')
+      await fits(page, width)
+      await activate(page.getByRole('button', { name: 'Think of the word' }))
+      await expect(reviewKeyboard).toHaveCount(0)
       await activate(page.getByRole('button', { name: 'Show answer' }))
       for (const name of ['Again', 'Hard', 'Good', 'Easy']) {
         const rating = page.getByRole('button', { name, exact: true })
