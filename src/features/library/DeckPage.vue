@@ -198,6 +198,9 @@ function exportDeck() {
         <div class="reader-menu-actions" @click="closeLibraryMenu">
           <NButton v-if="archived" text :disabled="busy" @click="restoreDeck">{{ t('Restore deck') }}</NButton>
           <template v-else>
+            <RouterLink :to="{ path: '/learn', query: { deckId, listId: selected?.id, free: '1' } }">
+              {{ t('Free spelling') }}
+            </RouterLink>
             <NButton text @click="editing = {}">{{ t('Add word') }}</NButton>
             <NButton text @click="importing = true">{{ t('Import words') }}</NButton>
             <NButton v-if="selected" text @click="renaming = selected; newListName = selected.name">{{ t('Rename list') }}</NButton>

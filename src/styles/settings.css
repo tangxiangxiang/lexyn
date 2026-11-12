@@ -198,6 +198,7 @@ a.settings-link:hover, .settings-current-book:hover { background: #bce2ff15; }
   border: 1px solid #3fb5e864;
 }
 .settings-plan :is(button, input):focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.spelling-settings-note { padding: 0 var(--settings-inset) var(--settings-inset); color: var(--muted); font-size: .8rem; }
 .settings-page .settings-link > .n-select { width: auto; min-width: 100px; }
 .settings-page .settings-link > .n-radio-group { flex-shrink: 0; }
 

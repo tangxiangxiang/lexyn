@@ -194,6 +194,28 @@ const migrations: ({ version: number; sql: string } | { version: number; apply: 
       ALTER TABLE owner_settings ADD COLUMN review_reset_minutes INTEGER NOT NULL DEFAULT 0 CHECK (review_reset_minutes BETWEEN 0 AND 1439);
     `,
   },
+  {
+    version: 12,
+    sql: `
+      ALTER TABLE owner_settings ADD COLUMN spelling TEXT CHECK (spelling IS NULL OR json_valid(spelling));
+      DROP INDEX learn_one_open;
+      CREATE UNIQUE INDEX learn_one_open ON learn_sessions (coalesce(json_extract(body, '$.source'), 'learn'))
+        WHERE status IN ('active','paused');
+      DROP INDEX practice_session_entry;
+      CREATE UNIQUE INDEX practice_session_entry ON practice_events
+        (json_extract(body, '$.sessionId'), entry_id, coalesce(json_extract(body, '$.round'), 0));
+      CREATE TABLE spelling_attempts (
+        id TEXT PRIMARY KEY NOT NULL,
+        entry_id TEXT NOT NULL REFERENCES entries(id),
+        session_id TEXT NOT NULL,
+        round INTEGER NOT NULL CHECK (round BETWEEN 0 AND 3),
+        attempt INTEGER NOT NULL CHECK (attempt > 0),
+        body TEXT NOT NULL CHECK (json_valid(body)),
+        UNIQUE (session_id, entry_id, round, attempt)
+      ) STRICT;
+      CREATE INDEX spelling_attempt_entry ON spelling_attempts(entry_id);
+    `,
+  },
 ]
 
 export const latestDatabaseVersion = migrations.at(-1)!.version

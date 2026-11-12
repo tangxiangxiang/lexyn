@@ -50,6 +50,7 @@ test('requires a chosen username for the old default account and keeps its libra
     DROP TABLE speech_settings; DROP TABLE speech_assets;
     ALTER TABLE owner_settings DROP COLUMN study_weekdays;
     ALTER TABLE owner_settings DROP COLUMN review_reset_minutes;
+    DROP TABLE spelling_attempts; ALTER TABLE owner_settings DROP COLUMN spelling;
     PRAGMA user_version = 4;`)
   migrate(backend.db)
   expect(auth.session(previous.token)).toBeUndefined()

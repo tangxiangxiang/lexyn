@@ -25,6 +25,7 @@ const studyModes = [
   { path: '/study', title: 'Current book', icon: 'library' },
   { path: '/library', title: 'Library', icon: 'library' },
   { path: '/learn', title: 'Learn', icon: 'learn' },
+  { path: '/learn?free=1', title: 'Free spelling', icon: 'learn' },
   { path: '/review', title: 'Review', icon: 'review' },
   { path: '/progress', title: 'Progress', icon: 'progress' },
   { path: '/settings', title: 'Settings', icon: 'settings' },

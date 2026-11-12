@@ -31,6 +31,7 @@ function verifyDatabase(path: string) {
     if (version >= 10 && (!tables.has('deck_lists') || !tables.has('deck_list_members'))) {
       throw new Error('The SQLite backup is missing vocabulary lists.')
     }
+    if (version >= 12 && !tables.has('spelling_attempts')) throw new Error('The SQLite backup is missing spelling attempts.')
     const integrity = db.pragma('integrity_check') as { integrity_check: string }[]
     if (integrity.length !== 1 || integrity[0].integrity_check !== 'ok' || (db.pragma('foreign_key_check') as unknown[]).length) {
       throw new Error('The SQLite backup failed its integrity check.')

@@ -20,14 +20,14 @@ export function restoreLibrary(db: Database.Database, { backup, reviewChanges }:
     const owner = db.prepare('SELECT id FROM owner WHERE singleton = 1').get() as { id: string } | undefined
     if (!owner) throw new Error('Initialize the Owner before restoring JSON.')
     const tables = ['decks', 'entries', 'deck_lists', 'deck_list_members', 'practice_events', 'learn_progress', 'review_events',
-      'review_cards', 'learn_sessions', 'review_sessions', 'owner_settings', 'request_idempotency']
+      'spelling_attempts', 'review_cards', 'learn_sessions', 'review_sessions', 'owner_settings', 'request_idempotency']
     if (tables.some((table) => db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get())) {
       throw new Error('JSON restore requires an empty server. Existing data was kept.')
     }
     const store = createStudyStore(db, owner.id)
     for (const value of backup.decks) store.saveDeck(value)
     for (const value of backup.entries) store.saveEntry(value)
-    if (backup.formatVersion === 6) {
+    if ('lists' in backup) {
       const deckByList = new Map(backup.lists.map((list) => [list.id, list.deckId]))
       for (const list of backup.lists) insertList(db, list)
       for (const member of backup.listMembers) insertMember(db, deckByList.get(member.listId)!, member)
@@ -35,13 +35,16 @@ export function restoreLibrary(db: Database.Database, { backup, reviewChanges }:
       seedDeckLists(db)
     }
     for (const event of backup.practiceEvents) store.addPractice(event)
+    const attempts = 'spellingAttempts' in backup ? backup.spellingAttempts : []
+    for (const attempt of attempts) store.addSpellingAttempt(attempt)
     for (const value of backup.learnProgress) store.saveProgress(value)
     for (const { event } of reviewChanges) store.addReview(event)
     for (const { card } of reviewChanges) store.saveCard(card)
     const { dailyNewWords, timezone, studyWeekdays, reviewResetMinutes } = backup.settings
     store.saveSettings(dailyNewWords, timezone, studyWeekdays, reviewResetMinutes)
+    if (backup.settings.spelling) store.saveSpellingSettings(backup.settings.spelling)
     const expected = { decks: backup.decks.length, entries: backup.entries.length, practice_events: backup.practiceEvents.length,
-      learn_progress: backup.learnProgress.length, review_events: backup.reviewEvents.length, review_cards: backup.reviewCards.length }
+      spelling_attempts: attempts.length, learn_progress: backup.learnProgress.length, review_events: backup.reviewEvents.length, review_cards: backup.reviewCards.length }
     for (const [table, count] of Object.entries(expected)) {
       if (db.prepare(`SELECT count(*) AS count FROM ${table}`).pluck().get() !== count) throw new Error('Restored record count differs from the backup.')
     }

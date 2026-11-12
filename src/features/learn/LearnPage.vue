@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import DictionaryMeaningView from '../dictionary/DictionaryMeaningView.vue'
 import { t, translateError } from '../../i18n/useI18n'
-import { computed, nextTick, onScopeDispose, ref, watch, type InputHTMLAttributes } from 'vue'
-import { NAlert, NButton, NCard, NEmpty, NInput, NInputNumber, NProgress, NRadioButton, NRadioGroup, NSelect } from 'naive-ui'
+import { computed, ref, watch } from 'vue'
+import { NAlert, NButton, NCard, NEmpty, NInputNumber, NProgress, NRadioButton, NRadioGroup, NSelect } from 'naive-ui'
 import { useRoute, useRouter } from 'vue-router'
 import type { Entry as EntryRecord } from '../../../shared/domain/library'
 import { hasFinalMeaning } from '../../../shared/domain/dictionary'
 import type { LearnMode } from '../../../shared/domain/learning'
-import { compareSpelling, isSpellingCorrect, normalizeSpelling } from '../../../shared/domain/learning'
-import { writeDailyNewWords } from '../../api/client'
+import { practiceRound } from '../../../shared/domain/learning'
+import { defaultSpelling, type SpellingHint } from '../../../shared/domain/spelling'
+import SpellingInput from '../spelling/SpellingInput.vue'
+import { library } from '../library/api'
+import { ApiError, writeDailyNewWords } from '../../api/client'
 import { useLibraryQuery } from '../library/useLibraryQuery'
 import { useLibraryAction } from '../library/library-ui'
 import { pronunciationAccent } from '../../ui/pronunciationAccent'
@@ -24,6 +27,7 @@ const router = useRouter()
 const selectedDeckId = ref(typeof route.query.deckId === 'string' ? route.query.deckId : '')
 const selectedListId = computed(() => typeof route.query.listId === 'string' ? route.query.listId : undefined)
 watch(() => route.query.deckId, (deckId) => { selectedDeckId.value = typeof deckId === 'string' ? deckId : '' })
+const free = computed(() => route.query.free === '1' || current.value?.session.source === 'free')
 const mode = ref<LearnMode>(learningPreferences.value.defaultMode)
 const sessionId = computed(() => typeof route.query.session === 'string' ? route.query.session : undefined)
 const { data: home, error: homeLoadError, reload: reloadHome } =
@@ -34,112 +38,25 @@ const { data: current, error: sessionLoadError, reload: reloadSession } =
 const { data: result } = useLibraryQuery(() => sessionId.value,
   (id, signal) => id ? learn.result(id, signal) : Promise.resolve(null))
 const { busy, error, run } = useLibraryAction()
-const input = ref('')
-const inputElement = ref<InstanceType<typeof NInput>>()
-const nextButton = ref<InstanceType<typeof NButton>>()
-const composing = ref(false)
 const localMessage = ref('')
 const dailyWords = ref(10)
 const activeWord = computed(() => current.value?.session.status === 'active' ? current.value.entry : undefined)
 const wordKey = computed(() => activeWord.value && current.value
-  ? current.value.session.sessionId + '/' + activeWord.value.id : undefined)
-const expected = computed(() => activeWord.value?.term ?? '')
-const lastSubmitted = computed(() => activeWord.value ? current.value?.session.currentLastSubmitted : undefined)
-const submittedCorrectly = computed(() => !!lastSubmitted.value && isSpellingCorrect(expected.value, lastSubmitted.value))
+  ? [current.value.session.sessionId, current.value.session.currentIndex, activeWord.value.id].join('/') : undefined)
+const submittedCorrectly = computed(() => !!current.value?.correct)
 const isCopy = computed(() => current.value?.session.mode === 'copy')
 const reading = computed(() => route.path === '/learn/read' && isCopy.value)
 const spelling = computed(() => route.path === '/learn/spell')
-const guidedCopy = computed(() => spelling.value && isCopy.value)
 const inPractice = computed(() => activeWord.value && (reading.value || spelling.value))
-const typoIndex = ref<number>()
-const advancing = ref(false)
-let typoTimer: number | undefined
-const keyboardVisible = ref(true)
-const keyboardRows = ['qwertyuiop', 'asdfghjkl', 'zxcvbnm']
-const extraKeys = computed(() => isCopy.value ? [...new Set([...expected.value.toLowerCase()]
-  .filter((character) => !/[a-z\s]/.test(character)))] : [])
-const answerVisible = computed(() => isCopy.value || current.value?.session.currentAssisted)
-const meaning = computed(() => {
-  const hint = activeWord.value?.meaning
-  if (!hint || answerVisible.value) return hint
-  return normalizeSpelling(hint).includes(normalizeSpelling(expected.value)) ? undefined : hint
-})
-const feedback = computed(() => {
-  const answer = isCopy.value ? input.value : lastSubmitted.value
-  return answer ? compareSpelling(expected.value, answer) : []
-})
-const typedLetters = computed(() => [...input.value.normalize('NFC')])
-const expectedLetters = computed(() => [...expected.value.normalize('NFC')])
-
-function incorrectLetter(index: number) {
-  return index === typoIndex.value || (answerVisible.value
-    && typedLetters.value[index]?.toLowerCase() !== expectedLetters.value[index]?.toLowerCase())
-}
-
-function clearTypoTimer() {
-  window.clearTimeout(typoTimer)
-  typoTimer = undefined
-}
-
-onScopeDispose(clearTypoTimer)
-watch([wordKey, guidedCopy], () => {
-  clearTypoTimer()
-  if (typoIndex.value !== undefined) input.value = ''
-  typoIndex.value = undefined
-})
-
-watch([input, composing], ([value, isComposing]) => {
-  if (!guidedCopy.value || !value || isComposing || busy.value || typoIndex.value !== undefined || submittedCorrectly.value) return
-  const session = current.value?.session
-  const entry = activeWord.value
-  if (!session || !entry) return
-
-  if (isSpellingCorrect(expected.value, value)) {
-    void submit()
-    return
-  }
-  const mismatch = typedLetters.value.findIndex((letter, index) => letter.toLowerCase() !== expectedLetters.value[index]?.toLowerCase())
-  if (mismatch < 0) return
-
-  // Keep the incorrect key visible until the entire attempt can animate away.
-  typoIndex.value = mismatch
-  if (value.trim()) {
-    void run(() => learn.recordAttempt(session.sessionId, entry.id, value, session.revision))
-  }
-  typoTimer = window.setTimeout(() => {
-    input.value = ''
-    typoIndex.value = undefined
-    typoTimer = undefined
-    void nextTick(() => inputElement.value?.focus())
-  }, 180)
-}, { flush: 'post' })
-const promptLetters = computed(() => {
-  // Copy mode may show the target word; dictation never renders the target
-  // until the user explicitly reveals it.
-  const visible = answerVisible.value ? expectedLetters.value : typedLetters.value
-  return visible.length <= 32 ? visible : []
-})
-const promptStates = computed(() => promptLetters.value.map((letter, index) => ({
-  letter,
-  state: index >= typedLetters.value.length
-    ? (index === typedLetters.value.length ? 'current' : 'pending')
-    : (incorrectLetter(index) ? 'incorrect' : 'typed'),
-})))
-const promptSegments = computed(() => {
-  const count = answerVisible.value ? expectedLetters.value.length : typedLetters.value.length + 1
-  return Array.from({ length: Math.min(count, 32) }, (_, index) => index)
-})
-const spellingInputProps = computed<InputHTMLAttributes>(() => ({
-  'aria-label': isCopy.value ? t('Copy the word') : t('Type the dictated word'),
-  autocomplete: 'off',
-  autocapitalize: 'none',
-  spellcheck: false,
-  enterkeyhint: 'done',
-  inputmode: keyboardVisible.value ? 'none' : 'text',
-  onCompositionstart: () => { composing.value = true },
-  onCompositionend: () => { composing.value = false },
-  onBlur: () => { composing.value = false },
-}))
+const answerVisible = computed(() => !!current.value?.answerVisible)
+const preferences = computed(() => current.value?.session.spelling ?? defaultSpelling)
+const round = computed(() => current.value ? practiceRound(current.value.session) : 0)
+const { data: freeSession, reload: reloadFree } = useLibraryQuery(() => route.query.free === '1',
+  (enabled, signal) => enabled ? learn.freeState(enabled, signal) : Promise.resolve(undefined))
+const { data: freeLists } = useLibraryQuery(() => free.value ? selectedDeckId.value : '',
+  (id, signal) => id ? library.getLists(id, signal) : Promise.resolve(null))
+const freeListOptions = computed(() => freeLists.value?.lists.filter(({ count }) => count)
+  .map(({ id, name }) => ({ value: id, label: name })) ?? [])
 const progressValue = computed(() => current.value
   ? Math.round(current.value.session.currentIndex / Math.max(current.value.session.entryIds.length, 1) * 100) : 0)
 const eligibleCount = computed(() => home.value?.candidates.length ?? 0)
@@ -156,7 +73,7 @@ watch([() => route.path, current], ([path, snapshot]) => {
   }
 })
 function learnQuery(deckId?: string, listId?: string, session?: string) {
-  return { deckId, listId, session }
+  return { deckId, listId, session, free: free.value ? '1' : undefined }
 }
 
 function listLink(deckId: string, listId: string) {
@@ -166,38 +83,7 @@ function listLink(deckId: string, listId: string) {
 watch(() => home.value?.dailyNewWords, (quota) => { if (quota !== undefined) dailyWords.value = quota })
 
 watch(() => current.value?.session.mode, (value) => { if (value) mode.value = value }, { immediate: true })
-watch([wordKey, lastSubmitted], ([key, answer], [previousKey]) => {
-  if (key !== previousKey || submittedCorrectly.value) {
-    input.value = isCopy.value && !submittedCorrectly.value ? '' : answer ?? ''
-  }
-  if (key !== previousKey) {
-    composing.value = false
-    localMessage.value = ''
-  }
-})
-
-watch([wordKey, submittedCorrectly, busy, spelling, advancing], async ([key, correct, pending, typing, changingWord]) => {
-  if (!key || pending || !typing || changingWord) return
-  await nextTick()
-  if (key !== wordKey.value || busy.value || advancing.value || !spelling.value) return
-  if (correct) nextButton.value?.$el.focus()
-  else inputElement.value?.focus()
-}, { flush: 'post' })
-
-function onKeydown(event: KeyboardEvent) {
-  if (event.key !== 'Enter' || event.defaultPrevented) return
-  const onNext = event.target === nextButton.value?.$el
-  if (!onNext && event.target !== inputElement.value?.inputElRef) return
-  if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey
-    || composing.value || event.isComposing || event.keyCode === 229) {
-    if (onNext) event.preventDefault()
-    return
-  }
-  event.preventDefault()
-  if (event.repeat || busy.value || advancing.value) return
-  if (submittedCorrectly.value) void finishWord('completed')
-  else void submit()
-}
+watch(wordKey, () => { localMessage.value = '' })
 
 function resolveInvalidWord() {
   const session = current.value?.session
@@ -248,6 +134,7 @@ function abandonSession(session: LearnSessionRecord) {
     await router.replace({ path: '/learn', query: learnQuery(selectedDeckId.value || undefined, selectedListId.value) })
     localMessage.value = 'Your completed practice stays in your learning history.'
     await reloadHome()
+    await reloadFree()
   })
 }
 
@@ -260,40 +147,41 @@ function pauseSession(session: LearnSessionRecord) {
 
 function endSession(session: LearnSessionRecord) {
   void run(async () => {
+    if (session.source === 'free') {
+      await learn.setStatus(session.sessionId, 'abandoned', session.revision)
+      return
+    }
     await learn.setStatus(session.sessionId, 'paused', session.revision)
     await router.push({ path: '/learn', query: learnQuery(session.deckId, session.listId) })
     await reloadHome()
   })
 }
 
-async function submit() {
+let pendingAttempt: { key: string; answer: string; partial: boolean; revision: number } | undefined
+
+function submit(answer: string, partial: boolean) {
   const session = current.value?.session
   const entry = activeWord.value
-  if (!session || !entry || submittedCorrectly.value || busy.value || advancing.value || composing.value || typoIndex.value !== undefined) return
-  const answer = input.value
-  if (!answer.trim()) { localMessage.value = 'Type your answer before submitting.'; return }
+  const key = wordKey.value
+  if (!session || !entry || !key || submittedCorrectly.value) return Promise.resolve(undefined)
   localMessage.value = ''
-  advancing.value = true
-  try {
-    const attempt = await run(() => learn.recordAttempt(session.sessionId, entry.id, answer, session.revision))
-    if (!attempt || wordKey.value !== session.sessionId + '/' + entry.id) return
-    if (attempt.correct) {
-      if (spelling.value) {
-        await finishWord('completed')
+  if (pendingAttempt?.key !== key || pendingAttempt.answer !== answer || pendingAttempt.partial !== partial) {
+    pendingAttempt = { key, answer, partial, revision: session.revision }
+  }
+  const request = pendingAttempt
+  return run(async () => {
+    try {
+      const result = await learn.recordAttempt(session.sessionId, entry.id, answer, request.revision, partial)
+      pendingAttempt = undefined
+      return result
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status > 0 && cause.status < 500 && cause.status !== 408) {
+        pendingAttempt = undefined
+        if (cause.status === 409) await reloadSession()
       }
-      return
+      throw cause
     }
-    localMessage.value = 'Not quite. Check the marked letters and try again.'
-    const failedWordKey = wordKey.value
-    window.setTimeout(() => {
-      // Let the learner see the error briefly, then reset only if they have
-      // not already started another attempt or moved to a different word.
-      if (wordKey.value !== failedWordKey || submittedCorrectly.value || input.value !== answer) return
-      input.value = ''
-      localMessage.value = ''
-      void nextTick(() => inputElement.value?.focus())
-    }, 650)
-  } finally { advancing.value = false }
+  })
 }
 
 async function finishWord(outcome: 'completed' | 'skipped') {
@@ -303,27 +191,42 @@ async function finishWord(outcome: 'completed' | 'skipped') {
   await run(() => learn.finishCurrent(session.sessionId, entry.id, outcome, session.revision))
 }
 
-function enterKey(character: string) {
-  if (busy.value || advancing.value || submittedCorrectly.value || composing.value || typoIndex.value !== undefined) return
-  input.value += character
-  inputElement.value?.focus()
-}
-
-async function markAssisted() {
+async function markAssisted(hint: SpellingHint = 'reveal', enabled = true) {
   const session = current.value?.session
   const entry = activeWord.value
   if (!session || !entry || submittedCorrectly.value) return
-  const saved = await run(() => learn.setAssisted(session.sessionId, entry.id, session.revision))
-  if (saved && wordKey.value === session.sessionId + '/' + entry.id) {
-    localMessage.value = 'Answer revealed. This answer will be marked as assisted.'
-  }
+  const key = wordKey.value
+  const saved = await run(() => hint === 'reveal'
+    ? learn.setAssisted(session.sessionId, entry.id, session.revision)
+    : learn.setHint(session.sessionId, entry.id, hint, enabled, session.revision))
+  if (wordKey.value !== key) return
+  if (saved && hint === 'reveal') localMessage.value = 'Answer revealed. This answer will be marked as assisted.'
+  else if (saved === false && enabled) localMessage.value = hint === 'syllables'
+    ? 'No verified syllable guide is available for this word.' : 'This word uses the full keyboard.'
+  else if (saved) localMessage.value = ''
 }
 
 function switchToCopy(session: LearnSessionRecord) {
+  void run(() => learn.setMode(session.sessionId, 'copy', session.revision))
+}
+
+function startFree() {
+  if (!selectedDeckId.value) return
   void run(async () => {
-    await learn.setMode(session.sessionId, 'copy', session.revision)
-    if (!submittedCorrectly.value) input.value = ''
+    const session = await learn.startFree(selectedDeckId.value, mode.value, selectedListId.value)
+    await router.push(learnSessionRoute(session))
   })
+}
+
+function endFreeFromHome(session: LearnSessionRecord) {
+  void run(async () => {
+    await learn.setStatus(session.sessionId, 'abandoned', session.revision)
+    await router.push({ path: '/learn', query: learnQuery(session.deckId, session.listId, session.sessionId) })
+  })
+}
+
+function chooseFreeScope(deckId: string | null, listId?: string) {
+  void router.replace({ path: '/learn', query: learnQuery(deckId || undefined, listId) })
 }
 
 async function saveDailyWords(value: number | null) {
@@ -342,12 +245,41 @@ async function saveDailyWords(value: number | null) {
       <AppIcon v-if="inPractice" name="chevronLeft" /><template v-else>← {{ t('Back to study list') }}</template>
     </RouterLink>
     <RouterLink v-else-if="sessionId && !current?.session.listId" class="library-back"
-      :class="{ 'spell-session-back icon-control': inPractice }" :to="inPractice ? '/study' : '/learn'"
-      :aria-label="inPractice ? t('Lexyn home') : undefined">
-      <AppIcon v-if="inPractice" name="chevronLeft" /><template v-else>{{ t('← Learn home') }}</template>
+      :class="{ 'spell-session-back icon-control': inPractice }"
+      :to="free ? { path: '/learn', query: learnQuery(selectedDeckId || undefined, selectedListId) } : inPractice ? '/study' : '/learn'"
+      :aria-label="free ? t('Free spelling') : inPractice ? t('Lexyn home') : undefined">
+      <AppIcon v-if="inPractice" name="chevronLeft" /><template v-else>← {{ t(free ? 'Free spelling' : 'Learn') }}</template>
     </RouterLink>
-    <header class="page-intro"><h1>{{ t('Learn') }}</h1></header>
-    <template v-if="learnHome">
+    <header class="page-intro"><h1>{{ t(free ? 'Free spelling' : 'Learn') }}</h1></header>
+    <template v-if="learnHome && free">
+      <NCard v-if="freeSession" class="learn-session-choice">
+        <h2>{{ t('Continue your session?') }}</h2>
+        <div class="learn-actions">
+          <NButton type="primary" :disabled="busy" @click="continueSession(freeSession)">{{ t('Continue session') }}</NButton>
+          <NButton :disabled="busy" @click="endFreeFromHome(freeSession)">{{ t('End session') }}</NButton>
+        </div>
+      </NCard>
+      <NCard v-else class="learn-start-card">
+        <div class="learn-card-content">
+          <NSelect :value="selectedDeckId || null" :options="deckOptions" :placeholder="t('Choose a deck')"
+            :aria-label="t('Choose a deck')" @update:value="(value) => chooseFreeScope(value)" />
+          <NSelect v-if="selectedDeckId" :value="selectedListId ?? null" :options="freeListOptions" clearable
+            :placeholder="t('Whole wordbook')" :aria-label="t('Study list')"
+            @update:value="(value) => chooseFreeScope(selectedDeckId, value ?? undefined)" />
+          <div class="learn-mode-picker">
+            <span>{{ t('Practice mode') }}</span>
+            <NRadioGroup v-model:value="mode" name="free-practice-mode" :aria-label="t('Practice mode')">
+              <NRadioButton value="copy">{{ t('Copy') }}</NRadioButton>
+              <NRadioButton value="dictation">{{ t('Dictation') }}</NRadioButton>
+            </NRadioGroup>
+          </div>
+          <p class="library-muted">{{ t('Practice up to 100 words without using your daily new word quota.') }}</p>
+          <NButton type="primary" :disabled="busy || !selectedDeckId || !home" @click="startFree">{{ t('Start free spelling') }}</NButton>
+        </div>
+      </NCard>
+      <NAlert v-if="error || homeLoadError" type="error" role="alert">{{ translateError(error || homeLoadError) }}</NAlert>
+    </template>
+    <template v-else-if="learnHome">
       <NAlert v-if="homeLoadError" type="error" role="alert">
         {{ t('Your learning data could not be loaded from the server.') }} <NButton text @click="reloadHome">{{ t('Try again') }}</NButton>
       </NAlert>
@@ -425,8 +357,8 @@ async function saveDailyWords(value: number | null) {
       {{ t('This session could not be loaded.') }} <NButton text @click="reloadSession">{{ t('Try again') }}</NButton>
     </NAlert>
     <p v-else-if="sessionId && !current" class="library-muted" aria-live="polite">{{ t('Restoring your learning session…') }}</p>
-    <NCard v-else-if="current?.session.status === 'completed' && result?.session.status === 'completed'" class="learn-result-card">
-      <p class="learn-overline">{{ t('Session complete') }}</p>
+    <NCard v-else-if="result && (current?.session.status === 'completed' || (free && current?.session.status === 'abandoned'))" class="learn-result-card">
+      <p class="learn-overline">{{ t(current.session.status === 'abandoned' ? 'Session ended' : 'Session complete') }}</p>
       <h2>{{ t('Words you worked through') }}</h2>
       <div class="learn-result-grid">
         <div><strong>{{ result.completed }}</strong><span>{{ t('completed') }}</span></div>
@@ -436,8 +368,17 @@ async function saveDailyWords(value: number | null) {
       </div>
       <p>{{ t(result.attempts === 1 ? '{count} submitted answer' : '{count} submitted answers', { count: result.attempts }) }}
         · {{ t(result.assisted === 1 ? '{count} assisted answer' : '{count} assisted answers', { count: result.assisted }) }}</p>
+      <p v-if="result.corrected || result.retried || result.unfinished" class="library-muted">
+        {{ t('{corrected} corrected · {retried} completed in a retry · {unfinished} unfinished', {
+          corrected: result.corrected, retried: result.retried, unfinished: result.unfinished,
+        }) }}
+      </p>
+      <p v-if="result.difficult.length" class="library-muted">{{ t('Words to practice again') }} · {{ result.difficult.join(', ') }}</p>
       <div class="learn-actions">
-        <template v-if="current.session.listId">
+        <RouterLink v-if="free" class="book-continue" :to="{ path: '/learn', query: learnQuery(current.session.deckId, current.session.listId) }">
+          {{ t('Free spelling') }}
+        </RouterLink>
+        <template v-else-if="current.session.listId">
           <RouterLink class="book-continue" :to="listLink(current.session.deckId, current.session.listId)">{{ t('Return to study list') }}</RouterLink>
           <RouterLink v-if="home?.nextList && home.list?.count && home.list.learned === home.list.count" class="library-back"
             :to="listLink(current.session.deckId, home.nextList.id)">{{ t('Next list') }} · {{ home.nextList.name }}</RouterLink>
@@ -462,6 +403,7 @@ async function saveDailyWords(value: number | null) {
       </NAlert>
       <NAlert v-else-if="current.session.status === 'paused'" type="info">
         {{ t('Session paused.') }} <NButton text @click="continueSession(current.session)">{{ t('Resume') }}</NButton>
+        <NButton v-if="free" text @click="endSession(current.session)">{{ t('End session') }}</NButton>
       </NAlert>
       <article v-else-if="activeWord && reading" class="spell-reading-word">
         <div class="spell-reading-tools">
@@ -488,56 +430,38 @@ async function saveDailyWords(value: number | null) {
           {{ t('Start spelling') }} <span aria-hidden="true">→</span>
         </RouterLink>
       </article>
-      <article v-else-if="activeWord && spelling" class="spell-stage" @keydown="onKeydown">
-        <div class="spell-guided-toolbar">
-          <div class="spell-stage-tools" role="group" :aria-label="t('Spelling tools')">
-            <RouterLink v-if="isCopy" class="icon-control" :to="{ path: '/learn/read', query: route.query }" :aria-label="t('Learn the word')">
-              <AppIcon name="bulb" />
-            </RouterLink>
-            <button v-else-if="!answerVisible" type="button" class="icon-control" :aria-label="t('Reveal answer')" :disabled="busy" @click="markAssisted">
-              <AppIcon name="bulb" />
-            </button>
-            <button type="button" class="icon-control" :aria-label="t('Check spelling')"
-              :disabled="busy || typoIndex !== undefined || !input.trim() || submittedCorrectly" @click="submit"><AppIcon name="checkCircle" /></button>
-            <button type="button" class="icon-control" :aria-label="t('On-screen keyboard')"
-              :aria-pressed="keyboardVisible" @click="keyboardVisible = !keyboardVisible"><AppIcon name="keyboard" /></button>
-          </div>
-          <NProgress class="spell-guided-progress" type="circle" :percentage="progressValue" :show-indicator="false" :aria-label="t('Session progress')" />
+      <SpellingInput v-else-if="activeWord && spelling && current.keyboard" :key="wordKey" :mode="current.session.mode"
+        :term="answerVisible ? activeWord.term : ''" :keys="current.keyboard" :syllables="current.syllables"
+        :strict="preferences.strict" :speak-letters="preferences.speakLetters" :accent="pronunciationAccent"
+        :initial-input="preferences.strict ? undefined : current.session.currentLastSubmitted" :correct="submittedCorrectly" :busy="busy"
+        :progress="progressValue" :submit="submit" :finish="() => finishWord('completed')">
+        <template #hint>
+          <RouterLink v-if="isCopy" class="icon-control" :to="{ path: '/learn/read', query: route.query }" :aria-label="t('Learn the word')">
+            <AppIcon name="bulb" />
+          </RouterLink>
+          <button v-else-if="!answerVisible" type="button" class="icon-control" :aria-label="t('Reveal answer')" :disabled="busy"
+            @click="markAssisted()"><AppIcon name="bulb" /></button>
+        </template>
+        <template #menu>
           <SessionMenu>
+            <NButton v-if="!submittedCorrectly" text :disabled="busy" @click="markAssisted('keyboard', current.keyboard.layout !== 'simplified')">
+              {{ t(current.keyboard.layout === 'simplified' ? 'Use full keyboard' : 'Use simplified keyboard') }}
+            </NButton>
+            <NButton v-if="!submittedCorrectly" text :disabled="busy" @click="markAssisted('syllables', !current.syllables)">
+              {{ t(current.syllables ? 'Hide syllable guide' : 'Show syllable guide') }}
+            </NButton>
             <NButton v-if="!submittedCorrectly" text :disabled="busy" @click="finishWord('skipped')">{{ t('Skip word') }}</NButton>
             <NButton text :disabled="busy" @click="pauseSession(current.session)">{{ t('Pause') }}</NButton>
             <NButton text :disabled="busy" @click="endSession(current.session)">{{ t('End session') }}</NButton>
             <RouterLink to="/library">{{ t('Library') }}</RouterLink>
             <RouterLink :to="settingsRoute(route.fullPath)">{{ t('Settings') }}</RouterLink>
           </SessionMenu>
-        </div>
-        <div class="spell-clue">
+        </template>
+        <template #before-word>
           <p v-if="!isCopy && answerVisible" class="learn-overline">{{ t('Answer revealed') }}</p>
-          <div class="spell-entry">
-            <h2 v-if="answerVisible" class="visually-hidden">{{ activeWord.term }}</h2>
-            <div class="spell-entry-field">
-              <template v-if="promptLetters.length">
-                <div class="spell-word-display">
-                  <div class="spell-prompt" aria-hidden="true">
-                    <span v-for="({ letter, state }, index) in promptStates" :key="index"
-                      :class="'spell-prompt-' + state">
-                      {{ letter === ' ' ? '\u00a0' : letter }}
-                    </span>
-                  </div>
-                  <div class="spell-prompt-progress" aria-hidden="true">
-                    <span v-for="index in promptSegments" :key="index"
-                      :class="index < typedLetters.length
-                        ? (incorrectLetter(index) ? 'segment-incorrect' : 'segment-typed')
-                        : (index === typedLetters.length ? 'segment-current' : 'segment-pending')" />
-                  </div>
-                </div>
-              </template>
-              <p v-else class="spell-long-answer" aria-hidden="true">{{ answerVisible ? expected : input || t('Type your answer') }}</p>
-              <NInput ref="inputElement" v-model:value="input" class="spell-entry-input"
-                :readonly="busy || typoIndex !== undefined || advancing" :disabled="submittedCorrectly && !advancing"
-                :input-props="spellingInputProps" />
-            </div>
-          </div>
+          <p v-else-if="round" class="learn-overline">{{ t('Retry {count}', { count: round }) }}</p>
+        </template>
+        <template #clues>
           <div class="spell-pronunciation">
             <PronunciationButton :entry-id="activeWord.id" :revision="activeWord.revision" :scope="wordKey + '/' + current.session.mode"
               :disabled="busy" :preload="!isCopy" :label="isCopy ? 'Play pronunciation' : 'Play English pronunciation'"
@@ -546,56 +470,23 @@ async function saveDailyWords(value: number | null) {
               :legacy-phonetic="answerVisible ? activeWord.phonetic : undefined" :accent="pronunciationAccent" />
           </div>
           <DictionaryMeaningView v-if="answerVisible && hasFinalMeaning(activeWord.dictionaryMeaning)" :meaning="activeWord.dictionaryMeaning!" />
-          <p v-else-if="meaning" class="learn-meaning">{{ meaning }}</p>
-          <p v-else-if="!activeWord.meaning" class="learn-meaning learn-muted">{{ t('Meaning not added yet') }}</p>
-          <p v-if="current.session.mode === 'dictation'" class="library-muted">
-            {{ t('Listen to the word. The English spelling stays hidden during dictation.') }}
-          </p>
-        </div>
-        <div v-if="!isCopy || localMessage || error || !activeWord.meaning.trim()" class="learn-practice-area">
-          <NButton v-if="!isCopy" text :disabled="busy" @click="switchToCopy(current.session)">{{ t('Switch to Copy') }}</NButton>
-          <div v-if="feedback.length && localMessage" class="learn-spelling" aria-live="polite"
-            :aria-label="feedback.map((part) => part.actual + ': ' + t(part.status)).join(', ')">
-            <span v-for="(part, index) in feedback" :key="index" :class="'letter-' + part.status"
-              aria-hidden="true">{{ part.actual === ' ' ? '·' : part.actual }}</span>
+          <p v-else-if="activeWord.meaning" class="learn-meaning">{{ activeWord.meaning }}</p>
+          <p v-else-if="answerVisible" class="learn-meaning learn-muted">{{ t('Meaning not added yet') }}</p>
+          <p v-if="!isCopy" class="library-muted">{{ t('Listen to the word. The English spelling stays hidden during dictation.') }}</p>
+        </template>
+        <template #messages>
+          <div v-if="!isCopy || localMessage || error || (answerVisible && !activeWord.meaning.trim())" class="learn-practice-area">
+            <NButton v-if="!isCopy" text :disabled="busy" @click="switchToCopy(current.session)">{{ t('Switch to Copy') }}</NButton>
+            <NAlert v-if="localMessage" type="info" role="status">{{ t(localMessage) }}</NAlert>
+            <NAlert v-if="error" type="error" role="alert">
+              {{ translateError(error) }} <NButton text @click="reloadHome(); reloadSession()">{{ t('Reload Learn') }}</NButton>
+            </NAlert>
+            <NAlert v-if="answerVisible && !activeWord.meaning.trim()" type="info">
+              {{ t('This word needs a meaning. Spelling practice remains available.') }}
+            </NAlert>
           </div>
-          <NAlert v-if="localMessage" type="info" role="status">{{ t(localMessage) }}</NAlert>
-          <NAlert v-if="error" type="error" role="alert">
-            {{ translateError(error) }} <NButton text @click="reloadHome(); reloadSession()">{{ t('Reload Learn') }}</NButton>
-          </NAlert>
-          <NAlert v-if="activeWord.meaning.trim() === ''" type="info">
-            {{ t('This word needs a meaning. Spelling practice remains available.') }}
-          </NAlert>
-        </div>
-        <div v-if="submittedCorrectly && !advancing" class="learn-actions learn-session-actions">
-          <NButton ref="nextButton" type="primary" :disabled="busy" @click="finishWord('completed')">{{ t('Next word') }}</NButton>
-        </div>
-        <div class="spell-keyboard-area">
-          <div class="spell-answer-tiles">
-            <span class="visually-hidden" role="status">{{ typoIndex !== undefined ? t('Incorrect letter. Try the word again.') : '' }}</span>
-            <Transition name="spell-tiles">
-              <div v-if="typedLetters.length" class="spell-answer-row" role="group" :aria-label="t('Your spelling so far')">
-                <span v-for="(letter, index) in typedLetters" :key="index" class="spell-answer-tile"
-                  :class="{ 'spell-answer-tile-incorrect': incorrectLetter(index) }">
-                  {{ letter === ' ' ? '·' : letter }}
-                </span>
-              </div>
-            </Transition>
-          </div>
-          <div v-if="keyboardVisible" class="spell-keyboard" role="group" :aria-label="t('On-screen keyboard')">
-            <div v-for="row in keyboardRows" :key="row">
-              <button v-for="letter in row" :key="letter" type="button" :disabled="busy || submittedCorrectly || typoIndex !== undefined"
-                @mousedown.prevent @click="enterKey(letter)">{{ letter }}</button>
-            </div>
-            <div v-if="extraKeys.length || !isCopy || /\s/.test(expected)" class="spell-keyboard-extra">
-              <button v-for="character in extraKeys" :key="character" type="button" :disabled="busy || submittedCorrectly || typoIndex !== undefined"
-                @mousedown.prevent @click="enterKey(character)">{{ character }}</button>
-              <button v-if="!isCopy || /\s/.test(expected)" type="button" :disabled="busy || submittedCorrectly || typoIndex !== undefined"
-                @mousedown.prevent @click="enterKey(' ')">{{ t('Space') }}</button>
-            </div>
-          </div>
-        </div>
-      </article>
+        </template>
+      </SpellingInput>
       <p v-else-if="activeWord" class="library-muted" aria-live="polite">{{ t('Restoring your learning session…') }}</p>
     </template>
     <p v-if="!inPractice" class="learn-distinction">{{ t('Spelling practice records exposure and attempts. It never schedules an FSRS review.') }}</p>

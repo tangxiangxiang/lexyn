@@ -8,12 +8,15 @@ export function learnSessionRoute(session: LearnSession, stage?: 'read' | 'spell
   const reading = session.mode === 'copy' && (stage === 'read' || (!stage && session.currentAttempts === 0))
   return {
     path: reading ? '/learn/read' : '/learn/spell',
-    query: { deckId: session.deckId, listId: session.listId, session: session.sessionId },
+    query: { deckId: session.deckId, listId: session.listId, session: session.sessionId, free: session.source === 'free' ? '1' : undefined },
   }
 }
 
 export const learn = {
   getDailyState: (args: StudyEndpoints['learn/daily']['args'], signal?: AbortSignal) => study('learn/daily', args, { signal }),
+  freeState: (_key: boolean, signal?: AbortSignal) => study('learn/free', [], { signal }),
+  startFree: (...args: StudyEndpoints['learn/start-free']['args']) => study('learn/start-free', args, { write: true }),
+  setHint: (...args: StudyEndpoints['learn/hint']['args']) => study('learn/hint', args, { write: true }),
   getSession: (id: string, signal?: AbortSignal) => study('learn/session', [id], { signal }),
   result: (id: string, signal?: AbortSignal) => study('learn/history', [id, 0, 100], { signal }),
   startSession: (...args: StudyEndpoints['learn/start']['args']) => study('learn/start', args, { write: true }),

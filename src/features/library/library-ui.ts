@@ -40,7 +40,7 @@ export function downloadJson(value: unknown, filename: string) {
 export const wordCount = (count: number) => t(count === 1 ? '{count} word' : '{count} words', { count })
 
 export function closeLibraryMenu(event: MouseEvent) {
-  if ((event.target as HTMLElement).closest('button')) {
+  if ((event.target as HTMLElement).closest('button, a[href]')) {
     (event.currentTarget as HTMLElement).closest('details')?.removeAttribute('open')
   }
 }

@@ -2,7 +2,9 @@ import type { Deck, DeckList, DeckListMember, Entry } from '../domain/library.ts
 import type { ReviewCard, ReviewEvent, ReviewSchedulerConfig } from '../domain/review.ts'
 import type { LearnProgress, PracticeEvent } from '../domain/learning.ts'
 
-export const libraryFormatVersion = 6
+import type { SpellingAttempt, SpellingPreferences } from '../domain/spelling.ts'
+
+export const libraryFormatVersion = 7
 
 interface LibraryBackupData {
   format: 'lexyn-library'
@@ -15,10 +17,11 @@ interface LibraryBackupData {
   reviewCards: ReviewCard[]
   reviewEvents: ReviewEvent[]
   schedulerConfig: ReviewSchedulerConfig
-  settings: { dailyNewWords: number; timezone: string; studyWeekdays?: number; reviewResetMinutes?: number }
+  settings: { dailyNewWords: number; timezone: string; studyWeekdays?: number; reviewResetMinutes?: number; spelling?: SpellingPreferences }
 }
 
 export type LibraryExport = LibraryBackupData & (
   | { formatVersion: 4 | 5 }
-  | { formatVersion: typeof libraryFormatVersion; lists: DeckList[]; listMembers: DeckListMember[] }
+  | { formatVersion: 6; lists: DeckList[]; listMembers: DeckListMember[] }
+  | { formatVersion: typeof libraryFormatVersion; lists: DeckList[]; listMembers: DeckListMember[]; spellingAttempts: SpellingAttempt[] }
 )

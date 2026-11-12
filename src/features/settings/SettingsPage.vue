@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SpellingSettings from './SpellingSettings.vue'
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { NAlert, NButton, NCard, NInput, NInputNumber, NRadioButton, NRadioGroup, NSwitch } from 'naive-ui'
@@ -248,6 +249,7 @@ function savePlan() {
               <span>{{ t('Hide phonetics during spelling') }}</span>
               <NSwitch :value="learningPreferences.hidePhonetics" @update:value="setHidePhonetics" />
             </label>
+            <SpellingSettings />
           </div>
         </section>
         <section class="settings-group settings-preference-group">

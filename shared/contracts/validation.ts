@@ -1,3 +1,4 @@
+import { defaultSpelling, type SpellingPreferences } from '../domain/spelling.ts'
 import { stableJson } from './json.ts'
 import { cleanDictionaryMeaning, cleanDictionaryReference, cleanPhonetics } from '../domain/dictionary.ts'
 import { cleanDeck, listSizes, cleanEntry, normalizeTerm } from '../domain/library.ts'
@@ -103,15 +104,32 @@ export function validateEntity(payload: Record<string, unknown>, kind: 'deck' | 
   return payload.id
 }
 
+export function validateSpellingPreferences(value: unknown): SpellingPreferences {
+  const row = object(value)
+  fields(row, 'keyboard syllables strict retryLimit speakLetters')
+  const { keyboard, syllables, strict, retryLimit, speakLetters } = row
+  if ((keyboard !== 'full' && keyboard !== 'simplified') || typeof syllables !== 'boolean' || typeof strict !== 'boolean'
+    || !integer(retryLimit, 0, 3) || typeof speakLetters !== 'boolean') throw new InvalidInput('Invalid spelling preferences.')
+  return { keyboard, syllables, strict, retryLimit, speakLetters }
+}
+
+export function validateSpellingChanges(value: unknown): Partial<SpellingPreferences> {
+  const patch = object(value)
+  const validated = validateSpellingPreferences({ ...defaultSpelling, ...patch })
+  return Object.fromEntries(Object.entries(validated).filter(([key]) => Object.hasOwn(patch, key)))
+}
+
 export function validateEvent(payload: Record<string, unknown>, kind: 'practice' | 'review', config: ReviewSchedulerConfig) {
   if (!isUuid(payload.id) || !isUuid(payload.deckId) || !isUuid(payload.entryId) || !isUuid(payload.sessionId)) {
     throw new InvalidInput('Invalid study event identity.')
   }
   if (kind === 'practice') {
-    fields(payload, 'id deckId entryId sessionId mode outcome attempts firstTryCorrect assisted startedAt completedAt')
+    fields(payload, 'id deckId entryId sessionId mode outcome attempts firstTryCorrect assisted startedAt completedAt source round')
     if ((payload.mode !== 'copy' && payload.mode !== 'dictation') || (payload.outcome !== 'completed' && payload.outcome !== 'skipped')
       || !integer(payload.attempts) || typeof payload.firstTryCorrect !== 'boolean' || typeof payload.assisted !== 'boolean'
-      || !time(payload.startedAt) || !time(payload.completedAt)) throw new InvalidInput('Invalid practice event.')
+      || !time(payload.startedAt) || !time(payload.completedAt)
+      || (payload.source !== undefined && payload.source !== 'learn' && payload.source !== 'free')
+      || (payload.round !== undefined && !integer(payload.round, 0, 3))) throw new InvalidInput('Invalid practice event.')
     return payload.id
   }
   fields(payload, 'id cardId deckId entryId sessionId direction rating reviewedAt schedulerModel schedulerConfigVersion schedulerConfigSnapshot previousCardState resultingCardState schedulerRevlog')

@@ -64,6 +64,7 @@ async function interimDatabase() {
   if (login.status !== 'ok') throw new Error('Test login failed.')
   createStudyStore(db, login.ownerId).saveSettings(24, 'Asia/Shanghai')
   db.exec(`
+    DROP TABLE spelling_attempts; ALTER TABLE owner_settings DROP COLUMN spelling;
     DROP TABLE deck_list_members; DROP TABLE deck_lists; DROP INDEX entries_id_deck;
     DROP TABLE vocabulary_jobs;
     DROP TABLE speech_credentials;
@@ -129,5 +130,37 @@ test('leaves a nonempty interim database intact', async () => {
     expect(db.pragma('user_version', { simple: true })).toBe(5)
     expect(store.decks()).toEqual([deck])
     expect(createAuth(db).session(login.token)?.ownerId).toBe(login.ownerId)
+  } finally { db.close() }
+})
+
+test('upgrades schema 11 with an existing practice record and keeps that record without invented error history', async () => {
+  const db = new Database(':memory:')
+  db.pragma('foreign_keys=ON')
+  try {
+    migrate(db)
+    await initializeOwner(db, 'test-admin', 'test-owner-password')
+    const ownerId = db.prepare('SELECT id FROM owner').pluck().get() as string
+    const store = createStudyStore(db, ownerId)
+    const deckId = randomUUID(), entryId = randomUUID()
+    store.saveDeck({ id: deckId, name: 'Legacy', revision: 1, createdAt: 1, updatedAt: 1 })
+    store.saveEntry({ id: entryId, deckId, term: 'cache', normalizedTerm: 'cache', meaning: '缓存', revision: 1, createdAt: 1, updatedAt: 1 })
+    const event = { id: randomUUID(), deckId, entryId, sessionId: randomUUID(), mode: 'copy', outcome: 'completed',
+      attempts: 2, firstTryCorrect: false, assisted: false, startedAt: 1, completedAt: 2 } as const
+    store.addPractice(event)
+    db.exec(`
+      DROP TABLE spelling_attempts;
+      ALTER TABLE owner_settings DROP COLUMN spelling;
+      DROP INDEX learn_one_open;
+      CREATE UNIQUE INDEX learn_one_open ON learn_sessions ((1)) WHERE status IN ('active','paused');
+      DROP INDEX practice_session_entry;
+      CREATE UNIQUE INDEX practice_session_entry ON practice_events (json_extract(body, '$.sessionId'), entry_id);
+      PRAGMA user_version=11;
+    `)
+    migrate(db)
+    migrate(db)
+    expect(db.pragma('user_version', { simple: true })).toBe(12)
+    expect(store.all('SELECT body FROM practice_events')).toEqual([event])
+    expect(store.all('SELECT body FROM spelling_attempts')).toEqual([])
+    expect(store.spellingSettings()).toMatchObject({ keyboard: 'full', retryLimit: 0, strict: true })
   } finally { db.close() }
 })

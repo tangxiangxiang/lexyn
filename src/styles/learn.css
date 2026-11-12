@@ -256,6 +256,9 @@
   letter-spacing: -.055em;
   overflow-wrap: anywhere;
 }
+.spell-syllable { display: inline-flex; flex-wrap: wrap; justify-content: center; min-width: 0; max-width: 100%; }
+.spell-syllable-separated + .spell-syllable-separated { margin-inline-start: .08em; }
+.spell-syllable-current { text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: .12em; }
 .spell-prompt-typed { color: #fff; }
 .spell-prompt-current, .spell-prompt-pending { color: #91b0ef80; }
 .spell-prompt-incorrect { color: #ff164d; }
@@ -355,6 +358,7 @@
   line-height: 1;
 }
 .spell-answer-tile-incorrect { color: #ff164d; }
+.spell-answer-correct .spell-answer-tile { color: var(--accent); }
 .spell-tiles-enter-active { animation: spell-tile-appear 150ms cubic-bezier(.2, .8, .2, 1) both; }
 .spell-tiles-leave-active {
   position: absolute;
@@ -387,6 +391,10 @@
 }
 .spell-keyboard button:active:enabled { background: var(--accent-surface); }
 .spell-keyboard button:disabled { cursor: default; }
+.spell-keyboard-simplified > :not(.spell-keyboard-extra) button {
+  width: min(72px, calc((100% - (var(--spelling-key-count) - 1) * var(--spell-key-gap)) / var(--spelling-key-count)));
+}
+.spell-keyboard-extra button { width: auto; }
 .spell-keyboard-extra button { min-width: 44px; padding-inline: 8px; font-size: .9rem; }
 
 @media (max-width: 480px) {
@@ -707,6 +715,11 @@
 .spell-memory div { display: flex; justify-content: space-between; gap: 12px; padding-block: 8px; }
 .spell-memory dt { order: 1; color: var(--muted); }
 .spell-memory dd { margin: 0; }
+.spelling-history { display: grid; gap: 8px; }
+.spelling-history-positions { display: grid; gap: 6px; padding: 0; margin: 0; list-style: none; }
+.spelling-history-positions li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 6px 0; border-top: 1px solid var(--line); }
+.spelling-history-positions small { grid-column: 1 / -1; color: var(--muted); }
+.spelling-history-positions strong { color: var(--danger); overflow-wrap: anywhere; }
 .spell-activity { max-width: 420px; }
 .spell-activity h1 { flex: 1; font-size: 1rem; line-height: 1.3; }
 .spell-activity .spell-subpage-toolbar .spell-chip { min-height: 44px; padding-inline: 10px; text-align: center; }

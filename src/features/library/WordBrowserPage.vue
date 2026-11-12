@@ -163,6 +163,9 @@ function resumePlaylist() {
           <summary class="icon-control" :aria-label="t('Word list options')"><AppIcon name="filter" /></summary>
           <div class="spell-word-options-panel">
             <RouterLink class="spell-word-options-link" :to="studyLists">{{ t('Study lists') }} <AppIcon name="chevronRight" /></RouterLink>
+            <RouterLink class="spell-word-options-link" :to="{ path: '/learn', query: { deckId, free: '1' } }">
+              {{ t('Free spelling') }} <AppIcon name="chevronRight" />
+            </RouterLink>
             <button v-for="option in filters" :key="option.value" type="button" :aria-pressed="filter === option.value"
               @click="filter = option.value">
               {{ t(option.label) }} <span>{{ words?.counts[option.value] }}</span>
@@ -213,6 +216,31 @@ function resumePlaylist() {
             <div v-if="detail.learnedAt !== undefined"><dt>{{ t('First learned') }}</dt><dd>{{ memoryFormat.format(detail.learnedAt) }}</dd></div>
           </dl>
           <p v-else class="spell-detail-panel">{{ t('No learning or review history yet.') }}</p>
+        </details>
+        <details class="spell-detail-section">
+          <summary>{{ t('Spelling history') }}</summary>
+          <div v-if="detail.spelling.attempts" class="spell-detail-panel spelling-history">
+            <dl class="spell-memory">
+              <div><dt>{{ t('Spelling attempts') }}</dt><dd>{{ detail.spelling.attempts }}</dd></div>
+              <div><dt>{{ t('Spelling failures') }}</dt><dd>{{ detail.spelling.failures }}</dd></div>
+              <div><dt>{{ t('Unassisted first tries') }}</dt><dd>{{ detail.spelling.firstCorrect }}</dd></div>
+              <div v-if="detail.spelling.latest !== undefined"><dt>{{ t('Last spelling practice') }}</dt>
+                <dd>{{ memoryFormat.format(detail.spelling.latest) }}</dd></div>
+            </dl>
+            <p v-if="!detail.spelling.currentAttempts" class="library-muted">{{ t('No spelling history for this spelling yet.') }}</p>
+            <template v-else-if="detail.spelling.positions.length">
+              <p class="library-muted">{{ t('Mistakes in the current spelling') }}</p>
+              <ol class="spelling-history-positions">
+                <li v-for="position in detail.spelling.positions" :key="position.position">
+                  <strong>{{ position.position + 1 }} · {{ position.expected === ' ' ? t('Space') : position.expected || t('After the word') }}</strong>
+                  <span>{{ t('{count} errors', { count: position.count }) }}</span>
+                  <small>{{ t('{incorrect} incorrect · {missing} missing · {extra} extra', position.errors) }}</small>
+                </li>
+              </ol>
+            </template>
+            <p v-else class="library-muted">{{ t('No letter errors recorded for this spelling.') }}</p>
+          </div>
+          <p v-else class="spell-detail-panel">{{ t('No detailed spelling history yet.') }}</p>
         </details>
         <LibraryEditor v-if="editing" :editor="{ type: 'entry', deckId, entry: detail.entry }"
           @close="editing = false" @saved="editing = false; reloadDetail()" />

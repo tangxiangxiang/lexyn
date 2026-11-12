@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { dateKey, isSpellingCorrect, type LearnMode, type LearnSession, type PracticeEvent } from '../../shared/domain/learning.ts'
+import { compareSpelling, dateKey, hasCorrectSpelling, isSpellingCorrect, normalizeSpelling, practiceRound, type LearnMode, type LearnSession, type PracticeEvent } from '../../shared/domain/learning.ts'
 import { checkRevision, StudyError, type StudyStore, type Versioned } from './store.ts'
+import type { Entry } from '../../shared/domain/library.ts'
+import { defaultSpelling, spellingErrors, spellingKeyboard, type PracticeSource, type SpellingHint } from '../../shared/domain/spelling.ts'
+import { spellingSyllables } from '../../shared/domain/spelling-syllables.ts'
 import { isStudyDay } from '../../shared/domain/study-plan.ts'
 
 const currentId = (session: LearnSession) => session.entryIds[session.currentIndex]
@@ -13,6 +16,7 @@ function resetWord(session: Versioned<LearnSession>, index: number, now: number)
     status: exhausted ? 'completed' : session.status,
     updatedAt: now, currentEntryStartedAt: now, currentAttempts: 0,
     currentFirstTryCorrect: undefined, currentAssisted: false, currentLastSubmitted: undefined,
+    currentHints: [], currentKeyboard: undefined, currentCorrectSpelling: undefined,
   }
 }
 
@@ -32,6 +36,31 @@ export function createLearnService(store: StudyStore) {
     return entry && entry.deckId === session.deckId && entry.deletedAt === undefined ? entry : undefined
   }
 
+  function withDefaultHints<T extends LearnSession>(session: T): T {
+    const entry = usableEntry(session)
+    if (session.status !== 'active' || session.mode !== 'copy' || !session.spelling?.syllables
+      || !entry || !spellingSyllables(entry.term)) return session
+    return { ...session, currentHints: [...new Set<SpellingHint>([...(session.currentHints ?? []), 'syllables'])], currentAssisted: true }
+  }
+
+  function visibleAnswer(session: LearnSession) {
+    return session.mode === 'copy' || (session.currentHints
+      ? session.currentHints.includes('reveal') || session.currentHints.includes('syllables')
+      : session.currentAssisted)
+  }
+
+  function keyboardLayout(session: LearnSession, entry: Entry) {
+    const requested = session.mode === 'copy' ? session.currentKeyboard ?? session.spelling?.keyboard
+      : session.currentHints?.includes('keyboard') ? 'simplified' : 'full'
+    return spellingKeyboard(entry.term, requested ?? 'full', visibleAnswer(session) || requested === 'simplified')
+  }
+
+  function publicSession<T extends LearnSession>(session: T): T {
+    if (visibleAnswer(session)) return session
+    return { ...session, currentCorrectSpelling: undefined,
+      currentLastSubmitted: session.spelling?.strict === false ? session.currentLastSubmitted : undefined }
+  }
+
   function reconcile(session: Versioned<LearnSession>, now: number) {
     const deck = store.deck(session.deckId)
     if (!deck) return { ...session, status: 'abandoned' as const, updatedAt: now }
@@ -40,7 +69,7 @@ export function createLearnService(store: StudyStore) {
     if (usableEntry(session)) return session
     const next = session.entryIds.findIndex((id, index) => index >= session.currentIndex && usableEntry(session, id))
     const entryIds = session.entryIds.slice(0, session.currentIndex).concat(next < 0 ? [] : session.entryIds.slice(next))
-    return resetWord({ ...session, entryIds }, session.currentIndex, now)
+    return withDefaultHints(resetWord({ ...session, entryIds }, session.currentIndex, now))
   }
 
   function requireSession(id: string, revision: number, active = false) {
@@ -85,7 +114,29 @@ export function createLearnService(store: StudyStore) {
       const lists = listId && deckId ? store.lists.summaries(deckId) : []
       const list = lists.find(({ id }) => id === listId)
       const nextList = list && lists.find(({ order, count }) => order > list.order && count > 0)
-      return { quota, dailyNewWords, completedToday, day, decks, activeSession, candidates, practiceCandidates, list, nextList }
+      return { quota, dailyNewWords, completedToday, day, decks, activeSession: activeSession && publicSession(activeSession), candidates, practiceCandidates, list, nextList }
+    },
+    freeState() {
+      const active = store.openLearn('free')
+      return active && publicSession(active)
+    },
+    startFree(deckId: string, mode: LearnMode, now: number, listId?: string) {
+      const active = store.openLearn('free')
+      if (active) {
+        if (active.deckId !== deckId || active.listId !== listId) throw new StudyError('Another free practice session is open.', 409)
+        return publicSession(active)
+      }
+      const deck = store.deck(deckId)
+      if (!deck || deck.archivedAt !== undefined) throw new StudyError('Choose an active deck to start learning.')
+      const entryIds = entriesInScope(deckId, listId).filter((entry) => entry.deletedAt === undefined)
+        .slice(0, 100).map(({ id }) => id)
+      if (!entryIds.length) throw new StudyError('There are no words to practice.')
+      return publicSession(store.saveLearn(withDefaultHints({
+        source: 'free', spelling: store.spellingSettings(), currentHints: [],
+        sessionId: randomUUID(), deckId, listId, mode, entryIds, currentIndex: 0,
+        startedAt: now, updatedAt: now, status: 'active', dailyKey: dateKey(now, store.settings().timezone),
+        firstCompletedEntryIds: [], currentEntryStartedAt: now, currentAttempts: 0, currentAssisted: false,
+      })))
     },
     startSession(deckId: string, mode: LearnMode, entryIds: string[], newWords: boolean, now: number, listId?: string) {
       const active = store.openLearn()
@@ -93,7 +144,7 @@ export function createLearnService(store: StudyStore) {
         if (listId && (active.listId !== listId || active.deckId !== deckId)) {
           throw new StudyError('Another Learn session is open. Continue or end it before starting this list.', 409)
         }
-        return active
+        return publicSession(active)
       }
       const deck = store.deck(deckId)
       if (!deck || deck.archivedAt !== undefined) throw new StudyError('Choose an active deck to start learning.')
@@ -106,80 +157,134 @@ export function createLearnService(store: StudyStore) {
         throw new StudyError('The selected words changed. Reload today’s Learn list.', 409)
       }
       if (newWords && completedToday + available.length > quota) throw new StudyError('The daily new word limit changed.', 409)
-      return store.saveLearn({
+      return publicSession(store.saveLearn(withDefaultHints({
+        spelling: store.spellingSettings(), currentHints: [],
         sessionId: randomUUID(), deckId, listId, mode, entryIds: available.map(({ id }) => id), currentIndex: 0,
         startedAt: now, updatedAt: now, status: 'active', dailyKey: day,
         firstCompletedEntryIds: [], currentEntryStartedAt: now, currentAttempts: 0, currentAssisted: false,
-      })
+      })))
     },
     getSession(id: string) {
       const session = store.learn(id)
       if (!session) return null
-      if (!open(session)) return { session, entry: undefined, invalidReason: undefined }
+      if (!open(session)) return { session: publicSession(session), entry: undefined, invalidReason: undefined }
       const deck = store.deck(session.deckId)
       const entry = usableEntry(session)
       const invalidReason = !deck ? 'missing' as const : deck.archivedAt !== undefined ? 'archived' as const
         : !entry ? 'removed' as const : undefined
-      return { session, entry: invalidReason ? undefined : entry, invalidReason }
+      const word = invalidReason ? undefined : entry
+      const answerVisible = visibleAnswer(session)
+      const revealed = word && !answerVisible ? {
+        id: word.id, revision: word.revision, term: '',
+        meaning: normalizeSpelling(word.meaning).includes(normalizeSpelling(word.term)) ? '' : word.meaning,
+        phonetic: undefined, phonetics: undefined, dictionaryMeaning: undefined, example: undefined,
+      } : word
+      const layout = word ? keyboardLayout(session, word) : undefined
+      // An assisted keyboard sends keys only, not the target or its order.
+      const keyboard = layout?.layout === 'simplified' && !answerVisible
+        ? { ...layout, symbols: [...layout.symbols].sort() } : layout
+      return {
+        session: publicSession(session), entry: revealed, invalidReason, answerVisible, keyboard,
+        correct: !!word && hasCorrectSpelling(session, word.term, word.termChangedAt),
+        syllables: word && session.currentHints?.includes('syllables') ? spellingSyllables(word.term) : undefined,
+      }
     },
     setMode(id: string, mode: LearnMode, revision: number, now: number) {
-      store.saveLearn({ ...requireSession(id, revision), mode, updatedAt: now })
+      const session = requireSession(id, revision)
+      if (session.mode === mode) return
+      const currentHints = session.currentHints ?? (session.currentAssisted ? ['reveal' as const] : [])
+      store.saveLearn(withDefaultHints({ ...session, mode, currentHints: currentHints.filter((hint) => hint === 'reveal'),
+        currentKeyboard: undefined, currentAssisted: true, currentLastSubmitted: undefined, updatedAt: now }))
     },
-    setAssisted(id: string, entryId: string, revision: number, now: number) {
+    setAssisted(id: string, entryId: string, revision: number, now: number, hint: SpellingHint = 'reveal', enabled = true) {
       const session = requireSession(id, revision, true)
-      requireWord(session, entryId)
-      if (session.mode !== 'dictation' || session.currentAssisted) return false
-      store.saveLearn({ ...session, currentAssisted: true, updatedAt: now })
+      const entry = requireWord(session, entryId)
+      if (hint === 'syllables' && !spellingSyllables(entry.term)) return false
+      if (hint === 'keyboard' && spellingKeyboard(entry.term, 'simplified', true).layout !== 'simplified') return false
+      const hints = new Set<SpellingHint>(session.currentHints ?? (session.currentAssisted ? ['reveal'] : []))
+      if (hint !== 'keyboard' && hints.has(hint) === enabled) return false
+      if (enabled) hints.add(hint)
+      else hints.delete(hint)
+      const assisted = session.currentAssisted || (enabled && (session.mode === 'dictation' || hint === 'syllables'))
+      store.saveLearn({ ...session, currentHints: [...hints], currentAssisted: assisted, updatedAt: now,
+        currentKeyboard: hint === 'keyboard' ? enabled ? 'simplified' : 'full' : session.currentKeyboard })
       return true
     },
     setStatus(id: string, status: 'paused' | 'abandoned', revision: number, now: number) {
-      store.saveLearn({ ...requireSession(id, revision), status, updatedAt: now })
+      const session = requireSession(id, revision)
+      store.saveLearn({ ...session, status, updatedAt: now,
+        currentLastSubmitted: status === 'abandoned' ? undefined : session.currentLastSubmitted })
     },
     continueSession(id: string, revision: number, now: number) {
       const session = requireSession(id, revision)
-      return store.saveLearn(reconcile({ ...session, status: 'active', updatedAt: now }, now))
+      return publicSession(store.saveLearn(reconcile({ ...session, status: 'active', updatedAt: now }, now)))
     },
     advanceInvalid(id: string, revision: number, now: number) {
       const session = requireSession(id, revision)
       const updated = reconcile(session, now)
       if (updated !== session) store.saveLearn(updated)
     },
-    recordAttempt(id: string, entryId: string, input: string, revision: number, now: number) {
+    recordAttempt(id: string, entryId: string, input: string, revision: number, now: number,
+      partial = false) {
       const session = requireSession(id, revision, true)
       const entry = requireWord(session, entryId)
-      if (session.currentLastSubmitted === input) return null
-      if (session.currentLastSubmitted && isSpellingCorrect(entry.term, session.currentLastSubmitted)) {
+      if (hasCorrectSpelling(session, entry.term, entry.termChangedAt)) {
         throw new StudyError('This word has already been answered correctly.', 409)
       }
+      if (partial && (session.mode !== 'copy' || !(session.spelling ?? defaultSpelling).strict)) {
+        throw new StudyError('Only strict copy accepts partial spelling attempts.')
+      }
       const correct = isSpellingCorrect(entry.term, input)
-      const updated = store.saveLearn({ ...session, currentAttempts: session.currentAttempts + 1,
-        currentFirstTryCorrect: session.currentFirstTryCorrect ?? correct, currentLastSubmitted: input, updatedAt: now })
-      return { first: session.currentAttempts === 0, attempts: updated.currentAttempts, assisted: session.currentAssisted, correct }
+      const errors = correct ? [] : spellingErrors(entry.term, input, partial)
+      if (partial && !errors.length) throw new StudyError('Submit a full answer or an incorrect prefix.')
+      const layout = keyboardLayout(session, entry).layout
+      const attempts = session.currentAttempts + 1
+      const round = practiceRound(session)
+      store.addSpellingAttempt({
+        id: randomUUID(), entryId, sessionId: id, round, attempt: attempts, spelling: normalizeSpelling(entry.term),
+        termChangedAt: entry.termChangedAt, time: now, source: session.source ?? 'learn', mode: session.mode,
+        keyboard: layout, assisted: session.currentAssisted, correct,
+        errors,
+      })
+      store.saveLearn({ ...session, currentAttempts: attempts,
+        currentFirstTryCorrect: session.currentFirstTryCorrect ?? correct,
+        currentLastSubmitted: !correct && session.mode === 'dictation' && session.spelling?.strict === false ? input : undefined,
+        currentCorrectSpelling: correct ? { term: normalizeSpelling(entry.term), changedAt: entry.termChangedAt } : undefined, updatedAt: now })
+      return { first: attempts === 1, attempts, assisted: session.currentAssisted, correct,
+        feedback: correct || partial ? [] : compareSpelling(normalizeSpelling(entry.term), normalizeSpelling(input)) }
     },
     finishCurrent(id: string, entryId: string, outcome: 'completed' | 'skipped', revision: number, now: number) {
       const session = requireSession(id, revision, true)
       const entry = requireWord(session, entryId)
-      const correct = !!session.currentLastSubmitted && isSpellingCorrect(entry.term, session.currentLastSubmitted)
+      const correct = hasCorrectSpelling(session, entry.term, entry.termChangedAt)
       if ((outcome === 'completed') !== correct) throw new StudyError('Submit the current answer before finishing this word.', 409)
-      const progress = store.entryProgress(entryId)
-      const firstCompletion = outcome === 'completed' && progress?.firstCompletedAt === undefined
-      const { day, quota, completedToday } = dayState(now)
-      if (firstCompletion && completedToday >= quota) throw new StudyError('The daily new word limit has been reached.', 409)
+      const formal = session.source !== 'free'
+      const progress = formal ? store.entryProgress(entryId) : undefined
+      const firstCompletion = formal && outcome === 'completed' && progress?.firstCompletedAt === undefined
+      const today = formal ? dayState(now) : undefined
+      if (firstCompletion && today && today.completedToday >= today.quota) {
+        throw new StudyError('The daily new word limit has been reached.', 409)
+      }
+      const round = practiceRound(session)
       const event: PracticeEvent = {
         id: randomUUID(), deckId: session.deckId, entryId, sessionId: id, mode: session.mode, outcome,
+        source: session.source ?? 'learn', round,
         attempts: session.currentAttempts, firstTryCorrect: session.currentFirstTryCorrect ?? false,
         assisted: session.currentAssisted, startedAt: session.currentEntryStartedAt, completedAt: now,
       }
       store.addPractice(event)
-      if (outcome === 'completed') store.saveProgress({
+      if (formal && outcome === 'completed') store.saveProgress({
         entryId, firstCompletedAt: progress?.firstCompletedAt ?? now,
         lastPracticedAt: Math.max(progress?.lastPracticedAt ?? now, now), completedCount: (progress?.completedCount ?? 0) + 1,
       })
+      const retry = round < (session.spelling?.retryLimit ?? 0)
+        && session.currentAttempts > 0 && !session.currentFirstTryCorrect
+      const queued = retry ? { ...session, entryIds: [...session.entryIds, entryId] } : session
       const updated = store.saveLearn({
-        ...resetWord(session, session.currentIndex + 1, now), dailyKey: day,
+        ...withDefaultHints(resetWord(queued, session.currentIndex + 1, now)), dailyKey: today?.day ?? session.dailyKey,
         firstCompletedEntryIds: firstCompletion ? [...session.firstCompletedEntryIds, entryId] : session.firstCompletedEntryIds,
       })
-      return { event, firstCompletion, session: updated }
+      return { event, firstCompletion, session: publicSession(updated) }
     },
     result(id: string, offset: number, limit: number) {
       const session = store.learn(id)
@@ -187,11 +292,19 @@ export function createLearnService(store: StudyStore) {
       const events = store.all<PracticeEvent>(
         "SELECT body FROM practice_events WHERE json_extract(body, '$.sessionId')=? ORDER BY json_extract(body, '$.completedAt'), id", id)
       return {
-        session, events: events.slice(offset, offset + limit),
+        session: publicSession(session), events: events.slice(offset, offset + limit),
         completed: events.filter(({ outcome }) => outcome === 'completed').length,
         skipped: events.filter(({ outcome }) => outcome === 'skipped').length,
         firstCompleted: session.firstCompletedEntryIds.length,
-        firstTryCorrect: events.filter(({ outcome, firstTryCorrect, assisted }) => outcome === 'completed' && firstTryCorrect && !assisted).length,
+        firstTryCorrect: events.filter(({ outcome, firstTryCorrect, assisted, round }) =>
+          outcome === 'completed' && firstTryCorrect && !assisted && !round).length,
+        retried: events.filter(({ round, outcome }) => round && outcome === 'completed').length,
+        corrected: events.filter(({ round, outcome, firstTryCorrect, assisted }) =>
+          !round && outcome === 'completed' && !firstTryCorrect && !assisted).length,
+        unfinished: session.status === 'abandoned' ? session.entryIds.length - session.currentIndex : 0,
+        difficult: [...new Set(events.filter((event) => (event.round ?? 0) === (session.spelling?.retryLimit ?? 0)
+          && event.attempts > 0 && !event.firstTryCorrect).map(({ entryId }) => entryId))]
+          .map((entryId) => store.entry(entryId)?.term).filter((term): term is string => !!term),
         attempts: events.reduce((sum, { attempts }) => sum + attempts, 0),
         assisted: events.filter(({ assisted }) => assisted).length,
       }

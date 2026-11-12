@@ -1,3 +1,5 @@
+import type { KeyboardLayout, PracticeSource, SpellingHint, SpellingPreferences } from './spelling.ts'
+
 export type LearnMode = 'copy' | 'dictation'
 export type LearnSessionStatus = 'active' | 'paused' | 'completed' | 'abandoned'
 
@@ -7,6 +9,8 @@ export interface PracticeEvent {
   entryId: string
   sessionId: string
   mode: LearnMode
+  source?: PracticeSource
+  round?: number
   outcome: 'completed' | 'skipped'
   attempts: number
   firstTryCorrect: boolean
@@ -23,6 +27,11 @@ export interface LearnProgress {
 }
 
 export interface LearnSession {
+  source?: PracticeSource
+  spelling?: SpellingPreferences
+  currentKeyboard?: KeyboardLayout
+  currentHints?: SpellingHint[]
+  currentCorrectSpelling?: { term: string; changedAt?: number }
   listId?: string
   sessionId: string
   deckId: string
@@ -42,8 +51,20 @@ export interface LearnSession {
   ttsVoicesAvailable?: boolean
 }
 
+export function practiceRound(session: LearnSession) {
+  const id = session.entryIds[session.currentIndex]
+  return session.entryIds.slice(0, session.currentIndex).filter((candidate) => candidate === id).length
+}
+
+export function hasCorrectSpelling(session: LearnSession, term: string, changedAt?: number) {
+  if (session.currentCorrectSpelling) return session.currentCorrectSpelling.term === normalizeSpelling(term)
+    && session.currentCorrectSpelling.changedAt === changedAt
+  return !!session.currentLastSubmitted && isSpellingCorrect(term, session.currentLastSubmitted)
+}
+
 export interface SpellingFeedback {
   actual: string
+  position: number
   status: 'correct' | 'incorrect' | 'missing' | 'extra'
 }
 
@@ -76,21 +97,21 @@ export function compareSpelling(expected: string, actual: string): SpellingFeedb
     if (i < left.length && j < right.length
       && left[i].toLowerCase() === right[j].toLowerCase()
       && rows[i][j] === rows[i + 1][j + 1]) {
-      feedback.push({ actual: right[j], status: 'correct' })
+      feedback.push({ actual: right[j], status: 'correct', position: i })
       i++
       j++
       continue
     }
     const cost = rows[i][j]
     if (i < left.length && j < right.length && cost === rows[i + 1][j + 1] + 1) {
-      feedback.push({ actual: right[j], status: 'incorrect' })
+      feedback.push({ actual: right[j], status: 'incorrect', position: i })
       i++
       j++
     } else if (i < left.length && cost === rows[i + 1][j] + 1) {
-      feedback.push({ actual: left[i], status: 'missing' })
+      feedback.push({ actual: left[i], status: 'missing', position: i })
       i++
     } else {
-      feedback.push({ actual: right[j], status: 'extra' })
+      feedback.push({ actual: right[j], status: 'extra', position: i })
       j++
     }
   }

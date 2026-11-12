@@ -62,7 +62,7 @@ test('rejects corrupted or incomplete v4 JSON without accepting partial history'
   await expect(parse({ ...good, entries: [{ ...good.entries[0], phoneticsNeedsReview: 'true' }] }))
     .rejects.toThrow('Invalid phonetics metadata')
   await expect(prepareLibraryRestore('{')).rejects.toThrow('not valid JSON')
-  await expect(parse({ ...good, formatVersion: 2 })).rejects.toThrow('formats v4, v5 and v6')
+  await expect(parse({ ...good, formatVersion: 2 })).rejects.toThrow('formats v4, v5, v6 and v7')
   await expect(parse({ ...good, entries: [] })).rejects.toThrow('missing entry')
   await expect(parse({ ...good, reviewEvents: [] })).rejects.toThrow('incomplete')
   await expect(parse({ ...good, reviewEvents: [...good.reviewEvents, ...good.reviewEvents] })).rejects.toThrow('Duplicate ID')
@@ -178,8 +178,47 @@ test('validates v6 list ownership, coverage and positions and preserves list IDs
     const ownerId = db.prepare('SELECT id FROM owner').pluck().get() as string
     const library = createLibraryService(createStudyStore(db, ownerId), backup.schedulerConfig)
     const snapshot = library.exportLibrary(list.deckId)
-    expect(snapshot).toMatchObject({ formatVersion: 6, lists: [list], listMembers: [member], metadata: { scope: 'deck' } })
+    expect(snapshot).toMatchObject({ formatVersion: 7, lists: [list], listMembers: [member], metadata: { scope: 'deck' } })
     expect(snapshot.reviewCards).toEqual(backup.reviewCards)
     expect(snapshot.entries).toEqual(backup.entries)
+  } finally { db.close(); await rm(directory, { recursive: true, force: true }) }
+})
+
+test('round-trips v7 spelling positions, free practice, and Owner preferences without changing FSRS', async () => {
+  const legacy = await fixture()
+  const entry = legacy.entries[0]
+  const event = legacy.practiceEvents[0]
+  const sessionId = randomUUID()
+  const listId = randomUUID()
+  const spelling = { keyboard: 'simplified', strict: true, retryLimit: 2, speakLetters: false, syllables: true } as const
+  const backup: LibraryExport = {
+    ...legacy, formatVersion: 7,
+    lists: [{ id: listId, deckId: entry.deckId, name: 'List 01', order: 1 }],
+    listMembers: [{ listId, entryId: entry.id, position: 1 }],
+    settings: { ...legacy.settings, spelling },
+    practiceEvents: [event,
+      { ...event, id: randomUUID(), sessionId, source: 'free', round: 0, attempts: 2, firstTryCorrect: false },
+      { ...event, id: randomUUID(), sessionId, source: 'free', round: 1 }],
+    spellingAttempts: [{
+      id: randomUUID(), entryId: entry.id, sessionId, round: 0, attempt: 1, spelling: entry.term,
+      time: entry.createdAt, source: 'free', mode: 'copy', keyboard: 'simplified', correct: false, assisted: false,
+      errors: [{ position: 1, type: 'incorrect', expected: 'u' }],
+    }],
+  }
+  await expect(parse({ ...backup, spellingAttempts: [{ ...backup.spellingAttempts[0], errors: [
+    { position: 1, expected: 'a', type: 'incorrect' },
+  ] }] })).rejects.toThrow('Invalid spelling error')
+  const directory = await mkdtemp(join(tmpdir(), 'lexyn-spelling-restore-'))
+  const db = openDatabase(directory)
+  try {
+    await initializeOwner(db, 'test-admin', 'test-owner-password')
+    restoreLibrary(db, await parse(backup))
+    const ownerId = db.prepare('SELECT id FROM owner').pluck().get() as string
+    const store = createStudyStore(db, ownerId)
+    const restored = createLibraryService(store, backup.schedulerConfig).exportLibrary()
+    expect(store.spellingSettings()).toEqual(spelling)
+    expect(restored).toMatchObject({ spellingAttempts: backup.spellingAttempts, learnProgress: legacy.learnProgress,
+      reviewEvents: legacy.reviewEvents, reviewCards: legacy.reviewCards })
+    await expect(parse(restored)).resolves.toBeDefined()
   } finally { db.close(); await rm(directory, { recursive: true, force: true }) }
 })

@@ -439,6 +439,7 @@ test('migration backfills stable membership without rewriting word bodies, study
   db.exec(`DROP TABLE deck_list_members; DROP TABLE deck_lists; DROP INDEX entries_id_deck;
     ALTER TABLE owner_settings DROP COLUMN study_weekdays;
     ALTER TABLE owner_settings DROP COLUMN review_reset_minutes;
+    DROP TABLE spelling_attempts; ALTER TABLE owner_settings DROP COLUMN spelling;
     PRAGMA user_version=9; CREATE TABLE deck_list_members (marker TEXT);`)
   expect(() => migrate(db)).toThrow('already exists')
   expect(db.pragma('user_version', { simple: true })).toBe(9)
@@ -454,4 +455,80 @@ test('migration backfills stable membership without rewriting word bodies, study
   expect((await data(get('library/list', [id, lists[0].id]))).map(({ id }: { id: string }) => id)).toEqual(ids.sort().slice(0, 30))
   migrate(db)
   expect(await data(get('library/lists', [id]))).toMatchObject({ lists })
+})
+
+test('keeps free spelling isolated while persisting bounded retry rounds and idempotent errors', async () => {
+  const deck = await data(post('library/create-deck', [{ name: 'Practice' }]))
+  const letter = await data(post('library/create-entry', [deck.id, { term: 'letter', meaning: '信' }]))
+  const original = await data(post('learn/start', [deck.id, 'copy', [letter.id], true]))
+  const prefs = await data(get('settings/spelling'))
+  await data(post('settings/save-spelling', [{ ...prefs, retryLimit: 1, keyboard: 'simplified' }]))
+  const list = (await data(get('library/lists', [deck.id]))).lists[0]
+  let free = await data(post('learn/start-free', [deck.id, 'dictation', list.id]))
+  const word = async () => data(get('learn/session', [free.sessionId]))
+  expect(await word()).toMatchObject({ entry: { term: '' }, answerVisible: false, keyboard: { layout: 'full' } })
+  await data(post('learn/hint', [free.sessionId, letter.id, 'keyboard', true, free.revision]))
+  const guided = await word()
+  free = guided.session
+  expect(guided).toMatchObject({ entry: { term: '' }, answerVisible: false, keyboard: { layout: 'simplified' }, session: { currentAssisted: true } })
+  const key = randomUUID()
+  const wrong = [free.sessionId, letter.id, 'leter', free.revision]
+  const first = await data(post('learn/attempt', wrong, key))
+  expect(first).toMatchObject({ correct: false, assisted: true, attempts: 1 })
+  expect(await data(post('learn/attempt', wrong, key))).toEqual(first)
+  expect((await post('learn/attempt', wrong)).status).toBe(409)
+  expect(count('spelling_attempts')).toBe(1)
+  free = (await word()).session
+  await data(post('learn/attempt', [free.sessionId, letter.id, 'letter', free.revision]))
+  free = (await word()).session
+  await data(post('learn/finish', [free.sessionId, letter.id, 'completed', free.revision]))
+  const retry = await word()
+  free = retry.session
+  expect(free.entryIds).toEqual([letter.id, letter.id])
+  expect(retry).toMatchObject({ keyboard: { layout: 'full' }, session: { currentIndex: 1, currentAssisted: false } })
+  await data(post('learn/status', [free.sessionId, 'paused', free.revision]))
+  free = await data(get('learn/free'))
+  await data(post('learn/resume', [free.sessionId, free.revision]))
+  free = (await word()).session
+  await data(post('learn/attempt', [free.sessionId, letter.id, 'leyter', free.revision]))
+  free = (await word()).session
+  await data(post('learn/attempt', [free.sessionId, letter.id, 'letter', free.revision]))
+  free = (await word()).session
+  await data(post('learn/finish', [free.sessionId, letter.id, 'completed', free.revision]))
+  const result = await data(get('learn/history', [free.sessionId, 0, 100]))
+  expect(result).toMatchObject({ completed: 2, firstCompleted: 0, firstTryCorrect: 0, retried: 1,
+    difficult: ['letter'], session: { status: 'completed', entryIds: [letter.id, letter.id] } })
+  expect(await data(get('learn/session', [original.sessionId]))).toMatchObject({ session: original })
+  expect(await data(get('learn/daily', [deck.id]))).toMatchObject({ completedToday: 0 })
+  expect(count('learn_progress')).toBe(0)
+  expect(count('review_events')).toBe(0)
+  expect(count('review_cards')).toBe(0)
+  const detail = await data(get('library/word-detail', [deck.id, letter.id]))
+  expect(detail.spelling).toMatchObject({ attempts: 4, failures: 2, firstCorrect: 0,
+    positions: [{ position: 2, expected: 't' }, { position: 3, expected: 't' }] })
+  await data(post('library/update-entry', [deck.id, letter.id, { term: 'letters', meaning: '信件' }, letter.revision]))
+  expect(await data(get('library/word-detail', [deck.id, letter.id]))).toMatchObject({
+    spelling: { attempts: 4, currentAttempts: 0, positions: [] },
+  })
+})
+
+test('free spelling and ending a free round leave an existing FSRS card, review event and LearnProgress byte-for-byte intact', async () => {
+  const review = await setupReview()
+  await data(post('review/score', [review.sessionId, review.currentCardId, 'good', review.revision]))
+  const snapshot = () => ['review_events', 'review_cards', 'learn_progress']
+    .map((table) => db.prepare(`SELECT body FROM ${table} ORDER BY body`).pluck().all())
+  const before = snapshot()
+  const deckId = db.prepare('SELECT id FROM decks').pluck().get()
+  const entryId = db.prepare('SELECT id FROM entries').pluck().get()
+  const free = await data(post('learn/start-free', [deckId, 'copy', null]))
+  await data(post('learn/attempt', [free.sessionId, entryId, 'cache', free.revision]))
+  const saved = (await data(get('learn/session', [free.sessionId]))).session
+  await data(post('learn/finish', [free.sessionId, entryId, 'completed', saved.revision]))
+  expect(snapshot()).toEqual(before)
+  const next = await data(post('learn/start-free', [deckId, 'copy', null]))
+  await data(post('learn/status', [next.sessionId, 'abandoned', next.revision]))
+  expect(await data(get('learn/history', [next.sessionId, 0, 100]))).toMatchObject({
+    session: { status: 'abandoned' }, completed: 0, unfinished: 1,
+  })
+  expect(snapshot()).toEqual(before)
 })

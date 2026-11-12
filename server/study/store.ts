@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import type { Deck, Entry } from '../../shared/domain/library.ts'
 import type { LearnSession, PracticeEvent, LearnProgress } from '../../shared/domain/learning.ts'
 import type { ReviewSession, ReviewCard, ReviewEvent } from '../../shared/domain/review.ts'
+import { defaultSpelling, type PracticeSource, type SpellingAttempt, type SpellingPreferences } from '../../shared/domain/spelling.ts'
 import { allStudyDays } from '../../shared/domain/study-plan.ts'
 
 export class StudyError extends Error {
@@ -65,6 +66,18 @@ export function createStudyStore(db: Database.Database, ownerId: string) {
         timezone=excluded.timezone, study_weekdays=excluded.study_weekdays, review_reset_minutes=excluded.review_reset_minutes`)
         .run(ownerId, dailyNewWords, timezone, studyWeekdays, reviewResetMinutes)
     },
+    spellingSettings(): SpellingPreferences {
+      const raw = db.prepare('SELECT spelling FROM owner_settings WHERE owner_id=?').pluck().get(ownerId) as string | null | undefined
+      return raw ? JSON.parse(raw) as SpellingPreferences : { ...defaultSpelling }
+    },
+    saveSpellingSettings(value: SpellingPreferences) {
+      db.prepare(`INSERT INTO owner_settings (owner_id, daily_new_words, timezone, spelling) VALUES (?,10,'UTC',?)
+        ON CONFLICT(owner_id) DO UPDATE SET spelling=excluded.spelling`).run(ownerId, JSON.stringify(value))
+    },
+    addSpellingAttempt(value: SpellingAttempt) {
+      db.prepare('INSERT INTO spelling_attempts VALUES (?,?,?,?,?,?)')
+        .run(value.id, value.entryId, value.sessionId, value.round, value.attempt, JSON.stringify(value))
+    },
     decks: () => all<Deck>('SELECT body FROM decks'),
     deck: (id: string) => one<Deck>('SELECT body FROM decks WHERE id=?', id),
     entries: (deckId?: string) => deckId === undefined
@@ -106,7 +119,8 @@ export function createStudyStore(db: Database.Database, ownerId: string) {
     cards: () => all<ReviewCard>('SELECT body FROM review_cards'),
     learn: (id: string) => one<Versioned<LearnSession>>('SELECT body FROM learn_sessions WHERE id=?', id),
     review: (id: string) => one<Versioned<ReviewSession>>('SELECT body FROM review_sessions WHERE id=?', id),
-    openLearn: () => one<Versioned<LearnSession>>("SELECT body FROM learn_sessions WHERE status IN ('active','paused')"),
+    openLearn: (source: PracticeSource = 'learn') => one<Versioned<LearnSession>>(
+      "SELECT body FROM learn_sessions WHERE status IN ('active','paused') AND coalesce(json_extract(body, '$.source'), 'learn')=?", source),
     openReview: () => one<Versioned<ReviewSession>>("SELECT body FROM review_sessions WHERE status IN ('active','paused')"),
     saveLearn(session: LearnSession & { revision?: number }) {
       const updated = { ...session, revision: (session.revision ?? 0) + 1 }

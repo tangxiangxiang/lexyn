@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { hasFinalMeaning } from '../../shared/domain/dictionary.ts'
 import { builtinWordbookById, builtinWordbookDescription, type BuiltinWordbookId, type BuiltinWordbookTag } from '../../shared/domain/builtin-books.ts'
+import type { SpellingAttempt } from '../../shared/domain/spelling.ts'
 import type { DictionaryEntry } from '../../shared/contracts/dictionary.ts'
 import { libraryFormatVersion, type LibraryExport } from '../../shared/contracts/library.ts'
 import { stableJson } from '../../shared/contracts/json.ts'
@@ -206,9 +207,10 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       checkRevision(deck, revision)
       if ((deck.archivedAt !== undefined) === archived) return
       store.saveDeck({ ...revise(deck, now), archivedAt: archived ? now : undefined })
-      const learn = store.openLearn()
-      if (archived && learn?.deckId === id && learn.status === 'active') {
-        store.saveLearn({ ...learn, status: 'paused', updatedAt: now })
+      if (!archived) return
+      for (const source of ['learn', 'free'] as const) {
+        const session = store.openLearn(source)
+        if (session?.deckId === id && session.status === 'active') store.saveLearn({ ...session, status: 'paused', updatedAt: now })
       }
     },
     createEntry(deckId: string, input: EntryInput, now: number) {
@@ -283,11 +285,12 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
         metadata: { scope: deckId ? 'deck' : 'library' },
         decks, entries, ...store.lists.export(deckId),
         practiceEvents: store.all<PracticeEvent>('SELECT body FROM practice_events').filter(({ entryId }) => ids.has(entryId)),
+        spellingAttempts: store.all<SpellingAttempt>('SELECT body FROM spelling_attempts').filter(({ entryId }) => ids.has(entryId)),
         learnProgress: store.all<LearnProgress>('SELECT body FROM learn_progress').filter(({ entryId }) => ids.has(entryId)),
         reviewCards: store.cards().filter(({ entryId }) => ids.has(entryId)),
         reviewEvents: store.all<ReviewEvent>('SELECT body FROM review_events').filter(({ entryId }) => ids.has(entryId)),
         schedulerConfig: config,
-        settings: store.settings(),
+        settings: { ...store.settings(), spelling: store.spellingSettings() },
       }
     },
   }

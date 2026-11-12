@@ -1,7 +1,8 @@
 import { libraryFormatVersion, type LibraryExport } from '../contracts/library.ts'
-import { fields, integer, isUuid, object, time, validateCardState, validateEntity, validateEvent, validateTimezone } from '../contracts/validation.ts'
+import { fields, integer, isUuid, object, time, validateCardState, validateEntity, validateEvent, validateSpellingPreferences, validateTimezone } from '../contracts/validation.ts'
 import { stableJson } from '../contracts/json.ts'
-import type { LearnProgress } from '../domain/learning.ts'
+import type { SpellingAttempt } from '../domain/spelling.ts'
+import { normalizeSpelling, type LearnProgress } from '../domain/learning.ts'
 import { allStudyDays, minutesPerDay } from '../domain/study-plan.ts'
 import { listSizes, type DeckList, type DeckListMember, type Entry } from '../domain/library.ts'
 import { REVIEW_DIRECTION, reviewCardId, type ReviewCard, type ReviewCardState, type ReviewEvent } from '../domain/review.ts'
@@ -47,16 +48,17 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
   try { raw = JSON.parse(text) } catch { throw new Error('The file is not valid JSON.') }
   const root = object(raw)
   const version = root.formatVersion
-  requireValid(root.format === 'lexyn-library' && (version === 4 || version === 5 || version === libraryFormatVersion),
-    'Only Lexyn library backup formats v4, v5 and v6 are supported.')
+  requireValid(root.format === 'lexyn-library' && (version === 4 || version === 5 || version === 6 || version === libraryFormatVersion),
+    'Only Lexyn library backup formats v4, v5, v6 and v7 are supported.')
   fields(root, 'format formatVersion exportedAt metadata decks entries practiceEvents learnProgress settings reviewCards reviewEvents schedulerConfig'
-    + (version === libraryFormatVersion ? ' lists listMembers' : ''))
+    + (version >= 6 ? ' lists listMembers' : '') + (version === libraryFormatVersion ? ' spellingAttempts' : ''))
   const meta = object(root.metadata)
   fields(meta, 'scope')
   requireValid(meta.scope === 'library' || meta.scope === 'deck', 'Unsupported backup metadata.')
   requireValid(typeof root.exportedAt === 'string' && time(Date.parse(root.exportedAt)), 'Invalid export time.')
   const settings = object(root.settings)
-  fields(settings, 'dailyNewWords timezone studyWeekdays reviewResetMinutes')
+  fields(settings, 'dailyNewWords timezone studyWeekdays reviewResetMinutes' + (version === libraryFormatVersion ? ' spelling' : ''))
+  if (version === libraryFormatVersion) validateSpellingPreferences(settings.spelling)
   requireValid(integer(settings.dailyNewWords, 1, 100), 'Invalid daily new words limit.')
   requireValid(settings.studyWeekdays === undefined || integer(settings.studyWeekdays, 1, allStudyDays), 'Invalid weekly study plan.')
   requireValid(settings.reviewResetMinutes === undefined || integer(settings.reviewResetMinutes, 0, minutesPerDay - 1), 'Invalid review reset time.')
@@ -65,7 +67,7 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
   requireValid(stableJson(root.schedulerConfig) === stableJson(config), 'Unsupported scheduler configuration.')
 
   const decks = rows<LibraryExport['decks'][number]>(root.decks, 'decks', (deck) => {
-    requireValid(version === libraryFormatVersion || deck.listSize === undefined, 'List size requires backup format v6.')
+    requireValid(version >= 6 || deck.listSize === undefined, 'List size requires backup format v6.')
     return validateEntity(deck, 'deck')
   })
   const deckIds = new Set(decks.map(({ id }) => id))
@@ -83,7 +85,7 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
     return id
   })
   const entryDecks = new Map(entries.map(({ id, deckId }) => [id, deckId]))
-  if (version === libraryFormatVersion) {
+  if (version >= 6) {
     const lists = rows<DeckList>(root.lists, 'deck lists', (list) => {
       fields(list, 'id deckId name order')
       requireValid(isUuid(list.id) && isUuid(list.deckId) && deckIds.has(list.deckId)
@@ -113,13 +115,15 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
   }
   const practiceEvents = rows<LibraryExport['practiceEvents'][number]>(root.practiceEvents, 'practice events', (event) => {
     checkEntry(event)
+    requireValid(version === libraryFormatVersion || (event.source === undefined && event.round === undefined),
+      'Spelling rounds require backup format v7.')
     return validateEvent(event, 'practice', config)
   })
-  uniqueSlots(practiceEvents, (event) => `${event.sessionId}:${event.entryId}`,
+  uniqueSlots(practiceEvents, (event) => `${event.sessionId}:${event.entryId}:${event.round ?? 0}`,
     'A Learn session has duplicate results for one entry.')
   const progressFromEvents = new Map<string, LearnProgress>()
   for (const event of practiceEvents) {
-    if (event.outcome !== 'completed') continue
+    if (event.outcome !== 'completed' || event.source === 'free') continue
     const { entryId, completedAt } = event
     const previous = progressFromEvents.get(entryId)
     progressFromEvents.set(entryId, { entryId, firstCompletedAt: Math.min(previous?.firstCompletedAt ?? completedAt, completedAt),
@@ -131,6 +135,31 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
     return progress.entryId
   })
   requireValid(learnProgress.length === progressFromEvents.size, 'Learn progress is incomplete.')
+  if (version === libraryFormatVersion) {
+    const attempts = rows<SpellingAttempt>(root.spellingAttempts, 'spelling attempts', (record) => {
+      fields(record, 'id entryId sessionId round attempt spelling termChangedAt time source mode keyboard assisted correct errors')
+      const { id, entryId, sessionId, spelling, correct, errors } = record
+      requireValid(isUuid(id) && isUuid(entryId) && entryDecks.has(entryId) && isUuid(sessionId)
+        && integer(record.round, 0, 3) && integer(record.attempt, 1)
+        && typeof spelling === 'string' && spelling.length >= 1 && spelling.length <= 1000 && spelling === normalizeSpelling(spelling)
+        && (record.termChangedAt === undefined || time(record.termChangedAt)) && time(record.time)
+        && (record.source === 'learn' || record.source === 'free') && (record.mode === 'copy' || record.mode === 'dictation')
+        && (record.keyboard === 'full' || record.keyboard === 'simplified')
+        && typeof record.assisted === 'boolean' && typeof correct === 'boolean'
+        && Array.isArray(errors) && errors.length <= 1240 && correct === (errors.length === 0), 'Invalid spelling attempt.')
+      const letters = [...spelling]
+      for (const error of errors) {
+        const value = object(error)
+        fields(value, 'position expected type')
+        requireValid((value.type === 'incorrect' || value.type === 'missing' || value.type === 'extra')
+          && integer(value.position, 0, value.type === 'extra' ? letters.length : letters.length - 1)
+          && value.expected === (letters[value.position] ?? ''), 'Invalid spelling error.')
+      }
+      return id
+    })
+    uniqueSlots(attempts, ({ sessionId, entryId, round, attempt }) => `${sessionId}:${entryId}:${round}:${attempt}`,
+      'Duplicate spelling attempt.')
+  }
   const reviewEvents = rows<ReviewEvent>(root.reviewEvents, 'review events', (value) => {
     checkEntry(value)
     return validateEvent(value, 'review', config)

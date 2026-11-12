@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3'
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import type { AuthEnv, createAuthApi } from '../auth/routes.ts'
-import { fields, integer, InvalidInput, isUuid, object, validateTimezone } from '../../shared/contracts/validation.ts'
+import { fields, integer, InvalidInput, isUuid, object, validateSpellingChanges, validateTimezone } from '../../shared/contracts/validation.ts'
 import { stableJson } from '../../shared/contracts/json.ts'
 import { cleanDictionaryMeaning, cleanDictionaryReference, cleanPhonetics } from '../../shared/domain/dictionary.ts'
 import { LibraryError, listSizes, type DeckInput, type Entry, type EntryInput } from '../../shared/domain/library.ts'
@@ -17,6 +17,7 @@ import { studyActivity } from './activity.ts'
 import { dayBounds, weekStart } from './calendar.ts'
 import { allStudyDays, minutesPerDay } from '../../shared/domain/study-plan.ts'
 import { builtinWordbooks, builtinWordbookTags, type BuiltinWordbookId, type BuiltinWordbookTag } from '../../shared/domain/builtin-books.ts'
+import { spellingStats, type SpellingAttempt } from '../../shared/domain/spelling.ts'
 import type { Ecdict } from '../dictionary/ecdict.ts'
 
 type Validator<T> = (value: unknown) => T
@@ -167,7 +168,10 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
       const reviews = store.db.prepare('SELECT reviewed_at FROM review_events WHERE card_id=? ORDER BY reviewed_at DESC, id DESC LIMIT 10')
         .pluck().all(cardId) as number[]
       return { entry, reviews, nextDueAt: store.card(cardId)?.dueAt,
-        learnedAt: store.entryProgress(entryId)?.firstCompletedAt, archived: store.deck(deckId)?.archivedAt !== undefined }
+        learnedAt: store.entryProgress(entryId)?.firstCompletedAt,
+        spelling: spellingStats(store.all<SpellingAttempt>('SELECT body FROM spelling_attempts WHERE entry_id=?', entryId),
+          entry.term, entry.termChangedAt),
+        archived: store.deck(deckId)?.archivedAt !== undefined }
     }),
     'library/rename-list': post([id, id, text(100)], library.renameList),
     'library/deck': get([id, text(240), choice('active', 'missing', 'dictionary', 'review', 'removed', 'all'), offset, limit], library.getDeck),
@@ -188,19 +192,24 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
       (deck, candidates, mode, size) => library.importEntries(deck, candidates, mode, clock(), size), true),
     'backup/library': get([optId], library.exportLibrary),
     'learn/daily': get([optId, optId], (id, listId) => learn.getDailyState(id, clock(), listId), true),
+    'learn/free': get([], learn.freeState),
+    'learn/start-free': post([id, choice('copy', 'dictation'), optId],
+      (deck, mode, listId) => learn.startFree(deck, mode, clock(), listId)),
     'learn/session': get([id], learn.getSession),
     'learn/history': get([id, offset, limit], learn.result),
     'learn/start': post([id, choice('copy', 'dictation'), list(id, 100), bool, optId],
       (deck, mode, ids, fresh, listId) => learn.startSession(deck, mode, ids, fresh, clock(), listId), true),
     'learn/mode': post([id, choice('copy', 'dictation'), version], (id, mode, revision) => learn.setMode(id, mode, revision, clock())),
     'learn/assist': post([id, id, version], (id, entry, revision) => learn.setAssisted(id, entry, revision, clock())),
+    'learn/hint': post([id, id, choice('keyboard', 'syllables'), bool, version],
+      (id, entry, hint, enabled, revision) => learn.setAssisted(id, entry, revision, clock(), hint, enabled)),
     'learn/status': post([id, choice('paused', 'abandoned'), version], (id, status, revision) => learn.setStatus(id, status, revision, clock())),
     'learn/resume': post([id, version], (id, revision) => learn.continueSession(id, revision, clock())),
     'learn/repair': post([id, version], (id, revision) => learn.advanceInvalid(id, revision, clock())),
-    'learn/attempt': post([id, id, text(1000), version], (id, entry, input, revision) => {
-      if (!input.trim()) return invalid('Enter an answer.')
-      return learn.recordAttempt(id, entry, input, revision, clock())
-    }),
+    'learn/attempt': post([id, id, text(1000), version, optional(bool)], (id, entry, input, revision, partial) => {
+      if (!input.length || (!input.trim() && !partial)) return invalid('Enter an answer.')
+      return learn.recordAttempt(id, entry, input, revision, clock(), partial)
+    }, true),
     'learn/finish': post([id, id, choice('completed', 'skipped'), version],
       (id, entry, outcome, revision) => learn.finishCurrent(id, entry, outcome, revision, clock())),
     'review/overview': get([optId], (deck) => review.overview(deck, clock())),
@@ -215,6 +224,8 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
       (id, card, rating, revision) => review.score(id, card, rating, revision, clock())),
     'progress/overview': get([], () => review.overview(undefined, clock())),
     'progress/activity': get([], () => studyActivity(store, clock())),
+    'settings/spelling': get([], store.spellingSettings),
+    'settings/save-spelling': post([validateSpellingChanges], (patch) => store.saveSpellingSettings({ ...store.spellingSettings(), ...patch })),
     'settings/owner': get([], store.settings),
     'settings/daily': post([num(1, 100)], (daily) => {
       const { timezone, studyWeekdays, reviewResetMinutes } = store.settings()
