@@ -6,7 +6,7 @@ import { initializeOwner } from '../auth/owner.ts'
 import { migrate } from '../db/migrations/index.ts'
 import { reviewRatings } from '../../shared/domain/review.ts'
 import { createReviewScheduler, rebuildCardFromEvents, schedulerGrades, serializeCard } from '../../shared/srs/scheduler.ts'
-import { dayBounds } from './calendar.ts'
+import { dayBounds, reviewDayBounds } from './calendar.ts'
 
 const origin = 'http://127.0.0.1:3000'
 const initial = Date.parse('2026-11-10T15:59:59Z')
@@ -269,6 +269,48 @@ test('uses calendar days with DST and independent Owner timezones', () => {
   expect(dayBounds(initial, 'UTC')[1]).toBe(Date.parse('2026-11-11T00:00:00Z'))
 })
 
+test('publishes new word quotas only on the saved study days in the owner timezone', async () => {
+  now = Date.parse('2026-11-09T15:59:59Z')
+  const deck = await data(post('library/create-deck', [{ name: 'Weekly plan' }]))
+  const entry = await data(post('library/create-entry', [deck.id, { term: 'cache', meaning: '缓存' }]))
+  await data(post('settings/plan', [30, 126, 210]))
+  await data(post('settings/timezone', ['Asia/Shanghai']))
+  expect(await data(get('settings/owner'))).toEqual({
+    dailyNewWords: 30, timezone: 'Asia/Shanghai', studyWeekdays: 126, reviewResetMinutes: 210,
+  })
+  expect((await post('settings/plan', [30, 0, 210])).status).toBe(400)
+  expect(await data(get('learn/daily', [deck.id]))).toMatchObject({ quota: 0, dailyNewWords: 30, candidates: [] })
+  expect((await post('learn/start', [deck.id, 'copy', [entry.id], true])).status).toBe(409)
+  now += 1000
+  expect(await data(get('learn/daily', [deck.id]))).toMatchObject({ quota: 30, candidates: [{ id: entry.id }] })
+})
+
+test('resets review totals at the requested civil time through a skipped or repeated hour', () => {
+  const timestamp = (iso: string) => Date.parse(iso)
+  expect(reviewDayBounds(timestamp('2026-03-08T08:00:00Z'), 'America/New_York', 150)).toEqual([
+    timestamp('2026-03-08T07:00:00Z'), timestamp('2026-03-09T06:30:00Z'),
+  ])
+  expect(reviewDayBounds(timestamp('2026-11-01T06:00:00Z'), 'America/New_York', 90)).toEqual([
+    timestamp('2026-11-01T05:30:00Z'), timestamp('2026-11-02T06:30:00Z'),
+  ])
+  expect(reviewDayBounds(timestamp('2026-11-11T02:30:00Z'), 'UTC', 210)).toEqual([
+    timestamp('2026-11-10T03:30:00Z'), timestamp('2026-11-11T03:30:00Z'),
+  ])
+})
+
+test('resets the displayed review count without changing the next scheduled review', async () => {
+  now = Date.parse('2026-11-11T02:00:00Z')
+  await data(post('settings/plan', [10, 127, 210]))
+  const review = await setupReview()
+  await data(post('review/score', [review.sessionId, review.currentCardId, 'easy', review.revision]))
+  const before = await data(get('progress/overview'))
+  expect(before).toMatchObject({ ratedToday: 1, learnedToday: 1, due: 0, nextDayAt: Date.parse('2026-11-11T03:30:00Z') })
+  now = before.nextDayAt
+  expect(await data(get('progress/overview'))).toMatchObject({
+    ratedToday: 0, learnedToday: 1, due: 0, nextDueAt: before.nextDueAt,
+  })
+})
+
 test('rejects premature Learn completion and records Skip without creating progress or consuming quota', async () => {
   const deck = await data(post('library/create-deck', [{ name: 'Systems' }]))
   const entry = await data(post('library/create-entry', [deck.id, { term: 'skip', meaning: '跳过' }]))
@@ -395,6 +437,8 @@ test('migration backfills stable membership without rewriting word bodies, study
   }
   const legacy = await data(get('backup/library', [null]))
   db.exec(`DROP TABLE deck_list_members; DROP TABLE deck_lists; DROP INDEX entries_id_deck;
+    ALTER TABLE owner_settings DROP COLUMN study_weekdays;
+    ALTER TABLE owner_settings DROP COLUMN review_reset_minutes;
     PRAGMA user_version=9; CREATE TABLE deck_list_members (marker TEXT);`)
   expect(() => migrate(db)).toThrow('already exists')
   expect(db.pragma('user_version', { simple: true })).toBe(9)

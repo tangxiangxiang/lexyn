@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { REVIEW_DIRECTION, recallPrompt, reviewCardId, type ReviewEvent, type ReviewRating, type ReviewSession } from '../../shared/domain/review.ts'
 import { FSRS_MODEL, restoreCard, schedulerConfigSnapshot, schedulerGrades, serializeCard, serializeRevlog, type ReviewScheduler } from '../../shared/srs/scheduler.ts'
-import { dayBounds } from './calendar.ts'
+import { dayBounds, reviewDayBounds } from './calendar.ts'
 import { checkRevision, StudyError, type StudyStore, type Versioned } from './store.ts'
 
 export function createReviewService(store: StudyStore, engine: ReviewScheduler) {
@@ -104,15 +104,17 @@ export function createReviewService(store: StudyStore, engine: ReviewScheduler) 
   return {
     overview(deckId: string | undefined, now: number) {
       const { decks, due, firstRecall, nextDueAt, progress, listStats } = queue(deckId, now)
-      const [start, nextDayAt] = dayBounds(now, store.settings().timezone)
+      const { timezone, reviewResetMinutes } = store.settings()
+      const [learnStart, learnEnd] = dayBounds(now, timezone)
+      const [start, reviewEnd] = reviewDayBounds(now, timezone, reviewResetMinutes)
       const ratedToday = store.db.prepare(`SELECT count(*) FROM review_events
         WHERE reviewed_at >= ? AND reviewed_at < ?
         ${deckId ? "AND json_extract(body, '$.deckId')=?" : ''}`).pluck()
-        .get(start, nextDayAt, ...(deckId ? [deckId] : [])) as number
-      return { decks, due, firstRecall, nextDueAt, ratedToday, nextDayAt, checkedAt: now,
+        .get(start, reviewEnd, ...(deckId ? [deckId] : [])) as number
+      return { decks, due, firstRecall, nextDueAt, ratedToday, nextDayAt: Math.min(learnEnd, reviewEnd), checkedAt: now,
         listStats,
         learnedToday: progress.filter(({ firstCompletedAt }) => firstCompletedAt !== undefined
-          && firstCompletedAt >= start && firstCompletedAt < nextDayAt).length }
+          && firstCompletedAt >= learnStart && firstCompletedAt < learnEnd).length }
     },
     round(deckId: string | undefined, now: number) {
       return snapshot(store.openReview() ?? store.one<Versioned<ReviewSession>>(

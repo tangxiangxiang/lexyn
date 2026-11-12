@@ -111,6 +111,7 @@ test('rejects a stale Library edit and hides personal state after signing out', 
     await write(page, 'library/update-entry', edit('cache memory'))
     expect((await writeStudy(other, 'library/update-entry', edit('stale change'))).status()).toBe(409)
     await navigateFromMenu(other, 'Settings')
+    await other.getByRole('link', { name: /Owner account/ }).click()
     await other.getByRole('button', { name: 'Sign out' }).click()
     await expect(other.getByLabel('Owner password')).toBeVisible()
     await expect(other.getByRole('navigation')).toHaveCount(0)

@@ -17,6 +17,7 @@ import WordPlayer from './WordPlayer.vue'
 import { readListeningBookmark, type ListeningBookmark, type Playlist } from './listeningBookmark'
 import { downloadLibrary, useLibraryAction } from './library-ui'
 import { useLibraryQuery } from './useLibraryQuery'
+import { settingsRoute } from '../settings/navigation'
 
 const props = defineProps<{ deckId: string }>()
 const route = useRoute()
@@ -116,7 +117,8 @@ function resumePlaylist() {
 </script>
 
 <template>
-  <section class="page spell-subpage spell-word-browser">
+  <section class="page spell-subpage spell-word-browser"
+    :class="{ 'spell-word-list': !wordId && !choosingPlaylist && !playlist }">
     <WordPlayer v-if="playlist" :deck-id="deckId" :playlist="playlist" @close="closeListening" />
     <template v-else-if="choosingPlaylist && words">
       <header class="spell-subpage-toolbar">
@@ -144,14 +146,21 @@ function resumePlaylist() {
     </template>
     <template v-else>
     <header class="spell-subpage-toolbar">
-      <RouterLink class="icon-control" :to="wordId ? browser : '/study'" :aria-label="t(wordId ? 'Open word list' : 'Lexyn home')">
-        <AppIcon :name="wordId ? 'chevronLeft' : 'close'" />
-      </RouterLink>
+      <div class="spell-word-list-nav">
+        <RouterLink v-if="!wordId" class="spell-word-account" :to="settingsRoute(route.fullPath, 'account')"
+          :aria-label="t('Owner account')" :title="t('Owner account')">
+          <AppIcon name="account" />
+        </RouterLink>
+        <RouterLink class="icon-control" :to="wordId ? browser : '/study'" :aria-label="t(wordId ? 'Open word list' : 'Lexyn home')">
+          <AppIcon :name="wordId ? 'chevronLeft' : 'close'" />
+        </RouterLink>
+      </div>
       <div v-if="!wordId" class="spell-word-tools">
-        <RouterLink class="spell-chip" :to="studyLists">{{ t('Study lists') }}</RouterLink>
+        <span class="spell-word-language">{{ t('English words') }}</span>
         <details class="spell-word-options" @keydown.esc.stop="($event.currentTarget as HTMLDetailsElement).open = false">
           <summary class="icon-control" :aria-label="t('Word list options')"><AppIcon name="filter" /></summary>
           <div class="spell-word-options-panel">
+            <RouterLink class="spell-word-options-link" :to="studyLists">{{ t('Study lists') }} <AppIcon name="chevronRight" /></RouterLink>
             <button v-for="option in filters" :key="option.value" type="button" :aria-pressed="filter === option.value"
               @click="filter = option.value">
               {{ t(option.label) }} <span>{{ words?.counts[option.value] }}</span>
@@ -207,7 +216,7 @@ function resumePlaylist() {
       </template>
     </template>
     <template v-else>
-      <h1>{{ t('My words') }} <span v-if="words">({{ words.count }})</span></h1>
+      <h1 class="spell-word-list-title">{{ t('My words') }} <span v-if="words">({{ words.count }})</span></h1>
       <NAlert v-if="error" type="error">
         {{ t('Lexyn could not read these words.') }} <NButton text @click="reload">{{ t('Retry') }}</NButton>
       </NAlert>
@@ -234,7 +243,7 @@ function resumePlaylist() {
       <NAlert v-if="exportError" type="error" role="alert">{{ translateError(exportError) }}</NAlert>
       <footer v-if="words" class="spell-word-dock" :aria-label="t('Study actions')">
         <button type="button" class="icon-control" :disabled="!words.counts.all" :aria-label="t('Listen to words')" @click="openPlaylistPicker"><AppIcon name="headphones" /></button>
-        <RouterLink class="icon-control" :to="{ path: '/review', query: { deckId } }" :aria-label="t('Review')"><AppIcon name="review" /></RouterLink>
+        <RouterLink class="icon-control" :to="{ path: '/review', query: { deckId } }" :aria-label="t('Review')"><AppIcon name="flame" /></RouterLink>
         <button class="icon-control" :disabled="busy" :aria-label="t('Export deck')" @click="run(() => downloadLibrary(deckId))"><AppIcon name="share" /></button>
       </footer>
     </template>

@@ -17,3 +17,10 @@ export function rememberCurrentBook(deckId: string) {
   try { localStorage.setItem(key, deckId) }
   catch { /* The reader still opens when browser storage is unavailable. */ }
 }
+
+export function clearCurrentBook() {
+  const key = storageKey()
+  if (!key) return
+  try { localStorage.removeItem(key) }
+  catch { /* The archived book remains available in the library. */ }
+}

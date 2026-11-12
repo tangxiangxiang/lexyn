@@ -103,6 +103,14 @@ watch([overview, () => route.query.addWord], ([deck, addWord]) => {
   void router.replace({ query })
 }, { immediate: true })
 
+watch([overview, () => route.query.importWords], ([deck, importWords]) => {
+  if (!deck || deck.deck.archivedAt !== undefined || importWords !== '1') return
+  importing.value = true
+  const query = { ...route.query }
+  delete query.importWords
+  void router.replace({ query })
+}, { immediate: true })
+
 function closeSearch() {
   searching.value = false
   filter.value = 'active'

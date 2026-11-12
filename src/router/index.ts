@@ -10,6 +10,7 @@ import ReviewPage from '../features/review/ReviewPage.vue'
 import ProgressPage from '../features/progress/ProgressPage.vue'
 import ActivityPage from '../features/progress/ActivityPage.vue'
 import WordBrowserPage from '../features/library/WordBrowserPage.vue'
+import BuiltinBooksPage from '../features/library/BuiltinBooksPage.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -17,13 +18,14 @@ export const router = createRouter({
     { path: '/', redirect: '/study' },
     { path: '/study', component: LibraryPage, props: { resumeCurrentBook: true }, meta: { title: 'Current book' } },
     { path: '/library', component: LibraryPage, meta: { title: 'Library' } },
+    { path: '/library/built-in/:bookId?', name: 'library-builtin-books', component: BuiltinBooksPage, meta: { title: 'Built-in wordbooks' } },
     { path: '/learn', component: LearnPage, meta: { title: 'Learn' } },
     { path: '/learn/read', component: LearnPage, meta: { title: 'Learn the word' } },
     { path: '/learn/spell', component: LearnPage, meta: { title: 'Spelling practice' } },
     { path: '/review', component: ReviewPage, meta: { title: 'Review' } },
     { path: '/progress', component: ProgressPage, meta: { title: 'Progress' } },
     { path: '/activity', component: ActivityPage, meta: { title: 'Study activity' } },
-    { path: '/settings', component: SettingsPage, meta: { title: 'Settings' } },
+    { path: '/settings', name: 'settings', component: SettingsPage, meta: { title: 'Settings' } },
     { path: '/library/:deckId', name: 'library-deck', component: DeckPage, props: true, meta: { title: 'Library' } },
     { path: '/library/:deckId/words', name: 'library-words', component: WordBrowserPage, props: true, meta: { title: 'My words' } },
     {

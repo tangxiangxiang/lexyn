@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="800" viewBox="0 0 1440 800" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="blue" x1="0" y1="0" x2=".22" y2="1">
+      <stop stop-color="#09289f"/><stop offset=".62" stop-color="#0746b3"/><stop offset="1" stop-color="#0849b8"/>
+    </linearGradient>
+    <radialGradient id="shadow" cx=".19" cy=".16" r=".88">
+      <stop stop-color="#08146c"/><stop offset=".53" stop-color="#092894"/><stop offset="1" stop-color="#007fbe"/>
+    </radialGradient>
+    <linearGradient id="silk" x1=".1" y1=".15" x2=".86" y2=".78">
+      <stop stop-color="#06258c"/><stop offset=".55" stop-color="#0e429f"/><stop offset=".81" stop-color="#0b62ac"/><stop offset="1" stop-color="#13a2bf"/>
+    </linearGradient>
+    <linearGradient id="ribbon" x1=".44" y1=".1" x2=".63" y2=".84">
+      <stop stop-color="#154ba7"/><stop offset=".24" stop-color="#1079b7"/><stop offset=".52" stop-color="#159fb7"/><stop offset=".78" stop-color="#0d62a9"/><stop offset="1" stop-color="#0755a9"/>
+    </linearGradient>
+    <linearGradient id="edge" x1=".3" y1=".1" x2=".76" y2=".83">
+      <stop stop-color="#2976e0" stop-opacity=".18"/><stop offset=".32" stop-color="#16a4c5" stop-opacity=".78"/><stop offset=".66" stop-color="#24d7c9" stop-opacity=".28"/><stop offset="1" stop-color="#2edfd0" stop-opacity=".72"/>
+    </linearGradient>
+    <filter id="soft" x="-.15" y="-.15" width="1.3" height="1.3">
+      <feGaussianBlur stdDeviation="5"/>
+    </filter>
+  </defs>
+  <path fill="url(#blue)" d="M0 0h1440v800H0z"/>
+  <path fill="url(#shadow)" d="M0 0h706C551 161 384 273 310 494 203 493 63 448 0 401Z"/>
+  <path fill="#061b83" fill-opacity=".56" d="M0 93c14 166 136 309 310 401C173 445 54 389 0 281Z"/>
+  <path fill="url(#silk)" d="M368-3h676C827 143 701 298 643 439c-40 102-33 207-72 239-97-16-195-91-277-190C167 345 216 177 368-3Z"/>
+  <path fill="url(#silk)" d="M812-9h293C925 144 905 313 770 506c-64 91-143 199-108 219-127 19-232-75-225-205C445 347 608 175 812-9Z"/>
+  <path fill="none" stroke="url(#edge)" stroke-width="11" filter="url(#soft)" d="M815-9C602 177 457 346 440 503c-12 111 67 211 206 221"/>
+  <path fill="url(#ribbon)" d="M1053-4h387v110C1328 184 1193 239 1133 357c-83 162-185 398-321 449H678c-65-27-23-143 51-273C829 358 960 225 1053-4Z"/>
+  <path fill="url(#silk)" fill-opacity=".63" d="M1053-4c-93 229-224 362-324 537-33 57-57 111-71 153 51-122 162-230 281-331 157-135 345-200 501-252V-4Z"/>
+  <path fill="none" stroke="url(#edge)" stroke-width="12" filter="url(#soft)" d="M1448 102C1260 223 1101 268 926 412 795 519 683 640 655 732"/>
+  <path fill="none" stroke="url(#edge)" stroke-width="5" d="M1448 102C1290 210 1180 261 1133 357c-83 162-185 398-321 449"/>
+  <path fill="none" stroke="url(#edge)" stroke-width="4" filter="url(#soft)" d="M368 0C221 180 175 349 294 489 343 550 396 605 465 642M0 387c48 42 162 80 307 107"/>
+</svg>

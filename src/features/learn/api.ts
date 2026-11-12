@@ -3,6 +3,15 @@ import type { StudyEndpoints } from '../../../shared/contracts/study'
 import type { LearnSession } from '../../../shared/domain/learning'
 
 export type LearnSessionRecord = LearnSession & { revision: number }
+
+export function learnSessionRoute(session: LearnSession, stage?: 'read' | 'spell') {
+  const reading = session.mode === 'copy' && (stage === 'read' || (!stage && session.currentAttempts === 0))
+  return {
+    path: reading ? '/learn/read' : '/learn/spell',
+    query: { deckId: session.deckId, listId: session.listId, session: session.sessionId },
+  }
+}
+
 export const learn = {
   getDailyState: (args: StudyEndpoints['learn/daily']['args'], signal?: AbortSignal) => study('learn/daily', args, { signal }),
   getSession: (id: string, signal?: AbortSignal) => study('learn/session', [id], { signal }),

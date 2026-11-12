@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { hasFinalMeaning } from '../../shared/domain/dictionary.ts'
+import { builtinWordbookById, builtinWordbookDescription, type BuiltinWordbookId, type BuiltinWordbookTag } from '../../shared/domain/builtin-books.ts'
+import type { DictionaryEntry } from '../../shared/contracts/dictionary.ts'
 import { libraryFormatVersion, type LibraryExport } from '../../shared/contracts/library.ts'
 import { stableJson } from '../../shared/contracts/json.ts'
 import { cleanDeck, cleanEntry, normalizeTerm, type DeckListSummary, type Deck, type DeckInput, type Entry, type EntryInput } from '../../shared/domain/library.ts'
@@ -85,6 +87,58 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
   }
 
   return {
+    builtinBooks(catalog: { installed: boolean; books: { id: BuiltinWordbookId; name: string; count: number; available: boolean }[] }) {
+      const decks = store.decks()
+      return { ...catalog, books: catalog.books.map((book) => ({
+        ...book,
+        ...(() => {
+          const deck = decks.find(({ description }) => description === builtinWordbookDescription(book.id))
+          return deck ? { deckId: deck.id, deckArchived: deck.archivedAt !== undefined } : {}
+        })(),
+      })) }
+    },
+    createBuiltinBook(id: BuiltinWordbookId, rows: DictionaryEntry[] | undefined, now: number, selectedTags: BuiltinWordbookTag[]) {
+      const book = builtinWordbookById[id]
+      if (!book?.tag) throw new StudyError('This built-in wordbook is not available from the installed dictionary.', 404)
+      if (!rows) throw new StudyError('ECDICT is not installed on this server.', 404)
+      if (!selectedTags.length) throw new StudyError('Choose at least one word group.', 400)
+      if (!rows.length) throw new StudyError('No words match the selected word groups.', 404)
+
+      const description = builtinWordbookDescription(id)
+      const previous = store.decks().find((deck) => deck.description === description)
+      const deck = previous
+        ? previous.archivedAt === undefined ? previous : { ...revise(previous, now), archivedAt: undefined }
+        : { ...newEntity(now), ...cleanDeck({ name: book.name, description, listSize: 30 }) }
+      if (!previous || deck !== previous) store.saveDeck(deck)
+      const entryIds: string[] = []
+      const seen = new Set<string>()
+      for (const row of rows) {
+        const normalized = normalizeTerm(row.word)
+        if (!normalized || seen.has(normalized) || store.activeEntry(deck.id, normalized) || !row.translation.trim()) continue
+        seen.add(normalized)
+        const entry = makeEntry(deck.id, {
+          term: row.word,
+          meaning: row.translation,
+          dictionaryMeaning: row.dictionaryMeaning,
+          dictionaryReference: {
+            sourceWord: row.word,
+            sourceRevision: row.dictionaryMeaning?.sourceRevision,
+            translation: row.translation,
+            definition: row.definition,
+            partOfSpeech: row.pos,
+            phonetic: row.phonetic,
+          },
+          phonetic: row.phonetic,
+          meaningSource: 'dictionary',
+          meaningNeedsReview: true,
+        }, now)
+        store.saveEntry(entry)
+        entryIds.push(entry.id)
+      }
+      store.lists.append(deck, entryIds)
+      const count = store.entries(deck.id).filter(({ deletedAt }) => deletedAt === undefined).length
+      return { deck, count, addedCount: entryIds.length, alreadyAdded: entryIds.length === 0 }
+    },
     listDecks(offset: number, limit: number) {
       const counts = store.db.prepare(`SELECT deck_id AS deckId, COUNT(active_term) AS count,
         MAX(json_extract(body, '$.updatedAt')) AS modifiedAt FROM entries GROUP BY deck_id`).all() as { deckId: string; count: number; modifiedAt: number }[]

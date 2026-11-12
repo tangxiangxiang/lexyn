@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { dateKey, isSpellingCorrect, type LearnMode, type LearnSession, type PracticeEvent } from '../../shared/domain/learning.ts'
 import { checkRevision, StudyError, type StudyStore, type Versioned } from './store.ts'
+import { isStudyDay } from '../../shared/domain/study-plan.ts'
 
 const currentId = (session: LearnSession) => session.entryIds[session.currentIndex]
 const open = (session: LearnSession) => session.status === 'active' || session.status === 'paused'
@@ -17,12 +18,13 @@ function resetWord(session: Versioned<LearnSession>, index: number, now: number)
 
 export function createLearnService(store: StudyStore) {
   function dayState(now: number) {
-    const { dailyNewWords: quota, timezone } = store.settings()
+    const { dailyNewWords, studyWeekdays, timezone } = store.settings()
     const day = dateKey(now, timezone)
+    const quota = isStudyDay(day, studyWeekdays) ? dailyNewWords : 0
     const progress = store.progress()
     const completedToday = progress.filter((item) => item.firstCompletedAt !== undefined
       && dateKey(item.firstCompletedAt, timezone) === day).length
-    return { day, quota, completedToday, progress }
+    return { day, quota, dailyNewWords, completedToday, progress }
   }
 
   function usableEntry(session: LearnSession, id = currentId(session)) {
@@ -69,7 +71,7 @@ export function createLearnService(store: StudyStore) {
 
   return {
     getDailyState(deckId: string | undefined, now: number, listId?: string) {
-      const { quota, completedToday, day, progress } = dayState(now)
+      const { quota, dailyNewWords, completedToday, day, progress } = dayState(now)
       const decks = store.decks().filter((deck) => deck.archivedAt === undefined)
       const deckIds = new Set(decks.filter((deck) => !deckId || deckId === deck.id).map(({ id }) => id))
       const learned = new Map(progress.filter((item) => item.firstCompletedAt !== undefined).map((item) => [item.entryId, item]))
@@ -83,7 +85,7 @@ export function createLearnService(store: StudyStore) {
       const lists = listId && deckId ? store.lists.summaries(deckId) : []
       const list = lists.find(({ id }) => id === listId)
       const nextList = list && lists.find(({ order, count }) => order > list.order && count > 0)
-      return { quota, completedToday, day, decks, activeSession, candidates, practiceCandidates, list, nextList }
+      return { quota, dailyNewWords, completedToday, day, decks, activeSession, candidates, practiceCandidates, list, nextList }
     },
     startSession(deckId: string, mode: LearnMode, entryIds: string[], newWords: boolean, now: number, listId?: string) {
       const active = store.openLearn()

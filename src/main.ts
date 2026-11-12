@@ -5,6 +5,7 @@ import { registerPwa } from './pwa'
 import './styles/base.css'
 import './styles/library.css'
 import './styles/learn.css'
+import './styles/settings.css'
 
 createApp(App).use(router).mount('#app')
 

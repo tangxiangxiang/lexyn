@@ -10,6 +10,7 @@ import { useSpeech } from './useSpeech'
 
 const props = defineProps<{
   entryId?: string; voiceId?: SpeechVoice; revision?: number; scope?: string; disabled?: boolean; label: string; preload?: boolean
+  showPhonetic?: boolean
   phonetics?: PhoneticVariants; legacyPhonetic?: string; accent?: PronunciationAccent
 }>()
 const { state, error, toggle } = useSpeech(
@@ -29,6 +30,7 @@ const pronunciation = computed(() => {
 })
 const buttonLabel = computed(() => {
   if (pronunciation.value) {
+    if (props.showPhonetic === false) return t(state.value === 'playing' ? 'Pause pronunciation' : props.label)
     const accent = pronunciation.value.accent
     return accent
       ? t('Play {accent} pronunciation {phonetic}', { accent: t(accent === 'british' ? 'British' : 'American'), phonetic: pronunciation.value.value })
@@ -44,10 +46,15 @@ const buttonLabel = computed(() => {
       class="pronunciation-button" :class="{ 'pronunciation-plain': pronunciation }"
       :loading="state === 'loading' && !pronunciation"
       :disabled="disabled || state === 'loading'" :aria-label="buttonLabel" @click="toggle">
-      <template v-if="pronunciation">
+      <template v-if="pronunciation && props.showPhonetic !== false">
         <span class="pronunciation-phonetic">
           {{ pronunciation.value }}
         </span>
+        <span class="pronunciation-icon" aria-hidden="true">
+          <AppIcon :name="state === 'playing' ? 'pause' : 'speaker'" />
+        </span>
+      </template>
+      <template v-else-if="pronunciation">
         <span class="pronunciation-icon" aria-hidden="true">
           <AppIcon :name="state === 'playing' ? 'pause' : 'speaker'" />
         </span>

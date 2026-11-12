@@ -15,7 +15,7 @@ interface LibraryBackupData {
   reviewCards: ReviewCard[]
   reviewEvents: ReviewEvent[]
   schedulerConfig: ReviewSchedulerConfig
-  settings: { dailyNewWords: number; timezone: string }
+  settings: { dailyNewWords: number; timezone: string; studyWeekdays?: number; reviewResetMinutes?: number }
 }
 
 export type LibraryExport = LibraryBackupData & (

@@ -85,6 +85,8 @@ async function interimDatabase() {
     );
     ALTER TABLE decks ADD COLUMN device_id TEXT REFERENCES devices(id);
     ALTER TABLE entries ADD COLUMN device_id TEXT REFERENCES devices(id);
+    ALTER TABLE owner_settings DROP COLUMN study_weekdays;
+    ALTER TABLE owner_settings DROP COLUMN review_reset_minutes;
     PRAGMA user_version = 5;
   `)
   return { db, login }
@@ -98,7 +100,9 @@ test('repairs the empty interim schema and keeps the account, session and settin
     expect(db.pragma('foreign_key_check')).toEqual([])
     expect(db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='devices'").get()).toBeUndefined()
     expect(createAuth(db).session(login.token)?.ownerId).toBe(login.ownerId)
-    expect(createStudyStore(db, login.ownerId).settings()).toEqual({ dailyNewWords: 24, timezone: 'Asia/Shanghai' })
+    expect(createStudyStore(db, login.ownerId).settings()).toEqual({
+      dailyNewWords: 24, timezone: 'Asia/Shanghai', studyWeekdays: 127, reviewResetMinutes: 0,
+    })
 
     const { createApp } = await import('../app.ts')
     const app = createApp(db)

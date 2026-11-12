@@ -36,19 +36,20 @@ async function learnWords(page: Page, words: WordInput[]) {
   for (const { term } of words) await expect(page.getByRole('heading', { name: term, exact: true })).toBeVisible()
   await page.getByRole('link', { name: 'Start learning' }).click()
   await page.getByRole('button', { name: /Learn \d new word/ }).click()
+  await page.getByRole('link', { name: 'Start spelling' }).click()
   const pending = new Set(words.map(({ term }) => term))
   for (let index = 0; index < words.length; index++) {
-    const heading = page.locator('.learn-term')
+    const heading = page.locator('.learn-card').getByRole('heading')
     await expect(heading).toBeVisible()
-    const term = await heading.innerText()
+    const term = (await heading.textContent())!.trim()
     expect(pending.delete(term)).toBe(true)
     const current = words.find((word) => word.term === term)
     const definition = current?.fullDefinition
     if (definition) await expect(page.locator('.learn-card .dictionary-definition')).toContainText([current!.meaning, definition])
-    if (current?.phonetic) await expect(page.locator('.learn-card .phonetics')).toHaveText(current.phonetic)
+    if (current?.phonetic) {
+      await expect(page.getByRole('button', { name: `Play pronunciation ${current.phonetic}` })).toHaveText(current.phonetic)
+    }
     await page.getByRole('textbox', { name: 'Copy the word' }).fill(term)
-    await page.getByRole('button', { name: 'Check spelling' }).click()
-    await page.getByRole('button', { name: 'Next word' }).click()
     await expect(page.getByRole('heading', { name: term, exact: true })).toHaveCount(0)
   }
   await expect(page.getByText('Session complete', { exact: true })).toBeVisible()

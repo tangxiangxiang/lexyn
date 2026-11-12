@@ -53,7 +53,7 @@ async function start(dataDir: string, port = 0) {
 
 const settings = (page: Page) => navigateFromMenu(page, 'Settings')
 async function newDeck(page: Page, name: string, csv: string) {
-  await navigateFromMenu(page, 'Library')
+  await page.goto(new URL('/library', page.url()).href)
   await page.getByRole('button', { name: 'New deck' }).click()
   await page.getByLabel('Deck name').fill(name)
   await page.getByRole('button', { name: 'Save', exact: true }).click()
@@ -64,17 +64,14 @@ async function newDeck(page: Page, name: string, csv: string) {
   await expect(page.getByRole('heading', { name: csv.split(',')[0], exact: true })).toBeVisible()
 }
 
-async function study(page: Page, amount: number) {
+async function study(page: Page, words: string[]) {
+  const amount = words.length
   await page.getByRole('link', { name: 'Start learning' }).click()
   await page.getByRole('button', { name: new RegExp(`Learn ${amount} new words?`) }).click()
-  for (let index = 0; index < amount; index++) {
-    const term = page.locator('.learn-term')
-    await expect(term).toBeVisible()
-    const spelling = await term.innerText()
+  await page.getByRole('link', { name: 'Start spelling' }).click()
+  for (const spelling of words) {
+    await expect(page.locator('.learn-card').getByRole('heading', { name: spelling, exact: true })).toBeVisible()
     await page.getByRole('textbox', { name: 'Copy the word' }).fill(spelling)
-    await page.getByRole('button', { name: 'Check spelling' }).click()
-    await page.getByRole('button', { name: 'Next word' }).click()
-    await expect(page.getByRole('heading', { name: spelling, exact: true })).toHaveCount(0)
   }
   await expect(page.getByText('Session complete', { exact: true })).toBeVisible()
   await navigateFromMenu(page, 'Review')
@@ -87,6 +84,8 @@ async function study(page: Page, amount: number) {
 }
 
 async function exportLibrary(page: Page) {
+  const current = new URL(page.url())
+  if (current.searchParams.get('section') !== 'backup') await page.goto(new URL('/settings?section=backup', current).href)
   const [download] = await Promise.all([
     page.waitForEvent('download'), page.getByRole('button', { name: 'Download JSON backup' }).click(),
   ])
@@ -107,7 +106,7 @@ test('restores a server JSON export with archived and removed history for fresh 
   try {
     await page.goto('/library')
     await newDeck(page, 'JSON current deck', 'consensus,共识\nquorum,法定人数\nreplica,副本')
-    await study(page, 3)
+    await study(page, ['consensus', 'quorum', 'replica'])
     await navigateFromMenu(page, 'Library')
     await page.getByRole('link', { name: 'JSON current deck', exact: true }).click()
     await libraryAction(page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'quorum', exact: true }) }), 'Remove word')
@@ -117,10 +116,19 @@ test('restores a server JSON export with archived and removed history for fresh 
     await libraryAction(page.getByRole('listitem').filter({ has: page.getByRole('link', { name: 'JSON archived deck', exact: true }) }), 'Archive deck', 'Book options')
     await page.locator('.library-dialog').getByRole('button', { name: 'Archive deck' }).click()
     await settings(page)
+    await page.getByRole('link', { name: /Learning plan/ }).click()
+    const monday = page.getByRole('button', { name: 'Mon', exact: true })
+    await expect(monday).toHaveAttribute('aria-pressed', 'true')
+    await monday.click()
+    await expect(monday).toHaveAttribute('aria-pressed', 'false')
     await page.getByRole('textbox', { name: 'Daily new words' }).fill('23')
     await page.getByRole('textbox', { name: 'Daily new words' }).press('Tab')
+    await page.getByRole('button', { name: /^Review reset time/ }).click()
+    await page.getByLabel('Review reset time', { exact: true }).fill('03:30')
+    await page.getByRole('button', { name: 'Done' }).click()
+    await expect(page).toHaveURL(/\/settings$/)
     const { path, snapshot } = await exportLibrary(page)
-    expect(snapshot.settings.dailyNewWords).toBe(23)
+    expect(snapshot.settings).toMatchObject({ dailyNewWords: 23, studyWeekdays: 126, reviewResetMinutes: 210 })
     expect(snapshot.reviewEvents).toHaveLength(3)
     expect(snapshot.practiceEvents).toHaveLength(3)
     await page.getByLabel('Preview a JSON backup').setInputFiles({ name: 'bad.json', mimeType: 'application/json', buffer: Buffer.from('{') })
@@ -133,9 +141,11 @@ test('restores a server JSON export with archived and removed history for fresh 
     await expect(backup(root, 'restore-json', path, '--confirm-empty')).rejects.toThrow('empty server')
     server = await start(root)
     const restored = await fresh.newPage()
-    await restored.goto(server.origin + '/settings')
+    await restored.goto(server.origin + '/settings?section=plan')
     await signIn(restored)
     await expect(restored.getByRole('textbox', { name: 'Daily new words' })).toHaveValue('23')
+    await expect(restored.getByRole('button', { name: 'Mon', exact: true })).toHaveAttribute('aria-pressed', 'false')
+    await expect(restored.getByRole('button', { name: /^Review reset time/ })).toContainText('03:30')
     const roundTrip = await exportLibrary(restored)
     expect(comparable(roundTrip.snapshot)).toEqual(comparable(snapshot))
     const plan = await prepareLibraryRestore(JSON.stringify(roundTrip.snapshot))
@@ -162,13 +172,14 @@ test('recovers a live SQLite backup, revokes old sessions and persists new write
     await desktop.goto(instance.origin + '/library')
     await signIn(desktop)
     await newDeck(desktop, 'SQLite desktop data', 'durability,耐久性')
-    await study(desktop, 1)
+    await study(desktop, ['durability'])
     await phone.goto(instance.origin + '/library')
     await signIn(phone)
     await expect(phone.getByRole('link', { name: 'SQLite desktop data' })).toBeVisible()
     await newDeck(phone, 'SQLite phone data', 'checkpoint,检查点')
-    await study(phone, 1)
+    await study(phone, ['checkpoint'])
     await settings(phone)
+    await phone.getByRole('link', { name: /Owner account/ }).click()
     await expect(phone.getByLabel('Study timezone (IANA)')).toHaveValue('UTC')
     await phone.getByLabel('Study timezone (IANA)').fill('Asia/Shanghai')
     const [saved] = await Promise.all([phone.waitForResponse((response) => response.url().endsWith('/api/settings/timezone')),

@@ -187,6 +187,13 @@ const migrations: ({ version: number; sql: string } | { version: number; apply: 
       seedDeckLists(db)
     },
   },
+  {
+    version: 11,
+    sql: `
+      ALTER TABLE owner_settings ADD COLUMN study_weekdays INTEGER NOT NULL DEFAULT 127 CHECK (study_weekdays BETWEEN 1 AND 127);
+      ALTER TABLE owner_settings ADD COLUMN review_reset_minutes INTEGER NOT NULL DEFAULT 0 CHECK (review_reset_minutes BETWEEN 0 AND 1439);
+    `,
+  },
 ]
 
 export const latestDatabaseVersion = migrations.at(-1)!.version

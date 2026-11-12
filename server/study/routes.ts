@@ -15,6 +15,9 @@ import { createReviewService } from './review.ts'
 import { createStudyStore, StudyError } from './store.ts'
 import { studyActivity } from './activity.ts'
 import { dayBounds, weekStart } from './calendar.ts'
+import { allStudyDays, minutesPerDay } from '../../shared/domain/study-plan.ts'
+import { builtinWordbooks, builtinWordbookTags, type BuiltinWordbookId, type BuiltinWordbookTag } from '../../shared/domain/builtin-books.ts'
+import type { Ecdict } from '../dictionary/ecdict.ts'
 
 type Validator<T> = (value: unknown) => T
 const invalid = (message = 'Invalid request arguments.'): never => { throw new InvalidInput(message) }
@@ -33,6 +36,10 @@ const version = num(1)
 const offset = num(0)
 const limit = num(1, 200)
 const optId = optional(id)
+const builtinWordbookId: Validator<BuiltinWordbookId> = (value) => typeof value === 'string'
+  && builtinWordbooks.some(({ id }) => id === value) ? value as BuiltinWordbookId : invalid('Invalid built-in wordbook.')
+const builtinWordbookTag: Validator<BuiltinWordbookTag> = (value) => typeof value === 'string'
+  && builtinWordbookTags.some(({ id }) => id === value) ? value as BuiltinWordbookTag : invalid('Invalid wordbook category.')
 
 function deckInput(value: unknown): DeckInput {
   const row = object(value)
@@ -94,7 +101,7 @@ function endpoint<T extends unknown[], R>(method: 'GET' | 'POST', validators: Va
     types: null as unknown as { args: T; result: R },
   }
 }
-function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewScheduler, clock: () => number) {
+function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewScheduler, clock: () => number, dictionary?: Ecdict) {
   const library = createLibraryService(store, schedulerConfigSnapshot(engine))
   const learn = createLearnService(store)
   const review = createReviewService(store, engine)
@@ -102,6 +109,21 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
   const post = <T extends unknown[], R>(args: Validators<T>, run: (...args: T) => R, optionalTail = false) => endpoint('POST', args, run, true, optionalTail)
   return {
     'library/decks': get([offset, limit], library.listDecks),
+    'library/builtin-books': get([], () => library.builtinBooks(dictionary?.wordbooks()
+      ?? { installed: false, books: builtinWordbooks.map(({ id, name }) => ({ id, name, count: 0, available: false })) })),
+    'library/builtin-book': get([builtinWordbookId, list(builtinWordbookTag, builtinWordbookTags.length)], (id, selectedTags) => {
+      const catalog = dictionary?.wordbooks()
+        ?? { installed: false, books: builtinWordbooks.map(({ id, name }) => ({ id, name, count: 0, available: false })) }
+      const book = library.builtinBooks(catalog).books.find((candidate) => candidate.id === id)
+      const detail = dictionary?.wordbookDetail(id, selectedTags) ?? {
+        installed: false,
+        count: 0,
+        categories: builtinWordbookTags.map(({ id, name }) => ({ id, name, count: 0, selected: selectedTags.includes(id) })),
+      }
+      return { ...book, ...detail }
+    }),
+    'library/create-builtin-book': post([builtinWordbookId, list(builtinWordbookTag, builtinWordbookTags.length)], (id, selectedTags) =>
+      library.createBuiltinBook(id, dictionary?.wordbookEntries(id, selectedTags), clock(), selectedTags)),
     'library/lists': get([id], library.getLists),
     'library/list': get([id, id], library.getList),
     'library/words': get([id, offset, limit, choice('all', 'learned', 'unlearned', 'today', 'week'),
@@ -194,14 +216,22 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
     'progress/overview': get([], () => review.overview(undefined, clock())),
     'progress/activity': get([], () => studyActivity(store, clock())),
     'settings/owner': get([], store.settings),
-    'settings/daily': post([num(1, 100)], (daily) => store.saveSettings(daily, store.settings().timezone)),
-    'settings/timezone': post([validateTimezone], (zone) => store.saveSettings(store.settings().dailyNewWords, zone)),
+    'settings/daily': post([num(1, 100)], (daily) => {
+      const { timezone, studyWeekdays, reviewResetMinutes } = store.settings()
+      store.saveSettings(daily, timezone, studyWeekdays, reviewResetMinutes)
+    }),
+    'settings/timezone': post([validateTimezone], (zone) => {
+      const { dailyNewWords, studyWeekdays, reviewResetMinutes } = store.settings()
+      store.saveSettings(dailyNewWords, zone, studyWeekdays, reviewResetMinutes)
+    }),
+    'settings/plan': post([num(1, 100), num(1, allStudyDays), num(0, minutesPerDay - 1)],
+      (daily, weekdays, reset) => store.saveSettings(daily, store.settings().timezone, weekdays, reset)),
   }
 }
 
 export type StudyEndpoints = { [K in keyof ReturnType<typeof endpoints>]: ReturnType<typeof endpoints>[K]['types'] }
 
-export function studyRoutes(db: Database.Database, auth: ReturnType<typeof createAuthApi>, clock = Date.now) {
+export function studyRoutes(db: Database.Database, auth: ReturnType<typeof createAuthApi>, clock = Date.now, dictionary?: Ecdict) {
   const app = new Hono<AuthEnv>()
   let scheduler: Promise<ReviewScheduler> | undefined
   for (const area of ['library', 'learn', 'review', 'progress', 'settings', 'backup']) {
@@ -213,7 +243,7 @@ export function studyRoutes(db: Database.Database, auth: ReturnType<typeof creat
         scheduler ??= createReviewScheduler().catch((error) => { scheduler = undefined; throw error })
         const engine = await scheduler
         const store = createStudyStore(db, c.get('ownerId'))
-        const actions = endpoints(store, engine, clock)
+        const actions = endpoints(store, engine, clock, dictionary)
         const key = `${area}/${c.req.param('action')}`
         if (!Object.hasOwn(actions, key)) return c.notFound()
         const action = actions[key as keyof typeof actions]

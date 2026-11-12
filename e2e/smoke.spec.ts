@@ -17,6 +17,11 @@ test('starts at Library and supports every route and deep-link reload', async ({
     await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible()
     await page.reload()
     await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible()
+    if (title === 'Settings') {
+      await navigation.getByRole('link', { name: 'Close' }).click()
+      await expect(page).toHaveURL(/\/progress$/)
+      continue
+    }
     await navigation.locator('summary').click()
     await expect(link).toHaveAttribute('aria-current', 'page')
     await navigation.locator('summary').click()
@@ -43,6 +48,7 @@ test('serves API and static assets from the production origin', async ({ request
 test('persists the selected appearance in the browser after a reload', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' })
   await page.goto('/settings')
+  await page.getByRole('link', { name: 'Study preferences', exact: true }).click()
   const shell = page.locator('.app-shell')
   await expect(shell).toHaveAttribute('data-theme', 'light')
   await page.getByText('Dark', { exact: true }).click()
@@ -79,6 +85,11 @@ for (const [name, width, height] of [
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
     await navigateFromMenu(page, 'Settings')
     await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+    await page.getByRole('link', { name: /^Learning plan/ }).click()
+    await expect(page.getByRole('group', { name: 'Weekly plan' })).toBeVisible()
+    await page.getByRole('button', { name: /^Review reset time/ }).click()
+    await expect(page.getByLabel('Review reset time', { exact: true })).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
   })
 }

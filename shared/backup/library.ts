@@ -2,6 +2,7 @@ import { libraryFormatVersion, type LibraryExport } from '../contracts/library.t
 import { fields, integer, isUuid, object, time, validateCardState, validateEntity, validateEvent, validateTimezone } from '../contracts/validation.ts'
 import { stableJson } from '../contracts/json.ts'
 import type { LearnProgress } from '../domain/learning.ts'
+import { allStudyDays, minutesPerDay } from '../domain/study-plan.ts'
 import { listSizes, type DeckList, type DeckListMember, type Entry } from '../domain/library.ts'
 import { REVIEW_DIRECTION, reviewCardId, type ReviewCard, type ReviewCardState, type ReviewEvent } from '../domain/review.ts'
 import { createReviewScheduler, rebuildCardFromEvents, schedulerConfigSnapshot } from '../srs/scheduler.ts'
@@ -55,8 +56,10 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
   requireValid(meta.scope === 'library' || meta.scope === 'deck', 'Unsupported backup metadata.')
   requireValid(typeof root.exportedAt === 'string' && time(Date.parse(root.exportedAt)), 'Invalid export time.')
   const settings = object(root.settings)
-  fields(settings, 'dailyNewWords timezone')
+  fields(settings, 'dailyNewWords timezone studyWeekdays reviewResetMinutes')
   requireValid(integer(settings.dailyNewWords, 1, 100), 'Invalid daily new words limit.')
+  requireValid(settings.studyWeekdays === undefined || integer(settings.studyWeekdays, 1, allStudyDays), 'Invalid weekly study plan.')
+  requireValid(settings.reviewResetMinutes === undefined || integer(settings.reviewResetMinutes, 0, minutesPerDay - 1), 'Invalid review reset time.')
   validateTimezone(settings.timezone)
   const config = schedulerConfigSnapshot(await createReviewScheduler())
   requireValid(stableJson(root.schedulerConfig) === stableJson(config), 'Unsupported scheduler configuration.')

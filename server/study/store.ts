@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import type { Deck, Entry } from '../../shared/domain/library.ts'
 import type { LearnSession, PracticeEvent, LearnProgress } from '../../shared/domain/learning.ts'
 import type { ReviewSession, ReviewCard, ReviewEvent } from '../../shared/domain/review.ts'
+import { allStudyDays } from '../../shared/domain/study-plan.ts'
 
 export class StudyError extends Error {
   readonly status: 400 | 404 | 409
@@ -52,13 +53,17 @@ export function createStudyStore(db: Database.Database, ownerId: string) {
       }).immediate()
     },
     settings() {
-      return db.prepare('SELECT daily_new_words AS dailyNewWords, timezone FROM owner_settings WHERE owner_id=?')
-        .get(ownerId) as { dailyNewWords: number; timezone: string } | undefined ?? { dailyNewWords: 10, timezone: 'UTC' }
+      const row = db.prepare(`SELECT daily_new_words AS dailyNewWords, timezone,
+        study_weekdays AS studyWeekdays, review_reset_minutes AS reviewResetMinutes
+        FROM owner_settings WHERE owner_id=?`).get(ownerId) as
+          { dailyNewWords: number; timezone: string; studyWeekdays: number; reviewResetMinutes: number } | undefined
+      return row ?? { dailyNewWords: 10, timezone: 'UTC', studyWeekdays: allStudyDays, reviewResetMinutes: 0 }
     },
-    saveSettings(dailyNewWords: number, timezone: string) {
-      db.prepare(`INSERT INTO owner_settings VALUES (?, ?, ?)
-        ON CONFLICT(owner_id) DO UPDATE SET daily_new_words=excluded.daily_new_words, timezone=excluded.timezone`)
-        .run(ownerId, dailyNewWords, timezone)
+    saveSettings(dailyNewWords: number, timezone: string, studyWeekdays = allStudyDays, reviewResetMinutes = 0) {
+      db.prepare(`INSERT INTO owner_settings (owner_id, daily_new_words, timezone, study_weekdays, review_reset_minutes)
+        VALUES (?, ?, ?, ?, ?) ON CONFLICT(owner_id) DO UPDATE SET daily_new_words=excluded.daily_new_words,
+        timezone=excluded.timezone, study_weekdays=excluded.study_weekdays, review_reset_minutes=excluded.review_reset_minutes`)
+        .run(ownerId, dailyNewWords, timezone, studyWeekdays, reviewResetMinutes)
     },
     decks: () => all<Deck>('SELECT body FROM decks'),
     deck: (id: string) => one<Deck>('SELECT body FROM decks WHERE id=?', id),

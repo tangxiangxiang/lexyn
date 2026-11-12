@@ -18,6 +18,7 @@ test('sets up the Owner in the browser, signs in automatically and later require
   await expect(page.getByRole('heading', { name: 'Your library is empty' })).toBeVisible()
 
   await navigateFromMenu(page, 'Settings')
+  await page.getByRole('link', { name: /Owner account/ }).click()
   await page.getByRole('button', { name: 'Sign out' }).click()
   await expect(page.getByRole('heading', { name: 'Sign in to Lexyn' })).toBeVisible()
   await expect(page.getByLabel('Setup token')).toHaveCount(0)
@@ -28,7 +29,7 @@ test('sets up the Owner in the browser, signs in automatically and later require
   await expect(page.getByRole('alert')).toHaveText('Invalid username or password.')
   await page.getByLabel('Username', { exact: true }).fill('lexyn.admin')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Owner account', exact: true })).toBeVisible()
 })
 
 test('requires a chosen username for the old default account and keeps its library', async ({ page, backend }) => {
@@ -42,7 +43,10 @@ test('requires a chosen username for the old default account and keeps its libra
   const deck = { id: randomUUID(), name: 'Existing vocabulary', createdAt: Date.now(), updatedAt: Date.now(), revision: 1 }
   backend.db.prepare('INSERT INTO decks (id, body, revision) VALUES (?, ?, 1)').run(deck.id, JSON.stringify(deck))
   backend.db.exec(`DROP TABLE deck_list_members; DROP TABLE deck_lists; DROP INDEX entries_id_deck; DROP TABLE vocabulary_jobs; DROP TABLE speech_credentials;
-    DROP TABLE speech_settings; DROP TABLE speech_assets; PRAGMA user_version = 4;`)
+    DROP TABLE speech_settings; DROP TABLE speech_assets;
+    ALTER TABLE owner_settings DROP COLUMN study_weekdays;
+    ALTER TABLE owner_settings DROP COLUMN review_reset_minutes;
+    PRAGMA user_version = 4;`)
   migrate(backend.db)
   expect(auth.session(previous.token)).toBeUndefined()
   expect((await auth.login('owner', password)).status).toBe('denied')

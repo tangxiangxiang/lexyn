@@ -27,7 +27,7 @@ export function createApp(db: Database.Database, webRoot?: string, publicOrigin 
   app.route('/api/dictionary', dictionaryRoutes(dictionary, auth))
   app.route('/api/vocabulary', vocabularyRoutes(db, auth, speechOptions?.dataDir, vocabularyFetch, dictionary))
   app.route('/api', healthRoutes(db))
-  app.route('/api', studyRoutes(db, auth, clock))
+  app.route('/api', studyRoutes(db, auth, clock, dictionary))
   app.all('/api/*', (c) => {
     c.header('Cache-Control', 'no-store')
     return c.notFound()

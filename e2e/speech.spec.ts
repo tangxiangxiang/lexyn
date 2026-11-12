@@ -14,7 +14,7 @@ async function saveKey(page: Page) {
 
 test('previews server audio and shares saved voice and speed across devices', async ({ page, backend, browser }) => {
   await trackPlayback(page)
-  await page.goto('/settings')
+  await page.goto('/settings?section=speech')
   await saveKey(page)
   await page.locator('#speech-voice').click()
   await page.getByText('Patient Man', { exact: true }).click()
@@ -31,7 +31,7 @@ test('previews server audio and shares saved voice and speed across devices', as
   try {
     const second = await device.newPage()
     await trackPlayback(second)
-    await second.goto(backend.origin + '/settings')
+    await second.goto(backend.origin + '/settings?section=speech')
     await signIn(second)
     await expect(second.locator('#speech-voice')).toContainText('Patient Man')
     await expect(second.locator('#speech-rate')).toContainText('1.2×')
@@ -40,6 +40,8 @@ test('previews server audio and shares saved voice and speed across devices', as
     await expect(second.getByRole('button', { name: 'Pause pronunciation' })).toBeVisible()
     expect(await second.evaluate(() => window.lexynAudio.plays[0].rate)).toBe(1.2)
     expect(backend.speech.requests.map((request) => request.voice_setting.voice_id)).toEqual(['English_PatientMan'])
+    await second.getByRole('link', { name: 'Close', exact: true }).click()
+    await second.getByRole('link', { name: /Owner account/ }).click()
     await second.getByRole('button', { name: 'Sign out' }).click()
     await expect(second.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible()
     expect(await second.evaluate(() => window.lexynAudio.revoked)).toHaveLength(1)
@@ -54,7 +56,7 @@ test('decodes a mock MP3 through native browser playback', async ({ page }) => {
       document.documentElement.dataset.playedMp3 = String(this.duration > 0)
     }
   })
-  await page.goto('/settings')
+  await page.goto('/settings?section=speech')
   await saveKey(page)
   await page.getByRole('button', { name: 'Preview voice' }).click()
   await expect(page.locator('html')).toHaveAttribute('data-played-mp3', 'true')

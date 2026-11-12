@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { dictionaryLimits } from '../../shared/domain/dictionary.ts'
+import { builtinWordbooks, builtinWordbookTags, type BuiltinWordbookId, type BuiltinWordbookTag } from '../../shared/domain/builtin-books.ts'
 import { parseDictionaryMeaning } from './parse.ts'
 import type { DictionaryEntry, DictionaryLookup, DictionaryStatus } from '../../shared/contracts/dictionary.ts'
 
@@ -72,7 +73,60 @@ export function createEcdict(dataDir?: string) {
       entries, needsReview: entries.length !== 1,
     }
   }
-  return { status, lookup, close: () => { db?.close(); db = undefined } }
+
+  function wordbooks() {
+    const store = connection()
+    return {
+      installed: !!store,
+      books: builtinWordbooks.map(({ id, name, tag }) => {
+        const count = store && tag
+          ? Number(store.prepare(`SELECT count(DISTINCT lookup_key) FROM dictionary_entries
+            WHERE instr(' ' || lower(tag) || ' ', ?) > 0 AND trim(translation) <> ''`).pluck().get(` ${tag} `))
+          : 0
+        return { id, name, count, available: !!store && !!tag && count > 0 }
+      }),
+    }
+  }
+
+  function wordbookDetail(bookId: BuiltinWordbookId, selectedTags: BuiltinWordbookTag[] = builtinWordbookTags.map(({ id }) => id)) {
+    const book = builtinWordbooks.find(({ id }) => id === bookId)
+    const store = connection()
+    const countForTags = (tags: BuiltinWordbookTag[]) => {
+      if (!store || !book?.tag || !tags.length) return 0
+      const matching = tags.map(() => "instr(' ' || lower(tag) || ' ', ?) > 0").join(' OR ')
+      return Number(store.prepare(`SELECT count(DISTINCT lookup_key) FROM dictionary_entries
+        WHERE instr(' ' || lower(tag) || ' ', ?) > 0 AND trim(translation) <> '' AND (${matching})`)
+        .pluck().get(` ${book.tag} `, ...tags.map((tag) => ` ${tag} `)))
+    }
+    return {
+      installed: !!store,
+      count: countForTags(selectedTags),
+      categories: builtinWordbookTags.map(({ id, name }) => ({ id, name, count: countForTags([id]), selected: selectedTags.includes(id) })),
+    }
+  }
+
+  function wordbookEntries(bookId: BuiltinWordbookId, selectedTags: BuiltinWordbookTag[] = builtinWordbookTags.map(({ id }) => id)): DictionaryEntry[] | undefined {
+    const book = builtinWordbooks.find(({ id }) => id === bookId)
+    if (!book?.tag) return []
+    const store = connection()
+    if (!store) return
+    if (!selectedTags.length) return []
+    const rows = store.prepare(`SELECT word, phonetic, translation, definition, pos, tag, lookup_key AS lookupKey
+      FROM dictionary_entries WHERE instr(' ' || lower(tag) || ' ', ?) > 0 AND trim(translation) <> ''
+      ORDER BY lookup_key, word`).all(` ${book.tag} `) as (DictionaryEntry & { lookupKey: string })[]
+    const seen = new Set<string>()
+    return rows.filter(({ lookupKey, tag }) => {
+      if (!selectedTags.some((selected) => ` ${tag.toLowerCase()} `.includes(` ${selected} `))) return false
+      if (seen.has(lookupKey)) return false
+      seen.add(lookupKey)
+      return true
+    }).map(({ lookupKey: _lookupKey, ...row }) => ({
+      ...row,
+      dictionaryMeaning: parseDictionaryMeaning(row.word, row.translation, sourceRevision),
+    }))
+  }
+
+  return { status, lookup, wordbooks, wordbookDetail, wordbookEntries, close: () => { db?.close(); db = undefined } }
 }
 
 export type Ecdict = ReturnType<typeof createEcdict>

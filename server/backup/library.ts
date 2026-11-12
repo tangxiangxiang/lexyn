@@ -38,7 +38,8 @@ export function restoreLibrary(db: Database.Database, { backup, reviewChanges }:
     for (const value of backup.learnProgress) store.saveProgress(value)
     for (const { event } of reviewChanges) store.addReview(event)
     for (const { card } of reviewChanges) store.saveCard(card)
-    store.saveSettings(backup.settings.dailyNewWords, backup.settings.timezone)
+    const { dailyNewWords, timezone, studyWeekdays, reviewResetMinutes } = backup.settings
+    store.saveSettings(dailyNewWords, timezone, studyWeekdays, reviewResetMinutes)
     const expected = { decks: backup.decks.length, entries: backup.entries.length, practice_events: backup.practiceEvents.length,
       learn_progress: backup.learnProgress.length, review_events: backup.reviewEvents.length, review_cards: backup.reviewCards.length }
     for (const [table, count] of Object.entries(expected)) {

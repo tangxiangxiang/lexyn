@@ -28,9 +28,8 @@ async function createWord(page: Page, name: string) {
 async function copyOne(page: Page) {
   await page.getByRole('link', { name: 'Start learning' }).click()
   await page.getByRole('button', { name: 'Learn 1 new word' }).click()
+  await page.getByRole('link', { name: 'Start spelling' }).click()
   await page.getByRole('textbox', { name: 'Copy the word' }).fill('resilience')
-  await page.getByRole('button', { name: 'Check spelling' }).click()
-  await page.getByRole('button', { name: 'Next word' }).click()
   await expect(page.getByText('Session complete', { exact: true })).toBeVisible()
 }
 

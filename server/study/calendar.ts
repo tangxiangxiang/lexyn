@@ -32,3 +32,38 @@ export function dayBounds(now: number, timezone: string) {
     boundary(now, now + range, (time) => dateKey(time, timezone) <= day),
   ] as const
 }
+
+export function reviewDayBounds(now: number, timezone: string, resetMinutes: number) {
+  const [start, end] = dayBounds(now, timezone)
+  if (!resetMinutes) return [start, end] as const
+
+  const minuteMs = 60_000
+  const localTime = new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' })
+  function cutoff(dayStart: number, dayEnd: number) {
+    const localMidnight = Date.parse(dateKey(dayStart, timezone) + 'T00:00:00Z')
+    const localMinutes = (time: number) => {
+      const [hours, minutes] = localTime.format(time).split(':').map(Number)
+      return hours * 60 + minutes
+    }
+    const lastMinute = dayEnd - minuteMs
+    const offsetAt = (time: number) => localMidnight + localMinutes(time) * minuteMs - time
+    const candidates = [dayStart, lastMinute].map((time) => localMidnight + resetMinutes * minuteMs - offsetAt(time))
+      .filter((time) => time >= dayStart && time < dayEnd && localMinutes(time) === resetMinutes)
+    if (candidates.length) return Math.min(...candidates)
+
+    // If the requested clock time is skipped, use the first valid instant after the jump.
+    let low = dayStart
+    let high = dayEnd
+    while (high - low > 1) {
+      const middle = Math.floor((low + high) / 2)
+      if (localMinutes(middle) < resetMinutes) low = middle
+      else high = middle
+    }
+    return localMinutes(dayStart) >= resetMinutes ? dayStart : high
+  }
+
+  const todayReset = cutoff(start, end)
+  return now < todayReset
+    ? [cutoff(dayBounds(start - 1, timezone)[0], start), todayReset] as const
+    : [todayReset, cutoff(end, dayBounds(end, timezone)[1])] as const
+}
