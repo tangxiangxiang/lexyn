@@ -19,26 +19,43 @@ export async function signIn(page: Page) {
   await page.getByLabel('Username', { exact: true }).fill(username)
   await page.getByLabel('Owner password').fill(password)
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-  await expect(page.getByRole('navigation', { name: 'Main navigation' })).toBeVisible()
+  await expect(page.locator('main#main')).toBeVisible()
+  const session = await page.request.get(new URL('/api/auth/session', page.url()).href, {
+    headers: { 'X-Lexyn-Client': '1' },
+  })
+  expect(session.ok()).toBe(true)
+  expect(await session.json()).toMatchObject({ session: { username, ownerId: expect.any(String) } })
 }
 
 export async function libraryAction(scope: Page | Locator, action: string, menu?: string) {
   const summary = menu === 'Deck options' ? scope.locator('.app-menu > summary')
-    : menu ? scope.locator('summary').filter({ hasText: menu }) : scope.locator('.word-menu summary')
-  if (menu !== 'Deck options' || await scope.locator('.app-menu:not([open])').count()) await summary.click()
+    : menu ? scope.locator('summary').and(scope.getByLabel(menu, { exact: true })) : scope.locator('.word-menu summary')
+  if (!(await summary.evaluate((element) => (element.parentElement as HTMLDetailsElement).open))) await summary.click()
   await scope.getByRole('button', { name: action, exact: true }).click()
 }
 
+export function wordbookLink(page: Page, name: string) {
+  return page.getByRole('link').filter({ has: page.getByRole('heading', { name, exact: true }) })
+}
+
+export async function openStudyLists(page: Page, name: string, touch = false) {
+  const activate = (control: Locator) => touch ? control.tap() : control.click()
+  await activate(wordbookLink(page, name))
+  await activate(page.locator('summary').and(page.getByLabel('Word list options')))
+  await activate(page.getByRole('link', { name: 'Study lists', exact: true }))
+}
+
 export async function navigateFromMenu(page: Page, name: string, touch = false) {
-  const navigation = page.getByRole('navigation')
-  const menu = navigation.locator('.app-menu:not([open]) > summary')
-  if (touch) {
-    if (await menu.count()) await menu.tap()
-    await navigation.getByRole('link', { name, exact: true }).tap()
-  } else {
-    if (await menu.count()) await menu.click()
-    await navigation.getByRole('link', { name, exact: true }).click()
+  const activate = (control: Locator) => touch ? control.tap() : control.click()
+  const main = page.getByRole('main')
+  const homeLink = main.locator('.spell-home-tools').getByRole('link', { name, exact: true })
+  if (await homeLink.isVisible()) {
+    await activate(homeLink)
+    return
   }
+  const navigation = page.getByRole('navigation')
+  await activate(navigation.locator('summary'))
+  await activate(navigation.getByRole('link', { name, exact: true }))
 }
 
 /** Fill the current structured meaning editor without relying on the legacy short-meaning field. */

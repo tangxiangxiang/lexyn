@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { expect, navigateFromMenu, test } from './fixtures'
+import { expect, test } from './fixtures'
 
 test.use({ initialOwner: false, viewport: { width: 320, height: 740 } })
 
@@ -17,7 +17,7 @@ test('sets up the Owner in the browser, signs in automatically and later require
   await page.getByRole('button', { name: 'Create Owner' }).click()
   await expect(page.getByRole('heading', { name: 'Your library is empty' })).toBeVisible()
 
-  await navigateFromMenu(page, 'Settings')
+  await page.goto('/settings')
   await page.getByRole('link', { name: /Owner account/ }).click()
   await page.getByRole('button', { name: 'Sign out' }).click()
   await expect(page.getByRole('heading', { name: 'Sign in to Lexyn' })).toBeVisible()
@@ -28,6 +28,10 @@ test('sets up the Owner in the browser, signs in automatically and later require
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await expect(page.getByRole('alert')).toHaveText('Invalid username or password.')
   await page.getByLabel('Username', { exact: true }).fill('lexyn.admin')
+  await page.getByLabel('Owner password').fill('incorrect-password')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await expect(page.getByRole('alert')).toHaveText('Invalid username or password.')
+  await page.getByLabel('Owner password').fill(password)
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Owner account', exact: true })).toBeVisible()
 })

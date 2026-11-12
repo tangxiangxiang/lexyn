@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { serve } from '@hono/node-server'
 import type { Page } from '@playwright/test'
-import { navigateFromMenu, expect, libraryAction, fillMeaning, password, signIn, studyRequest, test, username } from './fixtures'
+import { openStudyLists, expect, libraryAction, fillMeaning, password, signIn, studyRequest, test, username, wordbookLink } from './fixtures'
 import { createApp } from '../server/app'
 import { initializeOwner } from '../server/auth/owner'
 import { openDatabase } from '../server/db/database'
@@ -13,10 +13,10 @@ async function controlled(page: Page) {
 }
 
 async function createWord(page: Page, name: string) {
-  await page.getByRole('button', { name: 'New deck' }).click()
+  await page.getByRole('button', { name: 'Create a wordbook' }).click()
   await page.getByLabel('Deck name').fill(name)
   await page.getByRole('button', { name: 'Save', exact: true }).click()
-  await page.getByRole('link', { name, exact: true }).click()
+  await openStudyLists(page, name)
   await libraryAction(page, 'Add word', 'Deck options')
   await page.getByLabel('Term', { exact: true }).fill('resilience')
   await fillMeaning(page, '韧性', 'n.')
@@ -105,7 +105,7 @@ test('cold launches the static shell offline without private data or study write
   await expect(offline.locator('.service-status')).toHaveText('Connection unavailable')
   await expect(offline.getByRole('button', { name: 'Retry connection' })).toBeVisible()
   await expect(offline.getByText('Private PWA deck')).toHaveCount(0)
-  await expect(offline.getByRole('button', { name: 'New deck' })).toHaveCount(0)
+  await expect(offline.getByRole('button', { name: 'Create a wordbook' })).toHaveCount(0)
   expect(await offline.evaluate(() => indexedDB.databases())).toEqual([])
   await context.setOffline(false)
   await expect(offline.getByRole('link', { name: 'Private PWA deck' })).toBeVisible()
@@ -135,7 +135,7 @@ test('stages a new shell while open, retains the old shell on install failure an
     await signIn(page)
     await createWord(page, 'PWA update data')
     await copyOne(page)
-    await navigateFromMenu(page, 'Review')
+    await page.goto('/review')
     await rateGood(page)
     expect(await counts(page)).toEqual([1, 1])
     const path = join(web, 'sw.js')
@@ -165,7 +165,7 @@ test('stages a new shell while open, retains the old shell on install failure an
     await reopened.goto('/library')
     await controlled(reopened)
     await expect.poll(() => reopened.evaluate(() => caches.keys())).toEqual(['lexyn-shell-next-test-version'])
-    await expect(reopened.getByRole('link', { name: 'PWA update data', exact: true })).toBeVisible()
+    await expect(wordbookLink(reopened, 'PWA update data')).toBeVisible()
     expect(await counts(reopened)).toEqual([1, 1])
   } finally {
     await context.close()

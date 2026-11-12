@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test'
-import { navigateFromMenu, expect, libraryAction, fillMeaning, test, writeStudy } from './fixtures'
+import { navigateFromMenu, openStudyLists, expect, libraryAction, fillMeaning, test, writeStudy } from './fixtures'
 import type { LearnSession, PracticeEvent } from '../shared/domain/learning'
 import type Database from 'better-sqlite3'
 
@@ -16,10 +16,10 @@ function records<Table extends keyof PracticeRecords>(db: Database.Database, tab
 
 async function makeDeckWithWords(page: Page, spellingHints = false) {
   await page.goto('/library')
-  await page.getByRole('button', { name: 'New deck' }).click()
+  await page.getByRole('button', { name: 'Create a wordbook' }).click()
   await page.getByLabel('Deck name').fill('Learn Systems')
   await page.getByRole('button', { name: 'Save', exact: true }).click()
-  await page.getByRole('link', { name: 'Learn Systems' }).click()
+  await openStudyLists(page, 'Learn Systems')
   for (const [term, meaning] of [['concurrency', '并发'], ['deadlock', '死锁']]) {
     await libraryAction(page, 'Add word', 'Deck options')
     await page.getByLabel('Term', { exact: true }).fill(term)
@@ -42,7 +42,7 @@ test('learns a new word, retries a misspelling, resumes after reload and persist
   const readUrl = page.url()
   await page.getByLabel('Session options').click()
   await page.getByRole('link', { name: 'Settings', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+  await expect(page.getByRole('link', { name: /^My books/ })).toBeVisible()
   await page.getByRole('link', { name: 'Close', exact: true }).click()
   await expect(page).toHaveURL(readUrl)
   await page.getByRole('link', { name: 'Start spelling' }).click()
@@ -54,7 +54,7 @@ test('learns a new word, retries a misspelling, resumes after reload and persist
   await page.reload()
   await expect(page.getByRole('heading', { name: 'Reading settings' })).toBeVisible()
   await page.getByRole('link', { name: 'Close', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+  await expect(page.getByRole('link', { name: /^My books/ })).toBeVisible()
   await page.getByRole('link', { name: 'Close', exact: true }).click()
   await expect(page).toHaveURL(spellUrl)
   const answer = page.getByRole('textbox', { name: 'Copy the word' })
@@ -276,9 +276,10 @@ test('retries speech and releases audio on word and route changes', async ({ pag
   expect(backend.speech.requests.map(({ text }) => text)).toEqual(['concurrency', 'concurrency', 'deadlock'])
   await page.getByLabel('Session options').click()
   await page.getByRole('link', { name: 'Library', exact: true }).click()
-  await navigateFromMenu(page, 'Review')
+  await expect(page.getByRole('heading', { name: /^My books/ })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => window.lexynAudio.revoked.length)).toBe(2)
+  await page.goto('/review')
   await expect(page.getByRole('heading', { name: 'Review', exact: true })).toBeVisible()
-  expect(await page.evaluate(() => window.lexynAudio.revoked)).toHaveLength(2)
   expect(records(backend.db, 'practice_events')).toMatchObject([{ mode: 'dictation', outcome: 'completed', attempts: 1 }])
 })
 

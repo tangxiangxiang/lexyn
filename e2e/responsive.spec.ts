@@ -1,5 +1,5 @@
 import type { Locator, Page } from '@playwright/test'
-import { navigateFromMenu, expect, fillMeaning, test, writeStudy } from './fixtures'
+import { openStudyLists, navigateFromMenu, expect, fillMeaning, test, writeStudy } from './fixtures'
 
 async function fits(page: Page, width: number) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
@@ -12,13 +12,13 @@ for (const [width, height, touch] of [[320, 740, true], [375, 812, true], [768, 
       const activate = (control: Locator) => touch ? control.tap() : control.click()
       const nav = (name: string) => navigateFromMenu(page, name, touch)
       await page.goto('/library')
-      await expect(page.getByRole('heading', { level: 1, name: 'Library' })).toBeVisible()
+      await expect(page.getByRole('heading', { level: 1, name: /^My books/ })).toBeVisible()
       await fits(page, width)
-      await activate(page.getByRole('button', { name: 'New deck' }))
+      await activate(page.getByRole('button', { name: 'Create a wordbook' }))
       await page.getByLabel('Deck name').fill('Responsive fixture')
       await page.getByLabel('Words per list').fill('1')
       await activate(page.getByRole('button', { name: 'Save', exact: true }))
-      await activate(page.getByRole('link', { name: 'Responsive fixture', exact: true }))
+      await openStudyLists(page, 'Responsive fixture', touch)
       await expect(page.getByRole('heading', { level: 1, name: 'Responsive fixture' })).toBeVisible()
       await fits(page, width)
       await activate(page.locator('.app-menu > summary'))
@@ -85,6 +85,18 @@ for (const [width, height, touch] of [[320, 740, true], [375, 812, true], [768, 
       await expect(backup.getByRole('button', { name: 'Download JSON backup' })).toBeEnabled()
       await backup.getByLabel('Preview a JSON backup').setInputFiles({ name: 'broken.json', mimeType: 'application/json', buffer: Buffer.from('{') })
       await expect(backup.getByRole('alert')).toContainText('not valid JSON')
+      await fits(page, width)
+
+      await page.goto('/study')
+      const learning = page.getByRole('button', { name: 'Words to learn 1', exact: true })
+      if (touch) {
+        const arc = await learning.boundingBox()
+        expect(arc).not.toBeNull()
+        await learning.tap({ position: { x: arc!.width * 0.8, y: arc!.height / 2 } })
+      }
+      else await learning.press('Enter')
+      await expect(learning).toHaveAttribute('aria-pressed', 'true')
+      await expect(page.getByRole('button', { name: 'Start', exact: true })).toBeEnabled()
       await fits(page, width)
     })
   })

@@ -2,7 +2,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Page } from '@playwright/test'
 import type Database from 'better-sqlite3'
-import { expect, libraryAction, fillMeaning, test, writeStudy } from './fixtures'
+import { openStudyLists, expect, libraryAction, fillMeaning, test, writeStudy } from './fixtures'
 import type { Entry } from '../shared/domain/library'
 import type { ImportCandidate } from '../shared/domain/library-import'
 import { createEcdict } from '../server/dictionary/ecdict'
@@ -10,10 +10,10 @@ import { importEcdictCsv } from '../server/dictionary/import'
 
 async function createDeck(page: Page, name = 'Vocabulary Systems') {
   await page.goto('/library')
-  await page.getByRole('button', { name: 'New deck' }).click()
+  await page.getByRole('button', { name: 'Create a wordbook' }).click()
   await page.getByLabel('Deck name').fill(name)
   await page.getByRole('button', { name: 'Save', exact: true }).click()
-  await page.getByRole('link', { name, exact: true }).click()
+  await openStudyLists(page, name)
   return new URL(page.url()).pathname.split('/').at(-1)!
 }
 

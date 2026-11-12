@@ -1,6 +1,6 @@
-import { navigateFromMenu, expect, test } from './fixtures'
+import { navigateFromMenu, expect, test, wordbookLink } from './fixtures'
 
-test('starts at Library and supports every route and deep-link reload', async ({ page }) => {
+test('navigates from the current book and supports direct routes and reloads', async ({ page }) => {
   const errors: Error[] = []
   page.on('pageerror', (error) => errors.push(error))
   await page.goto('/')
@@ -8,23 +8,44 @@ test('starts at Library and supports every route and deep-link reload', async ({
   await expect(page.getByRole('heading', { name: 'Your library is empty' })).toBeVisible()
   await expect(page.locator('.service-status')).toHaveCount(0)
 
-  const navigation = page.getByRole('navigation', { name: 'Main navigation' })
-  for (const title of ['Learn', 'Review', 'Progress', 'Settings', 'Library']) {
-    const link = navigation.getByRole('link', { name: title })
-    await expect(link).toBeHidden()
+  await page.getByRole('button', { name: 'Create a wordbook' }).click()
+  await page.getByLabel('Deck name').fill('Navigation fixture')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await wordbookLink(page, 'Navigation fixture').click()
+  await page.getByRole('link', { name: 'Lexyn home' }).click()
+  await expect(page.getByRole('heading', { name: 'Current book' })).toBeVisible()
+
+  await navigateFromMenu(page, 'Settings')
+  await expect(page).toHaveURL(/\/settings(?:\?|$)/)
+  await page.reload()
+  await expect(page.getByRole('link', { name: /^My books/ })).toBeVisible()
+  await page.getByRole('link', { name: 'Close' }).click()
+  await expect(page).toHaveURL(/\/study$/)
+  await navigateFromMenu(page, 'Study activity')
+  await expect(page).toHaveURL(/\/activity$/)
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Study activity' })).toBeVisible()
+  await page.goto('/study')
+  await navigateFromMenu(page, 'Open word list')
+  await expect(page.getByRole('heading', { name: 'My words (0)' })).toBeVisible()
+
+  await page.goto('/learn')
+  const menu = page.getByRole('navigation', { name: 'Main navigation' })
+  const reviewLink = menu.getByRole('link', { name: 'Review', exact: true })
+  await expect(reviewLink).toBeHidden()
+  for (const title of ['Review', 'Progress', 'Learn', 'Library']) {
     await navigateFromMenu(page, title)
     await expect(page).toHaveURL(new RegExp(`/${title.toLowerCase()}$`))
-    await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible()
+    const heading = page.getByRole('heading', { level: 1, name: title === 'Library' ? /^My books/ : title })
+    await expect(heading).toBeVisible()
     await page.reload()
-    await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible()
-    if (title === 'Settings') {
-      await navigation.getByRole('link', { name: 'Close' }).click()
-      await expect(page).toHaveURL(/\/progress$/)
-      continue
+    await expect(heading).toBeVisible()
+    if (title !== 'Library') {
+      await menu.locator('summary').click()
+      await expect(menu.getByRole('link', { name: title, exact: true })).toHaveAttribute('aria-current', 'page')
+      await menu.locator('summary').press('Escape')
+      await expect(menu.getByRole('link', { name: title, exact: true })).toBeHidden()
     }
-    await navigation.locator('summary').click()
-    await expect(link).toHaveAttribute('aria-current', 'page')
-    await navigation.locator('summary').click()
   }
   expect(errors).toEqual([])
 })
@@ -67,6 +88,7 @@ test('shows a recoverable page error and keeps navigation available when the API
   await page.route(decks, (route) => route.abort())
   await page.reload()
   await expect(page.getByText('Cannot connect to Lexyn.', { exact: false })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Back to study' })).toBeVisible()
   await page.unroute(decks)
   await page.getByRole('button', { name: 'Retry connection' }).click()
   await expect(page.getByRole('heading', { name: 'Your library is empty' })).toBeVisible()
@@ -81,10 +103,10 @@ for (const [name, width, height] of [
   test(`${name} layout fits the viewport`, async ({ page }) => {
     await page.setViewportSize({ width, height })
     await page.goto('/library')
-    await expect(page.getByRole('heading', { level: 1, name: 'Library' })).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1, name: /^My books/ })).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
-    await navigateFromMenu(page, 'Settings')
-    await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible()
+    await page.goto('/settings')
+    await expect(page.getByRole('link', { name: /^My books/ })).toBeVisible()
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
     await page.getByRole('link', { name: /^Learning plan/ }).click()
     await expect(page.getByRole('group', { name: 'Weekly plan' })).toBeVisible()

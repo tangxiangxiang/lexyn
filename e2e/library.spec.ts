@@ -1,15 +1,16 @@
 import { readFile } from 'node:fs/promises'
 import type { Page } from '@playwright/test'
 import type Database from 'better-sqlite3'
-import { navigateFromMenu, expect, libraryAction, fillMeaning, signIn, test, writeStudy } from './fixtures'
+import { openStudyLists, expect, libraryAction, fillMeaning, signIn, test, wordbookLink, writeStudy } from './fixtures'
 import type { LibraryExport } from '../shared/contracts/library'
 import type { Entry } from '../shared/domain/library'
+import { trackPlayback } from './mock-speech'
 
 async function createDeck(page: Page, name: string) {
-  await page.getByRole('button', { name: 'New deck' }).click()
+  await page.getByRole('button', { name: 'Create a wordbook' }).click()
   await page.getByLabel('Deck name').fill(name)
   await page.getByRole('button', { name: 'Save', exact: true }).click()
-  await expect(page.getByRole('link', { name, exact: true })).toBeVisible()
+  await expect(wordbookLink(page, name)).toBeVisible()
 }
 
 async function addWord(page: Page, term: string, meaning = '') {
@@ -47,11 +48,11 @@ test('filters the word list and advances the listening queue without recording p
   await page.goto('/library')
   await createDeck(page, 'Listening words')
   const href = await page.getByRole('link', { name: 'Listening words' }).getAttribute('href')
-  const deckId = href!.split('/').at(-1)!
+  const deckId = href!.split('/').at(-2)!
   for (const [term, meaning] of [['zebra', '斑马'], ['quorum', '法定人数']]) {
     expect((await writeStudy(page, 'library/create-entry', [deckId, { term, meaning }])).ok()).toBe(true)
   }
-  await page.goto(href + '/words')
+  await page.goto(href!)
   await page.locator('.spell-word-options summary').click()
   await page.getByRole('button', { name: /^Learned/ }).click()
   await expect(page.getByText('No words match this filter.')).toBeVisible()
@@ -106,12 +107,15 @@ test('filters the word list and advances the listening queue without recording p
   expect(backend.db.prepare('SELECT count(*) FROM review_events').pluck().get()).toBe(0)
 })
 
-test('shows the current book dashboard, restores its last list and falls back after archive', async ({ page, backend }) => {
+test('studies from the current book, restores its last list and preserves progress when switching books', async ({ page, backend }) => {
+  await trackPlayback(page)
   await page.goto('/')
   await createDeck(page, 'Current vocabulary')
   await createDeck(page, 'Other vocabulary')
   const book = page.getByRole('article').filter({ hasText: 'Current vocabulary' })
-  await book.getByRole('button', { name: 'Set as current book' }).click()
+  await libraryAction(book, 'Set as current book', 'Book options')
+  await page.goto('/library')
+  await openStudyLists(page, 'Current vocabulary')
   await libraryAction(page, 'Import words', 'Deck options')
   await page.getByLabel('Words per list').fill('1')
   await page.getByLabel('Vocabulary file').setInputFiles({
@@ -128,6 +132,16 @@ test('shows the current book dashboard, restores its last list and falls back af
   await expect(page.locator('.spell-ring')).toHaveCount(1)
   await page.getByRole('button', { name: 'Words to learn 2' }).press('Enter')
   await expect(page.getByRole('button', { name: 'Words to learn 2' })).toHaveAttribute('aria-pressed', 'true')
+  const review = page.getByRole('button', { name: 'Words to review 0', exact: true })
+  await review.press('Space')
+  await expect(review).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.spell-ring-label')).toContainText('Words to review')
+  await page.getByRole('button', { name: 'Start', exact: true }).click()
+  await expect(page.getByRole('alert')).toHaveText('No study items are ready right now.')
+  await expect(page).toHaveURL(/\/study$/)
+  await page.locator('.spell-ring-label').click()
+  await expect(page.locator('.spell-ring-label')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.spell-ring-label')).toContainText('Words to study')
   await page.getByRole('link', { name: 'Settings' }).click()
   await expect(page.getByRole('progressbar', { name: 'Progress' })).toHaveAttribute('max', '2')
   await expect(page.getByRole('link', { name: /^My books/ })).toHaveText(/My books\s*2/)
@@ -141,7 +155,7 @@ test('shows the current book dashboard, restores its last list and falls back af
   await expect(page.getByRole('heading', { name: 'Reading settings' })).toBeVisible()
   await expectNoOverflow(page)
   await page.getByRole('link', { name: 'Close' }).click()
-  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+  await expect(page.getByRole('link', { name: /^My books/ })).toBeVisible()
   await page.getByRole('link', { name: 'Import words' }).click()
   await expect(page.getByLabel('Vocabulary file')).toBeVisible()
   await page.goto('/')
@@ -157,6 +171,7 @@ test('shows the current book dashboard, restores its last list and falls back af
   await expect(page.getByText('法定人数')).toBeVisible()
   await expect(page.getByText('No learning or review history yet.')).toBeVisible()
   await page.getByRole('link', { name: 'Open word list' }).click()
+  await page.getByLabel('Word list options').click()
   await page.getByRole('link', { name: 'Study lists' }).click()
   await expect(page.getByRole('heading', { name: 'quorum' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'zebra' })).toHaveCount(0)
@@ -179,6 +194,11 @@ test('shows the current book dashboard, restores its last list and falls back af
   await expect(page).toHaveURL(/\/learn\/read\?/)
   const reading = page.locator('.spell-reading')
   const term = await reading.locator('.learn-term').innerText()
+  await expect(reading.getByText(term === 'zebra' ? '斑马' : '法定人数', { exact: true })).toBeVisible()
+  await reading.getByRole('button', { name: 'Play pronunciation' }).click()
+  await expect(reading.getByRole('button', { name: 'Pause pronunciation' })).toBeVisible()
+  expect(backend.speech.requests.map(({ text }) => text)).toEqual([term])
+  expect(backend.db.prepare('SELECT count(*) FROM practice_events').pluck().get()).toBe(0)
   await expect(reading.getByRole('textbox')).toHaveCount(0)
   const sessionId = new URL(page.url()).searchParams.get('session')
   await reading.getByRole('link', { name: 'Start spelling' }).click()
@@ -203,10 +223,18 @@ test('shows the current book dashboard, restores its last list and falls back af
   await expect(answer).toHaveValue('')
   await expect(answer).toBeEditable()
   await expectNoOverflow(page)
-  await answer.fill(term)
+  await answer.pressSequentially(term)
   await expect(practice.getByRole('heading', { name: term, exact: true })).toHaveCount(0)
   await expect(page).toHaveURL(/\/learn\/spell\?/)
   expect(backend.db.prepare("SELECT json_extract(body, '$.firstTryCorrect') FROM practice_events").pluck().get()).toBe(0)
+  await page.goto('/')
+  const firstRecall = page.getByRole('button', { name: 'Words to review 1', exact: true })
+  await firstRecall.press('Enter')
+  await expect(firstRecall).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.spell-ring-label strong')).toHaveText('1')
+  await page.getByRole('button', { name: 'Start', exact: true }).click()
+  await expect(page).toHaveURL(/\/review\?deckId=/)
+  expect(backend.db.prepare('SELECT count(*) FROM review_events').pluck().get()).toBe(0)
   await page.goto('/')
   await page.getByRole('link', { name: 'Open word list' }).click()
   await page.getByRole('button', { name: 'Listen to words' }).click()
@@ -221,9 +249,21 @@ test('shows the current book dashboard, restores its last list and falls back af
   await page.getByRole('button', { name: 'Next month' }).click()
   await expect(page.locator('.spell-calendar time[aria-current="date"]')).toBeVisible()
   await expectNoOverflow(page)
-  await navigateFromMenu(page, 'Library')
+  await page.goto('/library')
+  await wordbookLink(page, 'Other vocabulary').click()
+  await page.getByRole('link', { name: 'Lexyn home' }).click()
+  await expect(page.getByRole('link', { name: 'Open word list' })).toHaveAttribute('title', 'Other vocabulary')
+  await expect(page.getByRole('button', { name: 'Words to learn 0' })).toHaveAttribute('aria-pressed', 'true')
+  await page.goto('/library')
+  await wordbookLink(page, 'Current vocabulary').click()
+  await page.getByRole('link', { name: 'Lexyn home' }).click()
+  await expect(page.getByRole('link', { name: 'Open word list' })).toHaveAttribute('title', 'Current vocabulary')
+  await expect(page.getByRole('button', { name: 'Words to review 1' })).toBeVisible()
+  expect(backend.db.prepare('SELECT count(*) FROM practice_events').pluck().get()).toBe(1)
+
+  await page.goto('/library')
   await expect(page).toHaveURL(/\/library$/)
-  await expect(book.getByText('Current book', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Current book', exact: true })).toBeVisible()
   await libraryAction(book, 'Archive deck', 'Book options')
   await page.locator('.library-dialog').getByRole('button', { name: 'Archive deck' }).click()
   await expect(book).toHaveCount(0)
@@ -235,7 +275,7 @@ test('shows the current book dashboard, restores its last list and falls back af
 test('keeps edit drafts through temporary spelling changes and clears word-bound data only on a real rename', async ({ page, backend }) => {
   await page.goto('/library')
   await createDeck(page, 'Term editing')
-  await page.getByRole('link', { name: 'Term editing', exact: true }).click()
+  await openStudyLists(page, 'Term editing')
   const deckId = new URL(page.url()).pathname.split('/').at(-1)!
   const dictionaryMeaning = { senses: [
     { partOfSpeech: 'n.', definitions: ['线程', '线索'], source: 'manual' as const },
@@ -326,7 +366,7 @@ test('keeps edit drafts through temporary spelling changes and clears word-bound
 test('saving an ECDICT-only word without a final meaning preserves its immutable reference', async ({ page, backend }) => {
   await page.goto('/library')
   await createDeck(page, 'Dictionary reference')
-  await page.getByRole('link', { name: 'Dictionary reference', exact: true }).click()
+  await openStudyLists(page, 'Dictionary reference')
   const deckId = new URL(page.url()).pathname.split('/').at(-1)!
   const dictionaryMeaning = { sourceWord: 'thread', sourceRevision: 'fixture', rawTranslation: 'n. 原始词典释义',
     senses: [{ partOfSpeech: 'n.', definitions: ['线程'], source: 'ecdict' as const }] }
@@ -357,7 +397,7 @@ test('edits, searches, removes, restores and archives on a 320px viewport', asyn
   await page.getByLabel('Deck name').fill('Systems English')
   await page.getByLabel('Description optional').fill('计算机专业词汇')
   await page.getByRole('button', { name: 'Save', exact: true }).click()
-  await page.getByRole('link', { name: 'Systems English' }).click()
+  await openStudyLists(page, 'Systems English')
   const deckUrl = page.url()
   await page.reload()
   await expect(page.getByRole('heading', { level: 1, name: 'Systems English' })).toBeVisible()
@@ -394,13 +434,13 @@ test('edits, searches, removes, restores and archives on a 320px viewport', asyn
   await page.getByRole('button', { name: 'Removed', exact: true }).click()
   await libraryAction(deadlock, 'Restore word')
   await expect(page.getByText('No removed words')).toBeVisible()
-  await navigateFromMenu(page, 'Library')
+  await page.goto('/library')
   await libraryAction(page, 'Archive deck', 'Book options')
   await page.locator('.library-dialog').getByRole('button', { name: 'Archive deck' }).click()
   await expect(page.getByRole('heading', { name: 'Your library is empty' })).toBeVisible()
-  await libraryAction(page, 'Archived decks', 'Library options')
-  await expect(page.getByRole('link', { name: 'Systems English' })).toHaveAttribute('href', new URL(deckUrl).pathname)
-  await page.getByRole('link', { name: 'Systems English' }).click()
+  await libraryAction(page, 'Archived decks', 'Page actions')
+  await expect(page.getByRole('link', { name: 'Systems English' })).toHaveAttribute('href', new URL(deckUrl).pathname + '/words')
+  await openStudyLists(page, 'Systems English')
   await expect(page.getByText('This deck is archived.', { exact: false })).toBeVisible()
   await libraryAction(page, 'Restore deck', 'Deck options')
   await page.locator('.app-menu > summary').click()
@@ -413,7 +453,7 @@ test('previews TXT and CSV, explicitly overwrites duplicates and downloads full 
   await page.setViewportSize({ width: 320, height: 740 })
   await page.goto('/library')
   await createDeck(page, 'Computer English')
-  await page.getByRole('link', { name: 'Computer English' }).click()
+  await openStudyLists(page, 'Computer English')
   await libraryAction(page, 'Import words', 'Deck options')
   const upload = page.getByLabel('Vocabulary file')
   await upload.setInputFiles({
@@ -447,13 +487,13 @@ test('previews TXT and CSV, explicitly overwrites duplicates and downloads full 
 
   await libraryAction(page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'copy-on-write' }) }), 'Remove word')
   await page.locator('.library-dialog').getByRole('button', { name: 'Remove word' }).click()
-  await navigateFromMenu(page, 'Library')
+  await page.goto('/library')
   await libraryAction(page, 'Archive deck', 'Book options')
   await page.locator('.library-dialog').getByRole('button', { name: 'Archive deck' }).click()
   await expect(page.getByRole('heading', { name: 'Your library is empty' })).toBeVisible()
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    libraryAction(page, 'Export library', 'Library options'),
+    libraryAction(page, 'Export library', 'Page actions'),
   ])
   const exported: LibraryExport = JSON.parse(await readFile(await download.path(), 'utf8'))
   expect(exported).toMatchObject({
@@ -469,7 +509,7 @@ test('previews TXT and CSV, explicitly overwrites duplicates and downloads full 
 
 test('rejects offline writes and shares saved words with a separate browser profile', async ({ page, browser, baseURL }) => {
   await createDeck(page, 'Shared Systems')
-  await page.getByRole('link', { name: 'Shared Systems' }).click()
+  await openStudyLists(page, 'Shared Systems')
   await libraryAction(page, 'Add word', 'Deck options')
   await page.context().setOffline(true)
   await page.getByLabel('Term', { exact: true }).fill('vector clock')
@@ -493,7 +533,7 @@ test('rejects offline writes and shares saved words with a separate browser prof
 test('browses persistent study lists, resumes within a selected list and continues to the next', async ({ page, backend }) => {
   await page.goto('/library')
   await createDeck(page, 'Study chapters')
-  await page.getByRole('link', { name: 'Study chapters', exact: true }).click()
+  await openStudyLists(page, 'Study chapters')
   const deckPath = new URL(page.url()).pathname
   await libraryAction(page, 'Import words', 'Deck options')
   await page.getByLabel('Words per list').fill('1')

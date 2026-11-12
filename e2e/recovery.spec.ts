@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { serve } from '@hono/node-server'
 import type { Page } from '@playwright/test'
-import { navigateFromMenu, expect, libraryAction, password, signIn, test, username } from './fixtures'
+import { openStudyLists, expect, libraryAction, password, signIn, test, username } from './fixtures'
 import { createApp } from '../server/app'
 import { lockDataDirectory, openDatabase } from '../server/db/database'
 import type { LibraryExport } from '../shared/contracts/library'
@@ -51,13 +51,13 @@ async function start(dataDir: string, port = 0) {
   } }
 }
 
-const settings = (page: Page) => navigateFromMenu(page, 'Settings')
+const settings = (page: Page) => page.goto(new URL('/settings', page.url()).href)
 async function newDeck(page: Page, name: string, csv: string) {
   await page.goto(new URL('/library', page.url()).href)
-  await page.getByRole('button', { name: 'New deck' }).click()
+  await page.getByRole('button', { name: 'Create a wordbook' }).click()
   await page.getByLabel('Deck name').fill(name)
   await page.getByRole('button', { name: 'Save', exact: true }).click()
-  await page.getByRole('link', { name, exact: true }).click()
+  await openStudyLists(page, name)
   await libraryAction(page, 'Import words', 'Deck options')
   await page.getByLabel('Vocabulary file').setInputFiles({ name: 'words.csv', mimeType: 'text/csv', buffer: Buffer.from(`term,meaning\n${csv}`) })
   await page.getByRole('button', { name: /^Import \d+ words?$/ }).click()
@@ -74,7 +74,7 @@ async function study(page: Page, words: string[]) {
     await page.getByRole('textbox', { name: 'Copy the word' }).fill(spelling)
   }
   await expect(page.getByText('Session complete', { exact: true })).toBeVisible()
-  await navigateFromMenu(page, 'Review')
+  await page.goto(new URL('/review', page.url()).href)
   await page.getByRole('button', { name: 'Start review' }).click()
   for (let index = 0; index < amount; index++) {
     await page.getByRole('button', { name: 'Show answer' }).click()
@@ -107,13 +107,13 @@ test('restores a server JSON export with archived and removed history for fresh 
     await page.goto('/library')
     await newDeck(page, 'JSON current deck', 'consensus,共识\nquorum,法定人数\nreplica,副本')
     await study(page, ['consensus', 'quorum', 'replica'])
-    await navigateFromMenu(page, 'Library')
-    await page.getByRole('link', { name: 'JSON current deck', exact: true }).click()
+    await page.goto(new URL('/library', page.url()).href)
+    await openStudyLists(page, 'JSON current deck')
     await libraryAction(page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'quorum', exact: true }) }), 'Remove word')
     await page.locator('.library-dialog').getByRole('button', { name: 'Remove word' }).click()
     await newDeck(page, 'JSON archived deck', 'wal,日志')
-    await navigateFromMenu(page, 'Library')
-    await libraryAction(page.getByRole('listitem').filter({ has: page.getByRole('link', { name: 'JSON archived deck', exact: true }) }), 'Archive deck', 'Book options')
+    await page.goto(new URL('/library', page.url()).href)
+    await libraryAction(page.getByRole('article').filter({ has: page.getByRole('heading', { name: 'JSON archived deck', exact: true }) }), 'Archive deck', 'Book options')
     await page.locator('.library-dialog').getByRole('button', { name: 'Archive deck' }).click()
     await settings(page)
     await page.getByRole('link', { name: /Learning plan/ }).click()

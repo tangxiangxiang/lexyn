@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test'
-import { navigateFromMenu, expect, libraryAction, test, writeStudy } from './fixtures'
+import { openStudyLists, expect, libraryAction, test, writeStudy } from './fixtures'
 import type Database from 'better-sqlite3'
 import type { ReviewCard, ReviewEvent, ReviewSession } from '../shared/domain/review'
 import { createReviewScheduler, rebuildCardFromEvents, restoreCard, schedulerGrades } from '../shared/srs/scheduler'
@@ -18,10 +18,10 @@ interface WordInput {
 
 async function learnWords(page: Page, words: WordInput[]) {
   await page.goto('/library')
-  await page.getByRole('button', { name: 'New deck' }).click()
+  await page.getByRole('button', { name: 'Create a wordbook' }).click()
   await page.getByLabel('Deck name').fill('Review Systems')
   await page.getByRole('button', { name: 'Save', exact: true }).click()
-  await page.getByRole('link', { name: 'Review Systems' }).click()
+  await openStudyLists(page, 'Review Systems')
   const deckUrl = page.url()
   const deckId = new URL(deckUrl).pathname.split('/').at(-1)!
   for (const { term, meaning, explanation, example, fullDefinition, phonetic } of words) {
@@ -64,7 +64,7 @@ function readReview(db: Database.Database) {
 }
 
 async function openReview(page: Page) {
-  await navigateFromMenu(page, 'Review')
+  await page.goto('/review')
   await expect(page.getByRole('heading', { name: 'Review', exact: true })).toBeVisible()
 }
 
@@ -178,7 +178,7 @@ test('learns from Library, restores a revealed answer and scores on the server w
   expect(readReview(backend.db)).toEqual({ events, cards, sessions })
   expect(backend.db.prepare('SELECT count(*) FROM practice_events').pluck().get()).toBe(1)
 
-  await navigateFromMenu(page, 'Progress')
+  await page.goto('/progress')
   await expect(stat(page, 'Learned for the first time today')).toHaveText('1')
   await expect(stat(page, 'Reviews rated today')).toHaveText('1')
   await expect(stat(page, 'Due reviews')).toHaveText('0')
