@@ -210,7 +210,7 @@ function exportDeck() {
           <button type="button" class="icon-control list-step" :disabled="!previous" :aria-label="t('Previous list')" @click="previous && selectList(previous.id)">
             <AppIcon name="chevronLeft" />
           </button>
-          <button type="button" class="list-current" aria-haspopup="dialog" @click="listPickerOpen = true">
+          <button type="button" class="list-current" aria-haspopup="dialog" :aria-expanded="listPickerOpen" @click="listPickerOpen = true">
             {{ selected.name }} <span aria-hidden="true">▾</span>
           </button>
           <button type="button" class="icon-control list-step" :disabled="!next" :aria-label="t('Next list')" @click="next && selectList(next.id)">
@@ -305,7 +305,7 @@ function exportDeck() {
         <NButton :disabled="page === pages" @click="page++">{{ t('Next') }}</NButton>
       </div>
       <div class="reader-dock" role="group" :aria-label="t('Study actions')">
-        <button v-if="selected && !searching" class="reader-list-chip" type="button" aria-haspopup="dialog" :aria-label="t('Choose a study list')"
+        <button v-if="selected && !searching" class="reader-list-chip" type="button" aria-haspopup="dialog" :aria-expanded="listPickerOpen" :aria-label="t('Choose a study list')"
           @click="listPickerOpen = true">{{ selected.name }}</button>
         <div class="reader-actions">
           <RouterLink v-if="selected && !archived" class="icon-control" :to="{ path: '/learn', query: { deckId, listId: selected.id } }"

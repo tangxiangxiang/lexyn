@@ -5,7 +5,7 @@ async function fits(page: Page, width: number) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
 }
 
-for (const [width, height, touch] of [[320, 740, true], [375, 812, true], [768, 1024, true], [1024, 768, false], [1440, 900, false]] as const) {
+for (const [width, height, touch] of [[320, 740, true], [375, 812, true], [430, 932, true], [768, 1024, true], [1024, 768, false], [1440, 900, false]] as const) {
   test.describe(`${width}px`, () => {
     test.use({ viewport: { width, height }, hasTouch: touch, isMobile: touch })
     test('fits the study, account and backup screens and accepts touch or keyboard input', async ({ page }) => {
@@ -55,9 +55,23 @@ for (const [width, height, touch] of [[320, 740, true], [375, 812, true], [768, 
       await activate(page.getByText('Copy', { exact: true }))
       await activate(page.getByRole('button', { name: 'Learn 1 new word' }))
       await activate(page.getByRole('link', { name: 'Start spelling' }))
+      const keyboard = page.getByRole('group', { name: 'On-screen keyboard' })
+      const answer = page.getByRole('textbox', { name: 'Copy the word' })
+      await expect(keyboard).toBeVisible()
+      const initial = (await keyboard.boundingBox())!
+      expect(Math.abs(initial.x + initial.width / 2 - width / 2)).toBeLessThan(2)
+      await activate(keyboard.getByRole('button', { name: 'd', exact: true }))
+      await expect(page.getByRole('group', { name: 'Your spelling so far' })).toHaveText('d')
+      expect(Math.abs((await keyboard.boundingBox())!.y - initial.y)).toBeLessThan(2)
+      if (width === 430) {
+        await page.setViewportSize({ width: 740, height: 320 })
+        await fits(page, 740)
+        await expect(keyboard.getByRole('button', { name: 'm', exact: true })).toBeInViewport()
+        await page.setViewportSize({ width, height })
+      }
       if (touch) await page.setViewportSize({ width, height: height - 280 })
       await fits(page, width)
-      await page.getByRole('textbox', { name: 'Copy the word' }).fill('deterministic')
+      await answer.fill('deterministic')
       if (touch) await page.setViewportSize({ width, height })
       await expect(page.getByText('Session complete', { exact: true })).toBeVisible()
       await nav('Review')

@@ -16,6 +16,7 @@ import { learn, learnSessionRoute, type LearnSessionRecord } from './api'
 import PronunciationButton from '../speech/PronunciationButton.vue'
 import { settingsRoute } from '../settings/navigation'
 import AppIcon from '../../components/AppIcon.vue'
+import SessionMenu from '../../components/SessionMenu.vue'
 import { learningPreferences, setDefaultLearnMode } from '../../ui/learningPreferences'
 
 const route = useRoute()
@@ -466,14 +467,11 @@ async function saveDailyWords(value: number | null) {
         <div class="spell-reading-tools">
           <NProgress class="spell-reading-progress" type="circle" :percentage="progressValue" :show-indicator="false"
             :aria-label="t('Session progress')" />
-          <details class="spell-session-menu" @keydown.esc.stop="($event.currentTarget as HTMLDetailsElement).open = false">
-            <summary class="icon-control" :aria-label="t('Session options')"><AppIcon name="more" /></summary>
-            <div>
-              <NButton text :disabled="busy" @click="pauseSession(current.session)">{{ t('Pause') }}</NButton>
-              <NButton text :disabled="busy" @click="endSession(current.session)">{{ t('End session') }}</NButton>
-              <RouterLink :to="settingsRoute(route.fullPath)">{{ t('Settings') }}</RouterLink>
-            </div>
-          </details>
+          <SessionMenu>
+            <NButton text :disabled="busy" @click="pauseSession(current.session)">{{ t('Pause') }}</NButton>
+            <NButton text :disabled="busy" @click="endSession(current.session)">{{ t('End session') }}</NButton>
+            <RouterLink :to="settingsRoute(route.fullPath)">{{ t('Settings') }}</RouterLink>
+          </SessionMenu>
         </div>
         <h2 class="learn-term">{{ activeWord.term }}</h2>
         <div class="spell-pronunciation">
@@ -490,7 +488,7 @@ async function saveDailyWords(value: number | null) {
           {{ t('Start spelling') }} <span aria-hidden="true">→</span>
         </RouterLink>
       </article>
-      <NCard v-else-if="activeWord && spelling" class="learn-card" :bordered="false" @keydown="onKeydown">
+      <article v-else-if="activeWord && spelling" class="spell-stage" @keydown="onKeydown">
         <div class="spell-guided-toolbar">
           <div class="spell-stage-tools" role="group" :aria-label="t('Spelling tools')">
             <RouterLink v-if="isCopy" class="icon-control" :to="{ path: '/learn/read', query: route.query }" :aria-label="t('Learn the word')">
@@ -505,57 +503,56 @@ async function saveDailyWords(value: number | null) {
               :aria-pressed="keyboardVisible" @click="keyboardVisible = !keyboardVisible"><AppIcon name="keyboard" /></button>
           </div>
           <NProgress class="spell-guided-progress" type="circle" :percentage="progressValue" :show-indicator="false" :aria-label="t('Session progress')" />
-          <details class="spell-session-menu" @keydown.esc.stop="($event.currentTarget as HTMLDetailsElement).open = false">
-            <summary class="icon-control" :aria-label="t('Session options')"><AppIcon name="more" /></summary>
-            <div>
-              <NButton v-if="!submittedCorrectly" text :disabled="busy" @click="finishWord('skipped')">{{ t('Skip word') }}</NButton>
-              <NButton text :disabled="busy" @click="pauseSession(current.session)">{{ t('Pause') }}</NButton>
-              <NButton text :disabled="busy" @click="endSession(current.session)">{{ t('End session') }}</NButton>
-              <RouterLink to="/library">{{ t('Library') }}</RouterLink>
-              <RouterLink :to="settingsRoute(route.fullPath)">{{ t('Settings') }}</RouterLink>
+          <SessionMenu>
+            <NButton v-if="!submittedCorrectly" text :disabled="busy" @click="finishWord('skipped')">{{ t('Skip word') }}</NButton>
+            <NButton text :disabled="busy" @click="pauseSession(current.session)">{{ t('Pause') }}</NButton>
+            <NButton text :disabled="busy" @click="endSession(current.session)">{{ t('End session') }}</NButton>
+            <RouterLink to="/library">{{ t('Library') }}</RouterLink>
+            <RouterLink :to="settingsRoute(route.fullPath)">{{ t('Settings') }}</RouterLink>
+          </SessionMenu>
+        </div>
+        <div class="spell-clue">
+          <p v-if="!isCopy && answerVisible" class="learn-overline">{{ t('Answer revealed') }}</p>
+          <div class="spell-entry">
+            <h2 v-if="answerVisible" class="visually-hidden">{{ activeWord.term }}</h2>
+            <div class="spell-entry-field">
+              <template v-if="promptLetters.length">
+                <div class="spell-word-display">
+                  <div class="spell-prompt" aria-hidden="true">
+                    <span v-for="({ letter, state }, index) in promptStates" :key="index"
+                      :class="'spell-prompt-' + state">
+                      {{ letter === ' ' ? '\u00a0' : letter }}
+                    </span>
+                  </div>
+                  <div class="spell-prompt-progress" aria-hidden="true">
+                    <span v-for="index in promptSegments" :key="index"
+                      :class="index < typedLetters.length
+                        ? (incorrectLetter(index) ? 'segment-incorrect' : 'segment-typed')
+                        : (index === typedLetters.length ? 'segment-current' : 'segment-pending')" />
+                  </div>
+                </div>
+              </template>
+              <p v-else class="spell-long-answer" aria-hidden="true">{{ answerVisible ? expected : input || t('Type your answer') }}</p>
+              <NInput ref="inputElement" v-model:value="input" class="spell-entry-input"
+                :readonly="busy || typoIndex !== undefined || advancing" :disabled="submittedCorrectly && !advancing"
+                :input-props="spellingInputProps" />
             </div>
-          </details>
-        </div>
-        <p v-if="!isCopy && answerVisible" class="learn-overline">{{ t('Answer revealed') }}</p>
-        <div class="spell-entry" :class="{ 'spell-entry-hidden-word': !answerVisible }">
-          <h2 v-if="answerVisible" class="visually-hidden">{{ activeWord.term }}</h2>
-          <div class="spell-entry-field">
-            <template v-if="promptLetters.length">
-              <div class="spell-word-display">
-                <div class="spell-prompt" aria-hidden="true">
-                  <span v-for="({ letter, state }, index) in promptStates" :key="index"
-                    :class="'spell-prompt-' + state">
-                    {{ letter === ' ' ? '\u00a0' : letter }}
-                  </span>
-                </div>
-                <div class="spell-prompt-progress" aria-hidden="true">
-                  <span v-for="index in promptSegments" :key="index"
-                    :class="index < typedLetters.length
-                      ? (incorrectLetter(index) ? 'segment-incorrect' : 'segment-typed')
-                      : (index === typedLetters.length ? 'segment-current' : 'segment-pending')" />
-                </div>
-              </div>
-            </template>
-            <p v-else class="spell-long-answer" aria-hidden="true">{{ answerVisible ? expected : input || t('Type your answer') }}</p>
-            <NInput ref="inputElement" v-model:value="input" class="spell-entry-input"
-              :readonly="busy || typoIndex !== undefined || advancing" :disabled="submittedCorrectly && !advancing"
-              :input-props="spellingInputProps" />
           </div>
+          <div class="spell-pronunciation">
+            <PronunciationButton :entry-id="activeWord.id" :revision="activeWord.revision" :scope="wordKey + '/' + current.session.mode"
+              :disabled="busy" :preload="!isCopy" :label="isCopy ? 'Play pronunciation' : 'Play English pronunciation'"
+              :show-phonetic="!learningPreferences.hidePhonetics"
+              :phonetics="answerVisible ? activeWord.phonetics : undefined"
+              :legacy-phonetic="answerVisible ? activeWord.phonetic : undefined" :accent="pronunciationAccent" />
+          </div>
+          <DictionaryMeaningView v-if="answerVisible && hasFinalMeaning(activeWord.dictionaryMeaning)" :meaning="activeWord.dictionaryMeaning!" />
+          <p v-else-if="meaning" class="learn-meaning">{{ meaning }}</p>
+          <p v-else-if="!activeWord.meaning" class="learn-meaning learn-muted">{{ t('Meaning not added yet') }}</p>
+          <p v-if="current.session.mode === 'dictation'" class="library-muted">
+            {{ t('Listen to the word. The English spelling stays hidden during dictation.') }}
+          </p>
         </div>
-        <div class="spell-pronunciation">
-          <PronunciationButton :entry-id="activeWord.id" :revision="activeWord.revision" :scope="wordKey + '/' + current.session.mode"
-            :disabled="busy" :preload="!isCopy" :label="isCopy ? 'Play pronunciation' : 'Play English pronunciation'"
-            :show-phonetic="!learningPreferences.hidePhonetics"
-            :phonetics="answerVisible ? activeWord.phonetics : undefined"
-            :legacy-phonetic="answerVisible ? activeWord.phonetic : undefined" :accent="pronunciationAccent" />
-        </div>
-        <DictionaryMeaningView v-if="answerVisible && hasFinalMeaning(activeWord.dictionaryMeaning)" :meaning="activeWord.dictionaryMeaning!" />
-        <p v-else-if="meaning" class="learn-meaning">{{ meaning }}</p>
-        <p v-else-if="!activeWord.meaning" class="learn-meaning learn-muted">{{ t('Meaning not added yet') }}</p>
-        <p v-if="current.session.mode === 'dictation'" class="library-muted">
-          {{ t('Listen to the word. The English spelling stays hidden during dictation.') }}
-        </p>
-        <div class="learn-practice-area">
+        <div v-if="!isCopy || localMessage || error || !activeWord.meaning.trim()" class="learn-practice-area">
           <NButton v-if="!isCopy" text :disabled="busy" @click="switchToCopy(current.session)">{{ t('Switch to Copy') }}</NButton>
           <div v-if="feedback.length && localMessage" class="learn-spelling" aria-live="polite"
             :aria-label="feedback.map((part) => part.actual + ': ' + t(part.status)).join(', ')">
@@ -573,30 +570,32 @@ async function saveDailyWords(value: number | null) {
         <div v-if="submittedCorrectly && !advancing" class="learn-actions learn-session-actions">
           <NButton ref="nextButton" type="primary" :disabled="busy" @click="finishWord('completed')">{{ t('Next word') }}</NButton>
         </div>
-        <div class="spell-answer-tiles">
-          <span class="visually-hidden" role="status">{{ typoIndex !== undefined ? t('Incorrect letter. Try the word again.') : '' }}</span>
-          <Transition name="spell-tiles">
-            <div v-if="typedLetters.length" class="spell-answer-row" role="group" :aria-label="t('Your spelling so far')">
-              <span v-for="(letter, index) in typedLetters" :key="index" class="spell-answer-tile"
-                :class="{ 'spell-answer-tile-incorrect': incorrectLetter(index) }">
-                {{ letter === ' ' ? '·' : letter }}
-              </span>
+        <div class="spell-keyboard-area">
+          <div class="spell-answer-tiles">
+            <span class="visually-hidden" role="status">{{ typoIndex !== undefined ? t('Incorrect letter. Try the word again.') : '' }}</span>
+            <Transition name="spell-tiles">
+              <div v-if="typedLetters.length" class="spell-answer-row" role="group" :aria-label="t('Your spelling so far')">
+                <span v-for="(letter, index) in typedLetters" :key="index" class="spell-answer-tile"
+                  :class="{ 'spell-answer-tile-incorrect': incorrectLetter(index) }">
+                  {{ letter === ' ' ? '·' : letter }}
+                </span>
+              </div>
+            </Transition>
+          </div>
+          <div v-if="keyboardVisible" class="spell-keyboard" role="group" :aria-label="t('On-screen keyboard')">
+            <div v-for="row in keyboardRows" :key="row">
+              <button v-for="letter in row" :key="letter" type="button" :disabled="busy || submittedCorrectly || typoIndex !== undefined"
+                @mousedown.prevent @click="enterKey(letter)">{{ letter }}</button>
             </div>
-          </Transition>
-        </div>
-        <div v-if="keyboardVisible" class="spell-keyboard" role="group" :aria-label="t('On-screen keyboard')">
-          <div v-for="row in keyboardRows" :key="row">
-            <button v-for="letter in row" :key="letter" type="button" :disabled="busy || submittedCorrectly || typoIndex !== undefined"
-              @mousedown.prevent @click="enterKey(letter)">{{ letter }}</button>
-          </div>
-          <div v-if="extraKeys.length || !isCopy || /\s/.test(expected)" class="spell-keyboard-extra">
-            <button v-for="character in extraKeys" :key="character" type="button" :disabled="busy || submittedCorrectly || typoIndex !== undefined"
-              @mousedown.prevent @click="enterKey(character)">{{ character }}</button>
-            <button v-if="!isCopy || /\s/.test(expected)" type="button" :disabled="busy || submittedCorrectly || typoIndex !== undefined"
-              @mousedown.prevent @click="enterKey(' ')">{{ t('Space') }}</button>
+            <div v-if="extraKeys.length || !isCopy || /\s/.test(expected)" class="spell-keyboard-extra">
+              <button v-for="character in extraKeys" :key="character" type="button" :disabled="busy || submittedCorrectly || typoIndex !== undefined"
+                @mousedown.prevent @click="enterKey(character)">{{ character }}</button>
+              <button v-if="!isCopy || /\s/.test(expected)" type="button" :disabled="busy || submittedCorrectly || typoIndex !== undefined"
+                @mousedown.prevent @click="enterKey(' ')">{{ t('Space') }}</button>
+            </div>
           </div>
         </div>
-      </NCard>
+      </article>
       <p v-else-if="activeWord" class="library-muted" aria-live="polite">{{ t('Restoring your learning session…') }}</p>
     </template>
     <p v-if="!inPractice" class="learn-distinction">{{ t('Spelling practice records exposure and attempts. It never schedules an FSRS review.') }}</p>

@@ -29,8 +29,9 @@ const selectedCount = computed(() => {
   if (!detail.value) return selectedBook.value?.count ?? 0
   return detailMatchesSelection.value ? detail.value.count : 0
 })
-const formattedCount = computed(() => String(selectedCount.value))
-const wordCountSuffix = computed(() => locale.value === 'zh' ? '词' : ' words')
+function wordCountSuffix(count: number) {
+  return locale.value === 'zh' ? '词' : count === 1 ? ' word' : ' words'
+}
 const languageLabels = computed(() => wordbookLanguages.map((language) => ({
   ...language,
   label: t(language.label),
@@ -65,7 +66,7 @@ async function chooseBook() {
 </script>
 
 <template>
-  <main class="page spell-wordbooks builtin-books-page">
+  <section class="page spell-wordbooks builtin-books-page">
     <div class="wordbooks-toolbar">
       <RouterLink
         class="wordbooks-back"
@@ -77,7 +78,8 @@ async function chooseBook() {
     </div>
 
     <div class="builtin-books-content">
-      <nav class="builtin-language-tabs" :aria-label="t('Wordbook language')">
+      <h1 v-if="!bookId" class="builtin-catalog-title">{{ t('Built-in wordbooks') }}</h1>
+      <div role="group" class="builtin-language-tabs" :aria-label="t('Wordbook language')">
         <button
           v-for="language in languageLabels"
           :key="language.id"
@@ -86,7 +88,7 @@ async function chooseBook() {
           :aria-current="language.id === 'en' ? 'page' : undefined"
           :disabled="!language.available"
         >{{ language.label }}</button>
-      </nav>
+      </div>
 
       <NAlert v-if="loadError" type="error" role="alert" class="builtin-books-alert">
         {{ t('Built-in wordbooks could not be loaded.') }}
@@ -110,7 +112,7 @@ async function chooseBook() {
           >
             <span class="builtin-book-row-copy">
               <strong>{{ bookName(book.id) }}</strong>
-              <span v-if="book.available">{{ book.count }}{{ wordCountSuffix }}</span>
+              <span v-if="book.available">{{ book.count }}{{ wordCountSuffix(book.count) }}</span>
               <span v-else>{{ t('Not available from the installed dictionary') }}</span>
             </span>
             <AppIcon v-if="book.available" name="chevronRight" />
@@ -129,7 +131,7 @@ async function chooseBook() {
           </div>
 
           <p class="builtin-book-detail-count">
-            <strong>{{ formattedCount }}</strong><span>{{ wordCountSuffix }}</span>
+            <strong>{{ selectedCount }}</strong><span>{{ wordCountSuffix(selectedCount) }}</span>
           </p>
           <div class="builtin-composition-list" :aria-label="t('Word composition')">
             <button
@@ -142,7 +144,7 @@ async function chooseBook() {
               @click="toggleCategory(category.id)"
             >
               <span>{{ t(category.name) }}</span>
-              <strong>{{ category.count }}{{ wordCountSuffix }}</strong>
+              <strong>{{ category.count }}{{ wordCountSuffix(category.count) }}</strong>
             </button>
           </div>
           <p class="builtin-composition-note">{{ t('Word groups can overlap; selected words are counted once.') }}</p>
@@ -166,5 +168,5 @@ async function chooseBook() {
         </section>
       </template>
     </div>
-  </main>
+  </section>
 </template>

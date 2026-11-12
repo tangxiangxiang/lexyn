@@ -85,6 +85,37 @@ test('learns a new word, retries a misspelling, resumes after reload and persist
   expect(backend.db.prepare('SELECT count(*) FROM learn_progress').pluck().get()).toBe(1)
 })
 
+test('spells a phrase with punctuation on a narrow screen and wraps a long word', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 740 })
+  await makeDeckWithWords(page)
+  const deckId = new URL(page.url()).pathname.split('/').at(-1)
+  const longWord = 'electroencephalographically-recorded'
+  for (const term of ['version-control v2', longWord]) {
+    expect((await writeStudy(page, 'library/create-entry', [deckId, { term, meaning: '测试词条' }])).ok()).toBe(true)
+  }
+  await page.getByRole('link', { name: 'Start learning' }).click()
+  await page.getByRole('button', { name: 'Learn 4 new words' }).click()
+  await page.getByRole('link', { name: 'Start spelling' }).click()
+  const input = page.getByRole('textbox', { name: 'Copy the word' })
+  await input.fill('concurrency')
+  await expect(page.getByRole('heading', { name: 'deadlock', exact: true })).toBeVisible()
+  await input.fill('deadlock')
+  await expect(page.getByRole('heading', { name: 'version-control v2', exact: true })).toBeVisible()
+  const keyboard = page.getByRole('group', { name: 'On-screen keyboard' })
+  await input.fill('version')
+  await keyboard.getByRole('button', { name: '-', exact: true }).click()
+  await expect(input).toHaveValue('version-')
+  await input.fill('version-control')
+  await keyboard.getByRole('button', { name: 'Space', exact: true }).click()
+  await expect(input).toHaveValue('version-control ')
+  await input.press('v')
+  await keyboard.getByRole('button', { name: '2', exact: true }).click()
+  await expect(page.locator('.spell-long-answer')).toHaveText(longWord)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320)
+  await input.fill(longWord)
+  await expect(page.getByText('Session complete', { exact: true })).toBeVisible()
+})
+
 test('IME composition does not submit and 320px layout has no horizontal overflow', async ({ page, backend }) => {
   await page.setViewportSize({ width: 320, height: 740 })
   await makeDeckWithWords(page)
@@ -137,7 +168,7 @@ test('keeps dictation hints out of the DOM until submission or reveal and restor
   await page.getByText('Dictation', { exact: true }).click()
   await page.getByRole('button', { name: 'Learn 2 new words' }).click()
 
-  const card = page.locator('.learn-card')
+  const card = page.locator('.spell-stage')
   const answer = page.getByRole('textbox', { name: 'Type the dictated word' })
   await expect(answer).toBeFocused()
   await expect.poll(() => backend.speech.requests.map(({ text }) => text)).toEqual(['concurrency'])
@@ -195,7 +226,7 @@ test('advances once and retains a correct attempt when finishing needs a retry',
   const next = page.getByRole('button', { name: 'Next word' })
   await expect(next).toBeFocused()
   expect(records(backend.db, 'learn_sessions')).toMatchObject([{ currentAttempts: 1 }])
-  const ignored = await page.locator('.learn-card').evaluate((card) => {
+  const ignored = await page.locator('.spell-stage').evaluate((card) => {
     const field = document.createElement('textarea')
     card.append(field)
     const allowed = field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))

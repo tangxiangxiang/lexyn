@@ -39,13 +39,13 @@ async function learnWords(page: Page, words: WordInput[]) {
   await page.getByRole('link', { name: 'Start spelling' }).click()
   const pending = new Set(words.map(({ term }) => term))
   for (let index = 0; index < words.length; index++) {
-    const heading = page.locator('.learn-card').getByRole('heading')
+    const heading = page.locator('.spell-stage').getByRole('heading')
     await expect(heading).toBeVisible()
     const term = (await heading.textContent())!.trim()
     expect(pending.delete(term)).toBe(true)
     const current = words.find((word) => word.term === term)
     const definition = current?.fullDefinition
-    if (definition) await expect(page.locator('.learn-card .dictionary-definition')).toContainText([current!.meaning, definition])
+    if (definition) await expect(page.locator('.spell-stage .dictionary-definition')).toContainText([current!.meaning, definition])
     if (current?.phonetic) {
       await expect(page.getByRole('button', { name: `Play pronunciation ${current.phonetic}` })).toHaveText(current.phonetic)
     }
@@ -76,9 +76,10 @@ test('fills missing IPA in a rated word without changing its meaning or FSRS sch
   const deckUrl = await learnWords(page, [{ term: 'command', meaning: '命令', fullDefinition: '指令', phonetic: '/kəˈmɑːnd/' }])
   await openReview(page)
   await page.getByRole('button', { name: 'Start review' }).click()
-  await expect(page.locator('.phonetics')).toHaveCount(0)
+  const pronunciation = page.getByRole('button', { name: 'Play pronunciation /kəˈmɑːnd/' })
+  await expect(pronunciation).toHaveCount(0)
   await page.getByRole('button', { name: 'Show answer' }).click()
-  await expect(page.locator('.phonetics')).toHaveText('/kəˈmɑːnd/')
+  await expect(pronunciation).toBeVisible()
   await page.getByRole('button', { name: 'Good' }).click()
   await expect(page.getByRole('heading', { name: 'Review round complete' })).toBeVisible()
   const before = readReview(backend.db)
@@ -145,6 +146,7 @@ test('learns from Library, restores a revealed answer and scores on the server w
   await expect(page.getByRole('button', { name: 'Pause pronunciation' })).toBeVisible()
   expect(readReview(backend.db).events).toEqual([])
 
+  await page.getByLabel('Session options', { exact: true }).click()
   await page.getByRole('button', { name: 'Pause', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Review paused' })).toBeVisible()
   await page.reload()

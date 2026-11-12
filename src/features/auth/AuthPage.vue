@@ -132,7 +132,6 @@ async function submit() {
 </template>
 
 <style scoped>
-/* Nuvyn auth page layout, using Lexyn's theme variables. */
 .auth-page.app-shell {
   position: relative;
   grid-template-columns: minmax(0, 1fr);
@@ -166,11 +165,9 @@ async function submit() {
   width: min(100%, 380px);
   padding: clamp(18px, 6vw, 28px);
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--sidebar);
-  box-shadow: 0 12px 36px rgba(15, 23, 42, 0.12);
+  border-radius: var(--panel-radius);
+  background: var(--panel);
 }
-.auth-page[data-theme="dark"] .auth-card { box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28); }
 .auth-card h1 { margin: 0; font-size: 1.45rem; }
 .auth-subtitle { margin: 8px 0 22px; color: var(--muted); font-size: 0.86rem; line-height: 1.5; }
 .auth-notice {
@@ -186,8 +183,8 @@ async function submit() {
 .auth-field { display: grid; gap: 5px; }
 .auth-field label { font-size: 0.8rem; font-weight: 600; }
 .auth-help { margin: -1px 0 0; color: var(--muted); font-size: 0.73rem; line-height: 1.45; }
-.auth-control { width: 100%; min-height: 34px; border-radius: 6px; font-size: 0.86rem; }
+.auth-control { width: 100%; min-height: 44px; border-radius: 6px; font-size: 0.86rem; }
 .auth-error { margin: 0; color: var(--danger); font-size: 0.8rem; line-height: 1.4; }
-.auth-submit { min-height: 34px; margin-top: 4px; border-radius: 6px; font-size: 0.84rem; font-weight: 600; }
+.auth-submit { min-height: 44px; margin-top: 4px; border-radius: 6px; font-size: 0.84rem; font-weight: 600; }
 .auth-form[aria-busy="true"] .auth-submit { cursor: wait; }
 </style>

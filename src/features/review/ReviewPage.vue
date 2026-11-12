@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import DictionaryMeaningView from '../dictionary/DictionaryMeaningView.vue'
-import PhoneticsView from '../dictionary/PhoneticsView.vue'
+import AppIcon from '../../components/AppIcon.vue'
+import SessionMenu from '../../components/SessionMenu.vue'
+import { pronunciationAccent } from '../../ui/pronunciationAccent'
 import { t, translateError } from '../../i18n/useI18n'
 import { computed, nextTick, ref, watch } from 'vue'
-import { NAlert, NButton, NCard, NInput, NSelect } from 'naive-ui'
-import { useRoute, useRouter } from 'vue-router'
+import { NAlert, NButton, NInput, NProgress, NSelect } from 'naive-ui'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { isSpellingCorrect } from '../../../shared/domain/learning'
 import { reviewRatings, type ReviewRating } from '../../../shared/domain/review'
 import { hasFinalMeaning } from '../../../shared/domain/dictionary'
@@ -28,6 +30,10 @@ const cardKey = computed(() => {
   const session = round.value?.session
   return session?.status === 'active' && session.currentCardId
     ? session.sessionId + '/' + session.currentCardId : undefined
+})
+const progressValue = computed(() => {
+  const session = round.value?.session
+  return session ? Math.round(session.currentIndex / Math.max(1, session.total) * 100) : 0
 })
 const revealed = computed(() => round.value?.revealed ?? false)
 const spellCheck = computed(() => {
@@ -122,9 +128,16 @@ function selectDeck(id: string | null) {
 </script>
 
 <template>
-  <section class="page review-page">
-    <header class="page-intro">
+  <section class="page review-page" :class="{ 'review-active': round?.session.status === 'active' }">
+    <header class="page-toolbar review-toolbar">
+      <RouterLink class="icon-control spell-session-back" to="/study" :aria-label="t('Back to study')">
+        <AppIcon name="chevronLeft" />
+      </RouterLink>
       <h1>{{ t('Review') }}</h1>
+      <SessionMenu v-if="round?.session.status === 'active'">
+        <NButton text :disabled="busy" @click="changeStatus('paused')">{{ t('Pause') }}</NButton>
+        <NButton text :disabled="busy" @click="changeStatus('abandoned')">{{ t('End round') }}</NButton>
+      </SessionMenu>
     </header>
 
     <NAlert v-if="error" type="error" role="alert">{{ translateError(error) }} <NButton text @click="reloadRound(); reloadOverview()">{{ t('Reload session') }}</NButton></NAlert>
@@ -132,35 +145,43 @@ function selectDeck(id: string | null) {
       {{ t('Your review data could not be loaded from the server.') }}
       <NButton text @click="reloadRound(); reloadOverview()">{{ t('Try again') }}</NButton>
     </NAlert>
-    <NCard v-else-if="round?.session.status === 'active'" class="review-card review-study-card" :bordered="false">
+    <article v-else-if="round?.session.status === 'active'" class="review-study-card">
       <div v-if="round.word" ref="focusTarget" tabindex="-1" class="review-recall" @keydown="onKeydown"
         @compositionstart="composing = true" @compositionend="composing = false" @focusout="composing = false">
-        <p class="library-muted">{{ t('Card {current} of {total}', { current: round.session.currentIndex + 1, total: round.session.total }) }}
-          · {{ round.word.card ? t('Due review') : t('First recall') }}</p>
+        <div class="review-position">
+          <NProgress type="circle" :percentage="progressValue" :show-indicator="false" :aria-label="t('Session progress')" />
+          <p>{{ t('Card {current} of {total}', { current: round.session.currentIndex + 1, total: round.session.total }) }}
+            · {{ round.word.card ? t('Due review') : t('First recall') }}</p>
+        </div>
         <template v-if="!revealed">
-          <h2>{{ t('Recall the English word') }}</h2>
-          <p class="review-meaning" lang="zh">{{ round.word.prompt }}</p>
+          <div class="review-prompt">
+            <h2>{{ t('Recall the English word') }}</h2>
+            <p class="review-meaning" lang="zh">{{ round.word.prompt }}</p>
+          </div>
           <NInput v-model:value="answer" :readonly="busy" :placeholder="t('Type your recall (optional)')" :input-props="{
             'aria-label': t('Type your recall'), autocomplete: 'off', autocapitalize: 'off', spellcheck: false,
           }" />
           <div class="review-actions">
             <NButton type="primary" :disabled="busy" @click="reveal">{{ t('Show answer') }}</NButton>
-            <span class="library-muted">{{ t('Space to reveal when the answer field is out of focus') }}</span>
+            <span class="review-shortcut library-muted">{{ t('Space to reveal when the answer field is out of focus') }}</span>
           </div>
         </template>
         <template v-else-if="round.word.answer">
           <h2 class="review-term">{{ round.word.answer.term }}</h2>
-          <PhoneticsView :phonetics="round.word.answer.phonetics" :legacy="round.word.answer.phonetic" />
+          <div class="spell-pronunciation">
+            <PronunciationButton :entry-id="round.word.answer.id" :revision="round.word.answer.revision" label="Play pronunciation"
+              :phonetics="round.word.answer.phonetics" :legacy-phonetic="round.word.answer.phonetic" :accent="pronunciationAccent" />
+          </div>
           <DictionaryMeaningView v-if="hasFinalMeaning(round.word.answer.dictionaryMeaning)" :meaning="round.word.answer.dictionaryMeaning!" />
           <p v-else class="review-meaning" lang="zh">{{ round.word.answer.meaning }}</p>
-          <PronunciationButton :entry-id="round.word.answer.id" :revision="round.word.answer.revision" label="Play pronunciation" />
           <p v-if="spellCheck !== undefined" role="status">
             {{ spellCheck ? t('Your spelling matches.') : t('Your spelling differs.') }} {{ t('Choose the rating that reflects your recall.') }}
           </p>
-          <div class="review-ratings" :aria-label="t('Recall ratings')">
+          <div class="review-ratings" role="group" :aria-label="t('Recall ratings')">
             <div v-for="(rating, index) in reviewRatings" :key="rating">
-              <NButton :disabled="busy" @click="rate(rating)">{{ t(ratingLabels[rating].label) }}</NButton>
-              <small>{{ index + 1 }} · {{ t(ratingLabels[rating].hint) }}</small>
+              <NButton :disabled="busy" :aria-keyshortcuts="String(index + 1)" :aria-describedby="'rating-' + rating"
+                @click="rate(rating)">{{ t(ratingLabels[rating].label) }}</NButton>
+              <small :id="'rating-' + rating">{{ t(ratingLabels[rating].hint) }}</small>
             </div>
           </div>
         </template>
@@ -169,21 +190,17 @@ function selectDeck(id: string | null) {
         <p role="status">{{ t('Checking the remaining review cards…') }}</p>
         <NButton v-if="error" :disabled="busy" @click="repair">{{ t('Try again') }}</NButton>
       </div>
-      <div class="review-actions review-session-actions">
-        <NButton :disabled="busy" @click="changeStatus('paused')">{{ t('Pause') }}</NButton>
-        <NButton :disabled="busy" @click="changeStatus('abandoned')">{{ t('End round') }}</NButton>
-      </div>
-    </NCard>
+    </article>
     <template v-else-if="overview && round !== undefined">
-      <NCard v-if="round?.session.status === 'paused'" class="review-card">
+      <section v-if="round?.session.status === 'paused'" class="review-status">
         <h2>{{ t('Review paused') }}</h2>
         <p>{{ t('{count} rated in this round.', { count: round.rated }) }}</p>
-        <div class="review-actions review-session-actions">
+        <div class="review-actions">
           <NButton type="primary" :disabled="busy" @click="changeStatus('active')">{{ t('Resume review') }}</NButton>
           <NButton :disabled="busy" @click="changeStatus('abandoned')">{{ t('End round') }}</NButton>
         </div>
-      </NCard>
-      <NCard class="review-card">
+      </section>
+      <section class="review-overview">
         <div class="review-recall">
           <template v-if="round?.session.status === 'completed'">
             <h2>{{ t('Review round complete') }}</h2>
@@ -205,27 +222,44 @@ function selectDeck(id: string | null) {
               @click="run(() => review.start(deckId))">{{ t('Start review') }}</NButton>
           </div>
         </div>
-      </NCard>
+      </section>
     </template>
     <p v-else class="library-muted" aria-live="polite">{{ t('Loading your reviews…') }}</p>
   </section>
 </template>
 
 <style scoped>
-.review-page, .review-recall { display: grid; gap: 16px; min-width: 0; }
-.review-card { max-width: 760px; }
-.review-recall:focus-visible { outline-offset: 5px; }
-.review-meaning, .review-term, .review-example { white-space: pre-wrap; overflow-wrap: anywhere; }
-.review-meaning { font-size: clamp(1.15rem, 2.4vw, 1.5rem); line-height: 1.7; }
-.review-study-card { border-top: 2px solid var(--accent); }
-.review-term { font-size: clamp(1.75rem, 6vw, 3rem); }
-.review-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.review-session-actions { margin-top: 16px; }
-.review-counts, .review-ratings { display: grid; grid-template-columns: repeat(auto-fit, minmax(115px, 1fr)); gap: 12px; }
-.review-counts dd { margin: 4px 0 0; font-size: 1.5rem; font-weight: 650; }
-.review-ratings > div { display: grid; gap: 4px; align-content: start; }
-.review-ratings small, .review-example { color: var(--muted); }
-@media (max-width: 520px), (pointer: coarse) {
-  .review-actions > .n-button, .review-ratings .n-button { min-height: 42px; }
+.review-page { display: grid; gap: 20px; }
+.review-toolbar { margin-block-end: 4px; }
+.review-toolbar .session-menu { grid-column: 3; }
+.review-recall, .review-status, .review-overview { display: grid; gap: 16px; min-width: 0; }
+.review-status { padding-block-end: 20px; border-bottom: 1px solid var(--line); }
+.review-status h2, .review-overview h2 { font-size: 1.2rem; font-weight: 650; }
+.review-recall:focus { outline: none; }
+.review-active .review-recall { display: flex; flex-direction: column; min-height: 65dvh; }
+.review-position { display: flex; align-items: center; justify-content: center; gap: 9px; color: var(--muted); font-size: .85rem; }
+.review-position .n-progress { width: 22px; flex: none; }
+.review-prompt { display: grid; justify-items: center; gap: 10px; padding-block: clamp(20px, 7dvh, 64px); text-align: center; }
+.review-prompt h2 { color: var(--muted); font-size: .9rem; font-weight: 550; }
+.review-meaning, .review-term { white-space: pre-wrap; overflow-wrap: anywhere; }
+.review-meaning { font-size: clamp(1.1rem, 3vw, 1.45rem); line-height: 1.55; }
+.review-term { margin-block-start: clamp(12px, 5dvh, 45px); font-size: clamp(2.25rem, 8vw, 4.75rem); font-weight: 580; letter-spacing: -.045em; text-align: center; }
+.review-recall .spell-pronunciation { justify-content: center; }
+.review-study-card .review-actions { justify-content: center; }
+.review-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.review-actions .n-button, .review-ratings .n-button, .review-overview .n-button { min-height: 44px; }
+.review-actions .n-button, .review-overview .n-button { border-radius: 999px; }
+.review-counts, .review-ratings { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.review-counts { margin: 0; padding: 14px 12px; border-radius: var(--panel-radius); background: var(--panel); text-align: center; }
+.review-counts dt, .review-ratings small { color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
+.review-counts dd { margin: 4px 0 0; font-size: 1.65rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+.review-ratings { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-block-start: auto; padding-block-start: 12px; }
+.review-ratings > div { display: grid; gap: 6px; min-width: 0; align-content: start; text-align: center; }
+.review-ratings .n-button { background: var(--glass); padding-inline: 4px; }
+@media (pointer: coarse) {
+  .review-shortcut { display: none; }
+}
+@media (max-width: 375px) {
+  .review-ratings { gap: 4px; }
 }
 </style>

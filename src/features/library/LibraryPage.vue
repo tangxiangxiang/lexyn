@@ -128,13 +128,11 @@ function progressPercent(learned: number, total: number) {
             <RouterLink class="wordbook-featured-open"
               :to="{ name: 'library-words', params: { deckId: currentDeckRecord.deck.id } }"
               @click="selectBook(currentDeckRecord.deck.id)">
-              <span class="wordbook-featured-top">
-                <span class="wordbook-language">EN</span>
-                <span class="wordbook-featured-action">
-                  <AppIcon name="chevronRight" /><span class="visually-hidden">{{ t('Open word list') }}</span>
-                </span>
-              </span>
-              <h2>{{ currentDeckRecord.deck.name }}</h2>
+              <div class="wordbook-featured-top">
+                <h2>{{ currentDeckRecord.deck.name }}</h2>
+                <span class="wordbook-language" lang="en">EN</span>
+                <AppIcon class="wordbook-featured-action" name="chevronRight" />
+              </div>
               <span class="wordbook-featured-meta">
                 <strong>{{ currentDeckRecord.learnedCount }} / {{ currentDeckRecord.count }}</strong>
                 <span>{{ t('Words') }}</span><span aria-hidden="true">·</span>
@@ -175,11 +173,6 @@ function progressPercent(learned: number, total: number) {
                     <span aria-hidden="true">·</span>
                     <span>{{ t('{count} lists', { count: listCount }) }}</span>
                   </div>
-                  <span class="wordbook-progress" role="progressbar"
-                    :aria-label="t('{learned} of {total} words learned', { learned: learnedCount, total: count })"
-                    aria-valuemin="0" :aria-valuemax="Math.max(count, 1)" :aria-valuenow="Math.min(learnedCount, count)">
-                    <span :style="{ width: `${progressPercent(learnedCount, count)}%` }"></span>
-                  </span>
                   <span class="wordbook-open-arrow" aria-hidden="true"><AppIcon name="chevronRight" /></span>
                 </RouterLink>
 

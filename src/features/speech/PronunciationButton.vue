@@ -8,11 +8,11 @@ import AppIcon from '../../components/AppIcon.vue'
 import { t, translateError } from '../../i18n/useI18n'
 import { useSpeech } from './useSpeech'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   entryId?: string; voiceId?: SpeechVoice; revision?: number; scope?: string; disabled?: boolean; label: string; preload?: boolean
   showPhonetic?: boolean
   phonetics?: PhoneticVariants; legacyPhonetic?: string; accent?: PronunciationAccent
-}>()
+}>(), { showPhonetic: true })
 const { state, error, toggle } = useSpeech(
   () => props.voiceId ? { voiceId: props.voiceId } : { entryId: props.entryId! },
   () => [props.entryId, props.revision, props.scope, props.voiceId].join('/'),
@@ -29,14 +29,15 @@ const pronunciation = computed(() => {
   return other ? { value: other, accent: otherAccent } : undefined
 })
 const buttonLabel = computed(() => {
+  if (state.value === 'playing') return t('Pause pronunciation')
   if (pronunciation.value) {
-    if (props.showPhonetic === false) return t(state.value === 'playing' ? 'Pause pronunciation' : props.label)
+    if (props.showPhonetic === false) return t(props.label)
     const accent = pronunciation.value.accent
     return accent
       ? t('Play {accent} pronunciation {phonetic}', { accent: t(accent === 'british' ? 'British' : 'American'), phonetic: pronunciation.value.value })
       : t('Play pronunciation {phonetic}', { phonetic: pronunciation.value.value })
   }
-  return t(state.value === 'loading' ? 'Loading pronunciation…' : state.value === 'playing' ? 'Pause pronunciation' : props.label)
+  return t(state.value === 'loading' ? 'Loading pronunciation…' : props.label)
 })
 </script>
 
@@ -71,9 +72,9 @@ const buttonLabel = computed(() => {
 .pronunciation-button :deep(.n-button__content) { gap: 8px; }
 .pronunciation-icon { display: inline-grid; place-items: center; flex: 0 0 18px; width: 18px; height: 18px; }
 .pronunciation-icon :deep(svg) { display: block; width: 18px; height: 18px; }
-.pronunciation-plain { padding-inline: 4px !important; color: var(--ink) !important; background: transparent !important; }
+.pronunciation-plain { padding-inline: 4px !important; color: inherit !important; background: transparent !important; min-height: 44px; border-radius: 8px; }
 .pronunciation-plain :deep(.n-button__content) { font-size: 1.05rem; }
 @media (hover: hover) and (pointer: fine) {
-  .pronunciation-plain:hover { background: #a1d8ff24 !important; }
+  .pronunciation-plain:hover { background: var(--glass, #a1d8ff24) !important; }
 }
 </style>

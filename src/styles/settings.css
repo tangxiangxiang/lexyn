@@ -1,43 +1,22 @@
-.app-shell.settings-shell {
-  --canvas: #0b338c;
-  --muted: #bfd4f7;
-  isolation: isolate;
-  background: var(--canvas);
-  color-scheme: dark;
-}
-.settings-shell::before {
-  position: fixed;
-  z-index: -1;
-  inset: 0;
-  content: "";
-  background: linear-gradient(#061c5b24, #061c5b24), url('./spell-backdrop.svg') center / cover no-repeat;
-  filter: blur(9px);
-}
 .settings-shell .skip-link { z-index: 7; }
 .settings-shell .app-header {
-  position: fixed;
-  inset: calc(9px + env(safe-area-inset-top)) auto auto calc(88px + env(safe-area-inset-left));
+  position: absolute;
+  inset: calc(9px + env(safe-area-inset-top)) auto auto calc(12px + env(safe-area-inset-left));
   z-index: 6;
   padding: 0;
 }
 .settings-shell .app-header .icon-control {
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
-  min-height: 34px;
-  border: 1px solid #60a9ff55;
+  border: 1px solid var(--line);
   border-radius: 50%;
-  background: #265bbcb8;
+  background: var(--glass);
 }
-.settings-shell .app-header .icon-control:hover { background: #3476d2; }
+.settings-shell .app-header .icon-control:hover { background: var(--hover-surface); }
 .settings-shell .app-header .icon-control svg { width: 15px; height: 15px; }
 .settings-shell .app-header nav { display: flex; align-items: center; gap: 12px; }
 .settings-shell .main { padding: 62px 16px calc(40px + env(safe-area-inset-bottom)); }
 .settings-page {
-  --settings-panel: #061c4f53;
-  --settings-radius: 20px;
   --settings-inset: 14px;
-  width: min(100%, 460px);
+  width: min(100%, 480px);
   font-size: 1rem;
 }
 .settings-brand-card {
@@ -46,14 +25,14 @@
   align-items: center;
   justify-content: space-between;
   min-height: 96px;
-  margin-bottom: 12px;
+  margin-bottom: 18px;
   padding: 16px 20px;
   overflow: hidden;
-  border-radius: var(--settings-radius);
-  background: var(--settings-panel);
+  border-radius: var(--panel-radius);
+  background: var(--panel);
 }
 .settings-brand-card > div { display: grid; gap: 5px; }
-.settings-brand-card strong { font-size: 1.125rem; line-height: 1.3; }
+.settings-brand-card h1 { font-size: 1.3rem; line-height: 1.3; }
 .settings-brand-card span { color: var(--muted); font-size: .9rem; }
 .settings-brand-card img {
   position: absolute;
@@ -68,8 +47,8 @@
 .settings-panel, .settings-page .settings-card {
   overflow: hidden;
   border: 0;
-  border-radius: var(--settings-radius);
-  background: var(--settings-panel);
+  border-radius: var(--panel-radius);
+  background: var(--panel);
   color: var(--ink);
 }
 .settings-page .settings-card { overflow: visible; }
@@ -103,7 +82,7 @@ a.settings-link:hover, .settings-current-book:hover { background: #bce2ff15; }
   display: grid;
   padding: 13px var(--settings-inset) 18px;
   text-decoration: none;
-  border-bottom: 1px solid #cfe7ff17;
+  border-bottom: 1px solid var(--line);
 }
 .settings-book-heading { min-height: 24px; font-size: 1.125rem; }
 .settings-book-error { margin: 8px var(--settings-inset); }
@@ -125,7 +104,7 @@ a.settings-link:hover, .settings-current-book:hover { background: #bce2ff15; }
   position: fixed;
   z-index: 5;
   inset: calc(8px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) auto auto;
-  min-height: 40px;
+  min-height: 44px;
   padding: 0 14px;
   border: 1px solid #60a9ff55;
   border-radius: 999px;
@@ -141,7 +120,7 @@ a.settings-link:hover, .settings-current-book:hover { background: #bce2ff15; }
   padding: var(--settings-inset);
 }
 .settings-weekdays button {
-  min-height: 36px;
+  min-height: 44px;
   padding: 0 3px;
   border: 1px solid #b4d4ff22;
   border-radius: 8px;
@@ -158,7 +137,7 @@ a.settings-link:hover, .settings-current-book:hover { background: #bce2ff15; }
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: center;
   justify-items: center;
-  min-height: 40px;
+  min-height: 44px;
   width: 100%;
   color: var(--muted);
   font-weight: 600;
@@ -200,7 +179,7 @@ a.settings-link:hover, .settings-current-book:hover { background: #bce2ff15; }
   cursor: pointer;
 }
 .settings-reset-row small { display: block; margin-top: 3px; color: var(--muted); font-weight: 500; }
-.settings-time-input { flex-wrap: wrap; border-top: 1px solid #cfe7ff17; font-size: .88rem; }
+.settings-time-input { flex-wrap: wrap; border-top: 1px solid var(--line); font-size: .88rem; }
 .settings-time-input input {
   max-width: 100%;
   padding: 6px;

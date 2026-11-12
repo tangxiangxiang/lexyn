@@ -1,4 +1,6 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { importEcdictCsv } from '../server/dictionary/import'
 import type { Page } from '@playwright/test'
 import type Database from 'better-sqlite3'
 import { openStudyLists, expect, libraryAction, fillMeaning, signIn, test, wordbookLink, writeStudy } from './fixtures'
@@ -34,6 +36,33 @@ function storedEntry(db: Database.Database, term: string) {
   return row ? JSON.parse(row.body) as Entry : undefined
 }
 
+test('chooses a built-in book from the actual dictionary and respects the composition filter', async ({ page, backend }) => {
+  const file = join(backend.directory, 'dictionary.csv')
+  await writeFile(file, [
+    'word,phonetic,definition,translation,pos,tag,bnc,frq,exchange',
+    'signal,ˈsɪɡnəl,signal,n. 信号,n,cet4 gk,0,0,',
+    'thread,θred,thread,n. 线程,n,cet4,0,0,',
+  ].join('\n'))
+  await importEcdictCsv(backend.directory, file, 'e2e')
+
+  await page.getByRole('link', { name: 'Built-in wordbooks' }).click()
+  await expect(page.getByRole('button', { name: 'Japanese' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: /Primary school/ })).toBeDisabled()
+  await page.getByRole('button', { name: 'College English Test Band 4 2 words' }).click()
+  await expect(page.getByRole('tab', { name: 'CEFR levels' })).toBeDisabled()
+  await expect(page.getByRole('tab', { name: 'Collins levels' })).toBeDisabled()
+  const bandFour = page.getByRole('button', { name: 'College English Test Band 4 2 words' })
+  await expect(bandFour).toHaveAttribute('aria-pressed', 'true')
+  await bandFour.click()
+  await expect(bandFour).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.locator('.builtin-book-detail-count')).toHaveText('1 word')
+  await page.getByRole('button', { name: 'Choose', exact: true }).click()
+  await expect(page.getByRole('link', { name: 'signal', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'thread', exact: true })).toHaveCount(0)
+  await page.goto('/study')
+  await expect(page.getByRole('button', { name: 'Words to learn 1', exact: true })).toBeVisible()
+})
+
 test('filters the word list and advances the listening queue without recording practice', async ({ page, backend }) => {
   await page.addInitScript(() => {
     window.lexynAudio = { plays: [], pauses: 0, revoked: [] }
@@ -60,6 +89,12 @@ test('filters the word list and advances the listening queue without recording p
   await page.getByLabel('Show meanings').check()
   await page.getByLabel('Sort words').selectOption('alphabetical')
   await expect(page.getByText('法定人数')).toBeVisible()
+  const showSpellings = page.getByLabel('Show spellings')
+  await showSpellings.uncheck()
+  await expect(page.getByRole('link', { name: 'quorum', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: '法定人数', exact: true })).toBeVisible()
+  await showSpellings.check()
+  await expect(page.getByRole('link', { name: 'quorum', exact: true })).toBeVisible()
   await page.locator('.spell-word-options summary').click()
   await page.getByRole('button', { name: 'Listen to words' }).click()
   await expect(page.getByRole('button', { name: 'Studied today 0' })).toBeDisabled()

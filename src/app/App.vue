@@ -14,6 +14,7 @@ const { locale } = useI18n()
 const { dark } = provideAppearance()
 const route = useRoute()
 const router = useRouter()
+const fullPage = computed(() => route.meta.shell === 'full')
 const settingsShell = computed(() => Boolean(session.value) && route.name === 'settings')
 const settingsExit = computed(() => {
   if (!settingsShell.value) return '/study'
@@ -28,33 +29,27 @@ const studyModes = [
   { path: '/progress', title: 'Progress', icon: 'progress' },
   { path: '/settings', title: 'Settings', icon: 'settings' },
 ] as const
-const themeOverrides = computed<GlobalThemeOverrides>(() => settingsShell.value ? {
-  common: {
-    primaryColor: '#b8e3ff',
-    primaryColorHover: '#d8efff',
-    primaryColorPressed: '#99cdff',
-    primaryColorSuppl: '#b8e3ff',
-    borderRadius: '10px',
-  },
-  Input: {
-    color: '#a6cdff1a',
-    colorFocus: '#a6cdff26',
-    border: '1px solid #b4d4ff38',
-  },
-} : {
-  common: {
-    primaryColor: dark.value ? '#a5d4b8' : '#285b47',
-    primaryColorHover: dark.value ? '#bce4cb' : '#346f57',
-    primaryColorPressed: dark.value ? '#8abfa1' : '#204c3a',
-    primaryColorSuppl: dark.value ? '#a5d4b8' : '#285b47',
-    borderRadius: '8px',
-  },
-  Card: {
-    color: dark.value ? '#222822' : '#fffefa',
-    borderColor: dark.value ? '#384138' : '#dedfd6',
-    borderRadius: '16px',
-    paddingMedium: '24px',
-  },
+const themeOverrides = computed<GlobalThemeOverrides>(() => {
+  const overlay = dark.value ? '#132953' : '#153980'
+  return {
+    common: {
+      primaryColor: '#b8e3ff',
+      primaryColorHover: '#d8efff',
+      primaryColorPressed: '#99cdff',
+      primaryColorSuppl: '#b8e3ff',
+      borderRadius: '12px',
+      popoverColor: overlay,
+      modalColor: overlay,
+      textColor1: '#fff',
+      textColor2: '#f3f8ff',
+      textColor3: '#d3e3ff',
+      dividerColor: '#c8e5ff38',
+    },
+    Card: { color: '#061d655e', borderColor: '#c8e5ff38', borderRadius: '20px', paddingMedium: '18px' },
+    Input: { color: '#a6cdff1a', colorFocus: '#a6cdff26', border: '1px solid #b4d4ff38' },
+    InternalSelection: { color: '#a6cdff1a', colorActive: '#a6cdff26', border: '1px solid #b4d4ff38' },
+    InternalSelectMenu: { color: overlay },
+  }
 })
 
 const serviceStatus = computed(() => ({
@@ -82,15 +77,14 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <NConfigProvider :theme="dark || settingsShell ? darkTheme : null" :theme-overrides="themeOverrides"
+  <NConfigProvider :theme="darkTheme" :theme-overrides="themeOverrides"
     :locale="locale === 'zh' ? zhCN : undefined" :date-locale="locale === 'zh' ? dateZhCN : undefined">
     <AuthPage v-if="!session" :dark="dark" :service-status="t(serviceStatus)" @retry="reconnect" />
-    <div v-else class="app-shell" :class="{ 'reader-shell': route.name === 'library-deck', 'settings-shell': settingsShell }" :data-theme="dark ? 'dark' : 'light'">
+    <div v-else class="app-shell" :class="{ 'reader-shell': route.name === 'library-deck', 'settings-shell': settingsShell, 'shell-full': fullPage, 'shell-activity': route.meta.shell === 'activity' }" :data-theme="dark ? 'dark' : 'light'">
       <a class="skip-link" href="#main">{{ t('Skip to content') }}</a>
-      <header class="app-header">
-        <RouterLink class="brand" to="/study" :aria-label="t('Lexyn home')">
+      <header v-if="!fullPage" class="app-header">
+        <RouterLink v-if="!settingsShell" class="brand" to="/study" :aria-label="t('Lexyn home')">
           <img src="/favicon.svg" width="36" height="36" alt="">
-          <span>Lexyn</span>
         </RouterLink>
         <nav :aria-label="t('Main navigation')">
           <RouterLink v-if="settingsShell" v-slot="{ href }" :to="settingsExit" custom>

@@ -220,18 +220,20 @@ function retrySearch() {
           </span>
         </button>
       </div>
-      <NAlert v-if="error" type="error">
-        {{ t('Your learning data could not be loaded from the server.') }}
-        <NButton text @click="reload">{{ t('Retry') }}</NButton>
-      </NAlert>
-      <NAlert v-if="reviewError" type="error">
-        {{ t('Your review data could not be loaded from the server.') }}
-        <NButton text @click="reloadReview">{{ t('Retry') }}</NButton>
-      </NAlert>
-      <NAlert v-if="startError" type="error" role="alert">{{ translateError(startError) }}</NAlert>
-      <NAlert v-if="startMessage" type="info" role="status">{{ t(startMessage) }}</NAlert>
-      <button class="spell-glass spell-start" type="button" :disabled="busy || (startWithReview ? !reviewData : !data)"
-        @click="start">{{ t('Start') }}</button>
+      <div class="spell-home-controls">
+        <NAlert v-if="error" type="error">
+          {{ t('Your learning data could not be loaded from the server.') }}
+          <NButton text @click="reload">{{ t('Retry') }}</NButton>
+        </NAlert>
+        <NAlert v-if="reviewError" type="error">
+          {{ t('Your review data could not be loaded from the server.') }}
+          <NButton text @click="reloadReview">{{ t('Retry') }}</NButton>
+        </NAlert>
+        <NAlert v-if="startError" type="error" role="alert">{{ translateError(startError) }}</NAlert>
+        <NAlert v-if="startMessage" type="info" role="status">{{ t(startMessage) }}</NAlert>
+        <button class="spell-glass spell-start" type="button" :disabled="busy || (startWithReview ? !reviewData : !data)"
+          @click="start">{{ t('Start') }}</button>
+      </div>
     </div>
 
     <form class="spell-search spell-glass" @submit.prevent="findWord" @focusout="handleSearchFocusout" @keydown="handleSearchKeydown">

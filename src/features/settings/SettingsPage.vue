@@ -121,10 +121,10 @@ function savePlan() {
 <template>
   <section class="page settings-page" :class="{ 'settings-page-detail': !!section }">
     <template v-if="!section">
-      <div class="settings-brand-card" aria-label="Lexyn">
+      <div class="settings-brand-card">
         <div>
-          <strong>Lexyn</strong>
-          <span>{{ t('Learn. Recall. Retain.') }}</span>
+          <h1>{{ t('Settings') }}</h1>
+          <span>Lexyn</span>
         </div>
         <img src="/favicon.svg" alt="" width="84" height="84">
       </div>

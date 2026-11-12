@@ -70,7 +70,7 @@ async function study(page: Page, words: string[]) {
   await page.getByRole('button', { name: new RegExp(`Learn ${amount} new words?`) }).click()
   await page.getByRole('link', { name: 'Start spelling' }).click()
   for (const spelling of words) {
-    await expect(page.locator('.learn-card').getByRole('heading', { name: spelling, exact: true })).toBeVisible()
+    await expect(page.locator('.spell-stage').getByRole('heading', { name: spelling, exact: true })).toBeVisible()
     await page.getByRole('textbox', { name: 'Copy the word' }).fill(spelling)
   }
   await expect(page.getByText('Session complete', { exact: true })).toBeVisible()

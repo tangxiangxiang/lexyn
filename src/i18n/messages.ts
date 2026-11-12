@@ -112,6 +112,7 @@ export const zh: Readonly<Record<string, string>> = {
   'Word list options': '词表选项',
   'Not yet learned': '尚未学习',
   'Show meanings': '显示释义',
+  'Show spellings': '显示英文拼写',
   'Sort words': '排序',
   'Recently added': '最近添加',
   'Recently learned': '最近首次学习',

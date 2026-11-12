@@ -12,6 +12,7 @@ import { t, translateError, useI18n } from '../../i18n/useI18n'
 import DictionaryMeaningView from '../dictionary/DictionaryMeaningView.vue'
 import PhoneticsView from '../dictionary/PhoneticsView.vue'
 import PronunciationButton from '../speech/PronunciationButton.vue'
+import { pronunciationAccent } from '../../ui/pronunciationAccent'
 import LibraryEditor from './LibraryEditor.vue'
 import WordPlayer from './WordPlayer.vue'
 import { readListeningBookmark, type ListeningBookmark, type Playlist } from './listeningBookmark'
@@ -31,6 +32,7 @@ const bookmark = ref<ListeningBookmark>()
 const { busy: restoringPlaylist, error: playlistError, run: restorePlaylist } = useLibraryAction()
 const grouped = ref(true)
 const showMeanings = ref(false)
+const showSpellings = ref(true)
 type WordArgs = StudyEndpoints['library/words']['args']
 const filters = [
   { value: 'all', label: 'All words' },
@@ -165,7 +167,8 @@ function resumePlaylist() {
               @click="filter = option.value">
               {{ t(option.label) }} <span>{{ words?.counts[option.value] }}</span>
             </button>
-            <label><input v-model="showMeanings" type="checkbox" />{{ t('Show meanings') }}</label>
+            <label><input v-model="showSpellings" type="checkbox" />{{ t('Show spellings') }}</label>
+            <label><input v-model="showMeanings" type="checkbox" :disabled="!showSpellings" />{{ t('Show meanings') }}</label>
             <label>{{ t('Sort words') }}
               <select v-model="sort">
                 <option value="added">{{ t('Recently added') }}</option>
@@ -187,8 +190,8 @@ function resumePlaylist() {
       <template v-else>
         <h1 class="spell-detail-term">{{ detail.entry.term }}</h1>
         <div class="spell-pronunciation">
-          <PhoneticsView :phonetics="detail.entry.phonetics" :legacy="detail.entry.phonetic" />
-          <PronunciationButton :entry-id="detail.entry.id" :revision="detail.entry.revision" label="Play pronunciation" />
+          <PronunciationButton :entry-id="detail.entry.id" :revision="detail.entry.revision" label="Play pronunciation"
+            :phonetics="detail.entry.phonetics" :legacy-phonetic="detail.entry.phonetic" :accent="pronunciationAccent" />
         </div>
         <section class="spell-detail-section" aria-labelledby="word-meaning-heading">
           <div class="spell-detail-heading">
@@ -230,8 +233,20 @@ function resumePlaylist() {
           </summary>
           <ul>
             <li v-for="entry in entries" :key="entry.id">
-              <RouterLink class="spell-chip spell-word-chip" :to="{ ...browser, query: { word: entry.id } }">{{ entry.term }}</RouterLink>
-              <p v-if="showMeanings && entry.meaning" class="spell-word-gloss">{{ entry.meaning }}</p>
+              <RouterLink class="spell-chip spell-word-chip" :to="{ ...browser, query: { word: entry.id } }"
+                :aria-label="showSpellings ? entry.term : undefined">
+                <div class="spell-word-label">
+                  <template v-if="showSpellings">
+                    <strong lang="en">{{ entry.term }}</strong>
+                    <PhoneticsView :phonetics="entry.phonetics" :legacy="entry.phonetic" />
+                  </template>
+                  <template v-if="showMeanings || !showSpellings">
+                    <DictionaryMeaningView v-if="hasFinalMeaning(entry.dictionaryMeaning)" :meaning="entry.dictionaryMeaning!" compact />
+                    <span v-else class="spell-word-gloss">{{ entry.meaning || t('Meaning not added yet') }}</span>
+                  </template>
+                </div>
+                <AppIcon class="spell-word-arrow" name="chevronRight" />
+              </RouterLink>
             </li>
           </ul>
         </component>

@@ -34,9 +34,9 @@ const calendar = computed(() => {
   <section class="page spell-subpage spell-activity">
     <header class="spell-subpage-toolbar">
       <RouterLink class="icon-control" to="/study" :aria-label="t('Lexyn home')"><AppIcon name="close" /></RouterLink>
+      <h1>{{ t('Study activity') }}</h1>
       <RouterLink class="spell-chip" to="/progress">{{ t('Learning plan') }}</RouterLink>
     </header>
-    <h1 class="visually-hidden">{{ t('Study activity') }}</h1>
     <NAlert v-if="error" type="error">
       {{ t('Your progress could not be loaded from the server.') }} <NButton text @click="reload">{{ t('Retry') }}</NButton>
     </NAlert>

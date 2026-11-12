@@ -2,6 +2,22 @@
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  --paper: #153980;
+  --panel: #061d655e;
+  --glass: #a1d8ff24;
+  --line: #c8e5ff38;
+  --ink: #fff;
+  --muted: #d3e3ff;
+  --accent: #b8e3ff;
+  --accent-surface: #b4d4ff38;
+  --hover-surface: #a1d8ff38;
+  --danger: #ffd0d6;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --radius: 12px;
+  --panel-radius: 20px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -9,41 +25,39 @@ body, h1, h2, p { margin: 0; }
 a { color: inherit; }
 
 .app-shell {
-  --canvas: #f7f7f1;
-  --sidebar: #f0f2eb;
-  --line: #dedfd6;
-  --ink: #1f2922;
-  --muted: #566158;
-  --accent: #285b47;
-  --accent-surface: #e3ece1;
-  --hover-surface: #e9ede4;
-  --danger: #a43e29;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-6: 24px;
-  --radius: 10px;
+  --canvas: #0a419e;
+  --content-width: 640px;
+  --page-gutter: clamp(12px, 4vw, 32px);
+  --backdrop-shade: #04194028;
+  position: relative;
+  isolation: isolate;
   min-height: 100vh;
   min-height: 100dvh;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
-  position: relative;
   color: var(--ink);
   background: var(--canvas);
-  color-scheme: light;
+  color-scheme: dark;
+}
+
+.app-shell::before {
+  position: fixed;
+  z-index: -1;
+  inset: 0;
+  background: linear-gradient(var(--backdrop-shade), var(--backdrop-shade)),
+    url('./spell-backdrop.svg') center / cover no-repeat;
+  filter: blur(var(--backdrop-blur, 0px));
+  content: "";
 }
 
 .app-shell[data-theme="dark"] {
-  --canvas: #191e19;
-  --sidebar: #1d241e;
-  --line: #384138;
-  --ink: #eef2e8;
-  --muted: #b1bdaf;
-  --accent: #a5d4b8;
-  --accent-surface: #2a3b30;
-  --hover-surface: #283128;
-  --danger: #ffa98c;
-  color-scheme: dark;
+  --canvas: #082353;
+  --paper: #132953;
+  --panel: #07163291;
+  --backdrop-shade: #03133484;
 }
+
+.app-shell:has(.main > :is(.spell-practice, .review-page)),
+.settings-shell { --backdrop-blur: 6px; }
 
 .skip-link {
   position: fixed;
@@ -56,31 +70,27 @@ a { color: inherit; }
 }
 
 .skip-link:focus { transform: none; }
-a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+:is(.app-shell, .library-dialog) :is(a, button, summary, input, select):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .app-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  max-width: 952px;
+  max-width: 840px;
   margin-inline: auto;
-  padding: 8px clamp(12px, 4vw, 56px);
+  padding: 8px var(--page-gutter);
 }
 
 .brand {
   display: inline-flex;
   align-items: center;
-  align-self: flex-start;
-  gap: var(--space-3);
-  margin-inline-start: 4px;
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: -0.05em;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
   text-decoration: none;
 }
 
-.brand img { display: block; }
-.app-shell[data-theme="dark"] .brand img { background: #e3ece1; border-radius: 50%; }
+.brand img { display: block; filter: grayscale(1) brightness(0) invert(1); opacity: .88; }
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -134,15 +144,19 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .update-notice { margin: 12px clamp(16px, 5vw, 64px) 0; color: var(--muted); font-size: 13px; }
 
-.main { padding: clamp(24px, 5vw, 60px) clamp(16px, 4vw, 56px) calc(48px + env(safe-area-inset-bottom)); }
-.page { max-width: 840px; margin-inline: auto; }
-.page-intro { margin-bottom: clamp(24px, 4vw, 38px); }
+.main { padding: clamp(12px, 3vw, 32px) var(--page-gutter) calc(32px + env(safe-area-inset-bottom)); }
+.page { max-width: var(--content-width); margin-inline: auto; }
+.page-intro { margin-bottom: 8px; }
+.page-toolbar { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 8px; }
+.page-toolbar h1 { grid-column: 2; margin: 0; text-align: center; font-size: 1.15rem; font-weight: 650; overflow-wrap: anywhere; }
+.page-toolbar > .icon-control { grid-column: 1; }
+.shell-full .main { padding: 0; }
 
 .page-intro h1 {
-  font-size: clamp(30px, 4vw, 46px);
+  font-size: clamp(1.35rem, 3vw, 1.75rem);
   font-weight: 690;
   line-height: 1.08;
-  letter-spacing: -0.05em;
+  letter-spacing: -.025em;
 }
 
 .page-intro p, .empty-content p, .setting-copy p {
