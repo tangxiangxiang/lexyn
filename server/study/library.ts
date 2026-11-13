@@ -9,6 +9,8 @@ import { cleanDeck, cleanEntry, normalizeTerm, type DeckListSummary, type Deck, 
 import type { LearnProgress, PracticeEvent } from '../../shared/domain/learning.ts'
 import type { ReviewEvent, ReviewSchedulerConfig } from '../../shared/domain/review.ts'
 import { manualMeaningFromImport, type DuplicateMode, type ImportPreview } from '../../shared/domain/library-import.ts'
+import { recordWordCompletion, wordKey, type Word, type WordHistoryLink, type WordProgress } from '../../shared/domain/word.ts'
+import { cardLinks } from './words.ts'
 import { checkRevision, StudyError, type StudyStore } from './store.ts'
 
 const newEntity = (now: number) => ({ id: randomUUID(), createdAt: now, updatedAt: now, revision: 1 })
@@ -48,7 +50,7 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
     if (entry && entry.id !== except) throw new StudyError('This deck already has an active word with that term.', 409)
   }
   function makeEntry(deckId: string, input: EntryInput, now: number, previous?: Entry): Entry {
-    const sameTerm = previous !== undefined && normalizeTerm(previous.term) === normalizeTerm(input.term)
+    const sameTerm = previous !== undefined && stableJson(wordKey(previous.term)) === stableJson(wordKey(input.term))
     const termChanged = previous !== undefined && !sameTerm
     const supplied = termChanged ? null : input.dictionaryMeaning
     const legacyChanged = sameTerm && supplied === undefined && previous.meaning !== input.meaning && hasFinalMeaning(previous.dictionaryMeaning)
@@ -83,7 +85,7 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       phoneticsCleared: phoneticsCleared || undefined,
       phoneticsNeedsReview: phoneticsUnchanged && !phoneticsCleared ? previous.phoneticsNeedsReview : undefined,
       meaningSource, meaningNeedsReview: (meaningSource === 'ai' || meaningSource === 'dictionary') && needsReview ? true : undefined,
-      termChangedAt: previous && previous.normalizedTerm !== normalizedTerm ? now : previous?.termChangedAt,
+      termChangedAt: termChanged ? now : previous?.termChangedAt,
     }
   }
 
@@ -217,9 +219,9 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       const deck = requireDeck(deckId)
       const entry = makeEntry(deckId, input, now)
       unique(deckId, entry.normalizedTerm)
-      store.saveEntry(entry)
-      store.lists.append(deck, [entry.id])
-      return entry
+      const saved = store.saveEntry(entry)
+      store.lists.append(deck, [saved.id])
+      return saved
     },
     updateEntry(deckId: string, id: string, input: EntryInput, revision: number, now: number) {
       const previous = requireEntry(deckId, id)
@@ -227,8 +229,7 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       if (previous.deletedAt !== undefined) throw new StudyError('Restore this word before editing it.', 409)
       const entry = makeEntry(deckId, { ...input, explanation: input.explanation ?? previous.explanation }, now, previous)
       unique(deckId, entry.normalizedTerm, id)
-      store.saveEntry(entry)
-      return entry
+      return store.saveEntry(entry)
     },
     setEntryRemoved(deckId: string, id: string, removed: boolean, revision: number, now: number) {
       const entry = requireEntry(deckId, id)
@@ -280,15 +281,40 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       const decks = deckId ? [requireDeck(deckId, false)] : store.decks()
       const entries = store.entries(deckId)
       const ids = new Set(entries.map(({ id }) => id))
+      const practiceEvents = store.all<PracticeEvent>('SELECT body FROM practice_events').filter(({ entryId }) => ids.has(entryId))
+      const spellingAttempts = store.all<SpellingAttempt>('SELECT body FROM spelling_attempts').filter(({ entryId }) => ids.has(entryId))
+      function historyWords(table: 'practice_events' | 'spelling_attempts', events: { id: string }[]) {
+        const included = new Set(events.map(({ id }) => id))
+        return (store.db.prepare(`SELECT id, word_id AS wordId FROM ${table}`).all() as WordHistoryLink[])
+          .filter(({ id }) => included.has(id))
+      }
+      const practiceWords = historyWords('practice_events', practiceEvents)
+      const spellingWords = historyWords('spelling_attempts', spellingAttempts)
+      const allReviewEvents = store.all<ReviewEvent>('SELECT body FROM review_events')
+      const externalCards = new Set(allReviewEvents.filter(({ entryId }) => !ids.has(entryId)).map(({ cardId }) => cardId))
+      const reviewCards = store.cards().filter(({ id, entryId }) => ids.has(entryId) && !externalCards.has(id))
+      const includedCards = new Set(reviewCards.map(({ id }) => id))
+      const wordCards = cardLinks(store.db).filter(({ cardId }) => includedCards.has(cardId))
+      const reviewEvents = allReviewEvents.filter(({ cardId }) => includedCards.has(cardId))
+      const includedWords = new Set([...entries, ...wordCards, ...practiceWords, ...spellingWords].map(({ wordId }) => wordId))
+      const words = store.all<Word>('SELECT body FROM words').filter(({ id }) => !deckId || includedWords.has(id))
+      const partialProgress = new Map<string, WordProgress>()
+      if (deckId) {
+        const byEvent = new Map(practiceWords.map(({ id, wordId }) => [id, wordId]))
+        for (const event of practiceEvents) {
+          if (event.outcome !== 'completed' || event.source === 'free') continue
+          const wordId = byEvent.get(event.id)!
+          partialProgress.set(wordId, recordWordCompletion(partialProgress.get(wordId), wordId, event.completedAt))
+        }
+      }
       return {
         format: 'lexyn-library', formatVersion: libraryFormatVersion, exportedAt: new Date().toISOString(),
         metadata: { scope: deckId ? 'deck' : 'library' },
         decks, entries, ...store.lists.export(deckId),
-        practiceEvents: store.all<PracticeEvent>('SELECT body FROM practice_events').filter(({ entryId }) => ids.has(entryId)),
-        spellingAttempts: store.all<SpellingAttempt>('SELECT body FROM spelling_attempts').filter(({ entryId }) => ids.has(entryId)),
+        words, wordProgress: deckId ? [...partialProgress.values()] : store.progress(), wordCards, practiceWords, spellingWords,
+        practiceEvents, spellingAttempts,
         learnProgress: store.all<LearnProgress>('SELECT body FROM learn_progress').filter(({ entryId }) => ids.has(entryId)),
-        reviewCards: store.cards().filter(({ entryId }) => ids.has(entryId)),
-        reviewEvents: store.all<ReviewEvent>('SELECT body FROM review_events').filter(({ entryId }) => ids.has(entryId)),
+        reviewCards, reviewEvents,
         schedulerConfig: config,
         settings: { ...store.settings(), spelling: store.spellingSettings() },
       }

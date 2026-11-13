@@ -25,6 +25,7 @@ export interface SpellingError {
 export interface SpellingAttempt {
   id: string
   entryId: string
+  listId?: string
   sessionId: string
   round: number
   attempt: number
@@ -78,10 +79,13 @@ export function spellingStats(rows: SpellingAttempt[], term: string, termChanged
       positions.set(error.position, position)
     }
   }
+  const firstAttempts = rows.filter((row) => row.attempt === 1 && row.round === 0 && !row.assisted)
+  const firstCorrect = firstAttempts.filter(({ correct }) => correct).length
   return {
     attempts: rows.length,
     failures: rows.filter((row) => !row.correct).length,
-    firstCorrect: rows.filter((row) => row.correct && row.attempt === 1 && row.round === 0 && !row.assisted).length,
+    firstCorrect,
+    firstTryCorrectRate: firstAttempts.length ? firstCorrect / firstAttempts.length : undefined,
     latest: rows.reduce<number | undefined>((latest, row) => Math.max(latest ?? 0, row.time), undefined),
     currentAttempts: current.length,
     positions: [...positions.values()].sort((a, b) => a.position - b.position),

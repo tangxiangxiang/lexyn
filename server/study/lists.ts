@@ -38,12 +38,15 @@ const learned = "json_extract(p.body, '$.firstCompletedAt') IS NOT NULL"
 
 export function createListStore(db: Database.Database) {
   return {
+    memberList(entryId: string) {
+      return db.prepare('SELECT list_id FROM deck_list_members WHERE entry_id=?').pluck().get(entryId) as string | undefined
+    },
     summaries(deckId?: string) {
       return db.prepare(`SELECT l.id, l.deck_id AS deckId, l.name, l.list_order AS "order",
         COUNT(e.id) AS count, COUNT(CASE WHEN ${learned} THEN 1 END) AS learned
         FROM deck_lists l LEFT JOIN deck_list_members m ON m.list_id=l.id
         LEFT JOIN entries e ON e.id=m.entry_id AND e.active_term IS NOT NULL
-        LEFT JOIN learn_progress p ON p.entry_id=e.id
+        LEFT JOIN word_progress p ON p.word_id=e.word_id
         ${deckId ? 'WHERE l.deck_id=?' : ''} GROUP BY l.id ORDER BY l.deck_id, l.list_order`)
         .all(...(deckId ? [deckId] : [])) as DeckListSummary[]
     },
@@ -66,7 +69,7 @@ export function createListStore(db: Database.Database) {
           COUNT(CASE WHEN ${learned} THEN 1 END) AS learned,
           COUNT(CASE WHEN e.active_term IS NOT NULL AND NOT (${learned}) THEN 1 END) AS remaining
           FROM deck_list_members m JOIN entries e ON e.id=m.entry_id
-          LEFT JOIN learn_progress p ON p.entry_id=e.id WHERE m.list_id=?`)
+          LEFT JOIN word_progress p ON p.word_id=e.word_id WHERE m.list_id=?`)
           .get(list.id) as { position: number; learned: number; remaining: number }
         if (!last.learned || last.remaining) position = last.position
       }

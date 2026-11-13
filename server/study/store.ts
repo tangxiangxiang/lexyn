@@ -5,6 +5,8 @@ import type { Deck, Entry } from '../../shared/domain/library.ts'
 import type { LearnSession, PracticeEvent, LearnProgress } from '../../shared/domain/learning.ts'
 import type { ReviewSession, ReviewCard, ReviewEvent } from '../../shared/domain/review.ts'
 import { defaultSpelling, type PracticeSource, type SpellingAttempt, type SpellingPreferences } from '../../shared/domain/spelling.ts'
+import { findWord, insertCardLink, saveWordProgress } from './words.ts'
+import { wordKey, type Word, type WordCardLink, type WordProgress } from '../../shared/domain/word.ts'
 import { allStudyDays } from '../../shared/domain/study-plan.ts'
 
 export class StudyError extends Error {
@@ -31,6 +33,12 @@ export function createStudyStore(db: Database.Database, ownerId: string) {
   function one<T>(sql: string, ...params: unknown[]): T | undefined {
     const row = db.prepare(sql).get(...params) as { body: string } | undefined
     return row && JSON.parse(row.body) as T
+  }
+
+  function entryWord(id: string) {
+    const wordId = db.prepare('SELECT word_id FROM entries WHERE id=?').pluck().get(id) as string | undefined
+    if (!wordId) throw new Error('An Entry is missing its Word.')
+    return wordId
   }
 
   return {
@@ -74,9 +82,10 @@ export function createStudyStore(db: Database.Database, ownerId: string) {
       db.prepare(`INSERT INTO owner_settings (owner_id, daily_new_words, timezone, spelling) VALUES (?,10,'UTC',?)
         ON CONFLICT(owner_id) DO UPDATE SET spelling=excluded.spelling`).run(ownerId, JSON.stringify(value))
     },
-    addSpellingAttempt(value: SpellingAttempt) {
-      db.prepare('INSERT INTO spelling_attempts VALUES (?,?,?,?,?,?)')
-        .run(value.id, value.entryId, value.sessionId, value.round, value.attempt, JSON.stringify(value))
+    addSpellingAttempt(value: SpellingAttempt, wordId?: string) {
+      db.prepare('INSERT INTO spelling_attempts (id,entry_id,session_id,round,attempt,body,word_id) VALUES (?,?,?,?,?,?,?)')
+        .run(value.id, value.entryId, value.sessionId, value.round, value.attempt, JSON.stringify(value),
+          wordId ?? entryWord(value.entryId))
     },
     decks: () => all<Deck>('SELECT body FROM decks'),
     deck: (id: string) => one<Deck>('SELECT body FROM decks WHERE id=?', id),
@@ -91,21 +100,33 @@ export function createStudyStore(db: Database.Database, ownerId: string) {
         ON CONFLICT(id) DO UPDATE SET body=excluded.body,revision=excluded.revision`)
         .run(deck.id, JSON.stringify(deck), deck.revision)
     },
-    saveEntry(entry: Entry) {
-      db.prepare(`INSERT INTO entries (id,deck_id,active_term,body,revision) VALUES (?,?,?,?,?)
-        ON CONFLICT(id) DO UPDATE SET active_term=excluded.active_term,body=excluded.body,revision=excluded.revision`)
-        .run(entry.id, entry.deckId, entry.deletedAt === undefined ? entry.normalizedTerm : null,
-          JSON.stringify(entry), entry.revision)
+    saveEntry(entry: Entry, restoredWordId?: string) {
+      const prior = one<Word>('SELECT w.body FROM words w JOIN entries e ON e.word_id=w.id WHERE e.id=?', entry.id)
+      const key = wordKey(entry.term, prior?.language)
+      const wordId = restoredWordId ?? (prior && prior.normalizedTerm === key.normalizedTerm && prior.variant === key.variant
+        ? prior.id : findWord(db, entry.term, entry.termChangedAt ?? entry.createdAt, key.language).id)
+      const value = { ...entry, wordId }
+      db.prepare(`INSERT INTO entries (id,deck_id,active_term,body,revision,word_id) VALUES (?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET active_term=excluded.active_term,body=excluded.body,revision=excluded.revision,word_id=excluded.word_id`)
+        .run(value.id, value.deckId, value.deletedAt === undefined ? value.normalizedTerm : null,
+          JSON.stringify(value), value.revision, wordId)
+      return value
     },
-    progress: () => all<LearnProgress>('SELECT body FROM learn_progress'),
-    entryProgress: (id: string) => one<LearnProgress>('SELECT body FROM learn_progress WHERE entry_id=?', id),
+    entryWord,
+    entriesForWord: (id: string) => all<Entry>('SELECT body FROM entries WHERE word_id=? AND active_term IS NOT NULL ORDER BY id', id),
+    progress: () => all<WordProgress>('SELECT body FROM word_progress'),
+    wordProgress: (id: string) => one<WordProgress>('SELECT body FROM word_progress WHERE word_id=?', id),
+    entryProgress: (id: string) => one<WordProgress>(
+      'SELECT p.body FROM word_progress p JOIN entries e ON p.word_id=e.word_id WHERE e.id=?', id),
+    legacyProgress: (id: string) => one<LearnProgress>('SELECT body FROM learn_progress WHERE entry_id=?', id),
+    saveWordProgress: (progress: WordProgress) => saveWordProgress(db, progress),
     saveProgress(progress: LearnProgress) {
       db.prepare('INSERT INTO learn_progress VALUES (?,?) ON CONFLICT(entry_id) DO UPDATE SET body=excluded.body')
         .run(progress.entryId, JSON.stringify(progress))
     },
-    addPractice(event: PracticeEvent) {
-      db.prepare('INSERT INTO practice_events VALUES (?,?,?)')
-        .run(event.id, event.entryId, JSON.stringify(event))
+    addPractice(event: PracticeEvent, wordId?: string) {
+      db.prepare('INSERT INTO practice_events (id,entry_id,body,word_id) VALUES (?,?,?,?)')
+        .run(event.id, event.entryId, JSON.stringify(event), wordId ?? entryWord(event.entryId))
     },
     addReview(event: ReviewEvent) {
       db.prepare('INSERT INTO review_events VALUES (?,?,?,?,?)')
@@ -115,6 +136,11 @@ export function createStudyStore(db: Database.Database, ownerId: string) {
       db.prepare('INSERT INTO review_cards VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,body=excluded.body')
         .run(card.id, card.entryId, card.direction, card.revision, JSON.stringify(card))
     },
+    linkCard: (link: WordCardLink) => insertCardLink(db, link),
+    activeCards: () => all<ReviewCard & { wordId: string }>(
+      "SELECT json_set(c.body, '$.wordId', w.word_id) AS body FROM review_cards c JOIN word_cards w ON c.id=w.card_id WHERE w.active=1"),
+    activeCard: (wordId: string) => one<ReviewCard>(
+      'SELECT c.body FROM review_cards c JOIN word_cards w ON c.id=w.card_id WHERE w.word_id=? AND w.active=1', wordId),
     card: (id: string) => one<ReviewCard>('SELECT body FROM review_cards WHERE id=?', id),
     cards: () => all<ReviewCard>('SELECT body FROM review_cards'),
     learn: (id: string) => one<Versioned<LearnSession>>('SELECT body FROM learn_sessions WHERE id=?', id),

@@ -4,7 +4,9 @@ import type { LearnProgress, PracticeEvent } from '../domain/learning.ts'
 
 import type { SpellingAttempt, SpellingPreferences } from '../domain/spelling.ts'
 
-export const libraryFormatVersion = 7
+import type { Word, WordCardLink, WordHistoryLink, WordProgress } from '../domain/word.ts'
+
+export const libraryFormatVersion = 8
 
 interface LibraryBackupData {
   format: 'lexyn-library'
@@ -23,5 +25,7 @@ interface LibraryBackupData {
 export type LibraryExport = LibraryBackupData & (
   | { formatVersion: 4 | 5 }
   | { formatVersion: 6; lists: DeckList[]; listMembers: DeckListMember[] }
-  | { formatVersion: typeof libraryFormatVersion; lists: DeckList[]; listMembers: DeckListMember[]; spellingAttempts: SpellingAttempt[] }
+  | { formatVersion: 7; lists: DeckList[]; listMembers: DeckListMember[]; spellingAttempts: SpellingAttempt[] }
+  | { formatVersion: typeof libraryFormatVersion; lists: DeckList[]; listMembers: DeckListMember[]; spellingAttempts: SpellingAttempt[]
+    words: Word[]; wordProgress: WordProgress[]; wordCards: WordCardLink[]; practiceWords: WordHistoryLink[]; spellingWords: WordHistoryLink[] }
 )

@@ -56,7 +56,7 @@ test.each([1, 2, latestDatabaseVersion + 1])('refuses an unsupported database ve
 async function interimDatabase() {
   const db = new Database(':memory:')
   db.pragma('foreign_keys = ON')
-  migrate(db)
+  migrate(db, 11)
   const password = randomUUID()
   await initializeOwner(db, 'dev-admin', password)
   const auth = createAuth(db)
@@ -64,7 +64,6 @@ async function interimDatabase() {
   if (login.status !== 'ok') throw new Error('Test login failed.')
   createStudyStore(db, login.ownerId).saveSettings(24, 'Asia/Shanghai')
   db.exec(`
-    DROP TABLE spelling_attempts; ALTER TABLE owner_settings DROP COLUMN spelling;
     DROP TABLE deck_list_members; DROP TABLE deck_lists; DROP INDEX entries_id_deck;
     DROP TABLE vocabulary_jobs;
     DROP TABLE speech_credentials;
@@ -137,28 +136,20 @@ test('upgrades schema 11 with an existing practice record and keeps that record 
   const db = new Database(':memory:')
   db.pragma('foreign_keys=ON')
   try {
-    migrate(db)
+    migrate(db, 11)
     await initializeOwner(db, 'test-admin', 'test-owner-password')
     const ownerId = db.prepare('SELECT id FROM owner').pluck().get() as string
     const store = createStudyStore(db, ownerId)
     const deckId = randomUUID(), entryId = randomUUID()
     store.saveDeck({ id: deckId, name: 'Legacy', revision: 1, createdAt: 1, updatedAt: 1 })
-    store.saveEntry({ id: entryId, deckId, term: 'cache', normalizedTerm: 'cache', meaning: '缓存', revision: 1, createdAt: 1, updatedAt: 1 })
+    const entry = { id: entryId, deckId, term: 'cache', normalizedTerm: 'cache', meaning: '缓存', revision: 1, createdAt: 1, updatedAt: 1 }
+    db.prepare('INSERT INTO entries VALUES (?, ?, ?, ?, ?)').run(entryId, deckId, entry.normalizedTerm, JSON.stringify(entry), entry.revision)
     const event = { id: randomUUID(), deckId, entryId, sessionId: randomUUID(), mode: 'copy', outcome: 'completed',
       attempts: 2, firstTryCorrect: false, assisted: false, startedAt: 1, completedAt: 2 } as const
-    store.addPractice(event)
-    db.exec(`
-      DROP TABLE spelling_attempts;
-      ALTER TABLE owner_settings DROP COLUMN spelling;
-      DROP INDEX learn_one_open;
-      CREATE UNIQUE INDEX learn_one_open ON learn_sessions ((1)) WHERE status IN ('active','paused');
-      DROP INDEX practice_session_entry;
-      CREATE UNIQUE INDEX practice_session_entry ON practice_events (json_extract(body, '$.sessionId'), entry_id);
-      PRAGMA user_version=11;
-    `)
+    db.prepare('INSERT INTO practice_events VALUES (?, ?, ?)').run(event.id, entryId, JSON.stringify(event))
     migrate(db)
     migrate(db)
-    expect(db.pragma('user_version', { simple: true })).toBe(12)
+    expect(db.pragma('user_version', { simple: true })).toBe(latestDatabaseVersion)
     expect(store.all('SELECT body FROM practice_events')).toEqual([event])
     expect(store.all('SELECT body FROM spelling_attempts')).toEqual([])
     expect(store.spellingSettings()).toMatchObject({ keyboard: 'full', retryLimit: 0, strict: true })

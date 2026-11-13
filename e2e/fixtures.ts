@@ -83,9 +83,9 @@ export async function studyRequest(page: Page, path: string, args: unknown[] = [
 }
 export const writeStudy = (page: Page, path: string, args: unknown[], key: string = randomUUID()) => studyRequest(page, path, args, key)
 
-async function startFixture(initialOwner: boolean, speechConfigured: boolean) {
+async function startFixture(initialOwner: boolean, speechConfigured: boolean, schemaVersion?: number) {
   const directory = mkdtempSync(join(tmpdir(), 'lexyn-e2e-'))
-  const db = openDatabase(directory)
+  const db = openDatabase(directory, schemaVersion)
   const setupToken = initialOwner ? undefined : randomBytes(32).toString('base64url')
   if (initialOwner) await initializeOwner(db, username, password)
   if (initialOwner && speechConfigured) {
@@ -151,13 +151,14 @@ async function startFixture(initialOwner: boolean, speechConfigured: boolean) {
 }
 
 export const test = base.extend<{
-  backend: Awaited<ReturnType<typeof startFixture>>; initialOwner: boolean; englishUI: boolean; speechConfigured: boolean
+  backend: Awaited<ReturnType<typeof startFixture>>; initialOwner: boolean; englishUI: boolean; speechConfigured: boolean; schemaVersion?: number
 }>({
   initialOwner: [true, { option: true }],
+  schemaVersion: [undefined, { option: true }],
   englishUI: [true, { option: true }],
   speechConfigured: [true, { option: true }],
-  backend: async ({ initialOwner, speechConfigured }, use) => {
-    const fixture = await startFixture(initialOwner, speechConfigured)
+  backend: async ({ initialOwner, speechConfigured, schemaVersion }, use) => {
+    const fixture = await startFixture(initialOwner, speechConfigured, schemaVersion)
     try { await use(fixture) } finally { await fixture.close() }
   },
   baseURL: async ({ backend }, use) => { await use(backend.origin) },

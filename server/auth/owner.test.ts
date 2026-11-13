@@ -122,12 +122,7 @@ test.each([
 ])('preserves existing Owner credentials under the $kind', async ({ password, rehash }) => {
   const db = new Database(':memory:')
   try {
-    migrate(db)
-    db.exec(`DROP TABLE deck_list_members; DROP TABLE deck_lists; DROP INDEX entries_id_deck; DROP TABLE vocabulary_jobs; DROP TABLE speech_credentials; DROP TABLE speech_settings; DROP TABLE speech_assets;
-      ALTER TABLE owner_settings DROP COLUMN study_weekdays;
-      ALTER TABLE owner_settings DROP COLUMN review_reset_minutes;
-    DROP TABLE spelling_attempts; ALTER TABLE owner_settings DROP COLUMN spelling;
-      ALTER TABLE owner DROP COLUMN username; PRAGMA user_version=3;`)
+    migrate(db, 3)
     const id = randomUUID()
     const salt = randomBytes(32).toString('hex')
     const hash = scryptSync(password, salt, 64, { N: 32768, r: 8, p: 3, maxmem: 64 * 1024 * 1024 }).toString('hex')

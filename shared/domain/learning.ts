@@ -6,6 +6,7 @@ export type LearnSessionStatus = 'active' | 'paused' | 'completed' | 'abandoned'
 export interface PracticeEvent {
   id: string
   deckId: string
+  listId?: string
   entryId: string
   sessionId: string
   mode: LearnMode
@@ -38,6 +39,7 @@ export interface LearnSession {
   deckId: string
   mode: LearnMode
   entryIds: string[]
+  entryWords?: Record<string, string | null>
   currentIndex: number
   startedAt: number
   updatedAt: number

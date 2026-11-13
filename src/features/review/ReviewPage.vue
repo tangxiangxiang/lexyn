@@ -22,15 +22,16 @@ import { formatReviewTime, useReviewOverview } from './useReviewOverview'
 const route = useRoute()
 const router = useRouter()
 const deckId = computed(() => typeof route.query.deckId === 'string' ? route.query.deckId : undefined)
-const { data: overview, error: overviewError, reload: reloadOverview } = useReviewOverview(deckId)
+const listId = computed(() => typeof route.query.listId === 'string' ? route.query.listId : undefined)
+const { data: overview, error: overviewError, reload: reloadOverview } = useReviewOverview(deckId, false, listId)
 const sessionId = computed(() => typeof route.query.session === 'string' ? route.query.session : undefined)
 const flow = computed(() => typeof route.query.flow === 'string' ? route.query.flow : undefined)
 const { data: round, error: roundError, reload: reloadRound } = useLibraryQuery(
-  () => [deckId.value, sessionId.value] as const, ([deck, id], signal) => review.session(deck, id, signal),
-  ([deck, id]) => [deck, id].join('/'),
+  () => [deckId.value, sessionId.value, listId.value] as const, ([deck, id, list], signal) => review.session(deck, id, signal, list),
+  ([deck, id, list]) => [deck, id, list].join('/'),
 )
 const { data: open, error: openError, reload: reloadOpen } = useLibraryQuery(() => null, (_, signal) => review.open(signal))
-const conflict = computed(() => open.value && open.value.deckId !== deckId.value ? open.value : undefined)
+const conflict = computed(() => open.value && (open.value.deckId !== deckId.value || open.value.listId !== listId.value) ? open.value : undefined)
 const deckOptions = computed(() => overview.value?.decks.map(({ id, name }) => ({ label: name, value: id })) ?? [])
 const answer = ref('')
 const recallMode = ref<'mind' | 'spell'>('mind')
@@ -147,8 +148,8 @@ async function refresh() {
   await Promise.all([reloadRound(), reloadOverview(), reloadOpen()])
 }
 
-async function startReview(deck: string | undefined) {
-  const next = await review.start(deck, true)
+async function startReview(deck: string | undefined, list?: string) {
+  const next = deck && list ? await review.startList(deck, list) : await review.start(deck, true)
   if (next.kind === 'round') await router.replace(reviewSessionRoute(next.round.session))
   else await refresh()
 }
@@ -157,9 +158,10 @@ function endExisting() {
   const existing = conflict.value
   if (!existing) return
   const deck = deckId.value
+  const list = listId.value
   void run(async () => {
     await review.setStatus(existing.sessionId, 'abandoned', existing.revision)
-    await startReview(deck)
+    await startReview(deck, list)
   })
 }
 
@@ -251,7 +253,7 @@ function selectDeck(id: string | null) {
         <h2>{{ t('Another review round is open') }}</h2>
         <p>{{ t('Continue that session or end it before starting here.') }}</p>
         <div class="review-actions">
-          <NButton type="primary" :disabled="busy" @click="run(() => startReview(conflict?.deckId))">{{ t('Continue existing session') }}</NButton>
+          <NButton type="primary" :disabled="busy" @click="run(() => startReview(conflict?.deckId, conflict?.listId))">{{ t('Continue existing session') }}</NButton>
           <NButton :disabled="busy" @click="endExisting">{{ t('End existing session and start') }}</NButton>
         </div>
       </section>
@@ -283,7 +285,7 @@ function selectDeck(id: string | null) {
           </p>
           <div v-if="round?.session.status !== 'paused' && !conflict">
             <NButton type="primary" :disabled="busy || !overview.due && !overview.firstRecall"
-              @click="run(() => startReview(deckId))">{{ t('Start review') }}</NButton>
+              @click="run(() => startReview(deckId, listId))">{{ t('Start review') }}</NButton>
           </div>
         </div>
       </section>

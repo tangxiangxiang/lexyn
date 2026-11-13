@@ -49,7 +49,7 @@ export function validateCardState(value: unknown, cardId: string) {
   }
 }
 
-export function validateEntity(payload: Record<string, unknown>, kind: 'deck' | 'entry') {
+export function validateEntity(payload: Record<string, unknown>, kind: 'deck' | 'entry', globalWords = false) {
   if (!isUuid(payload.id) || !integer(payload.revision, 1) || !time(payload.createdAt)
     || !time(payload.updatedAt) || Number(payload.updatedAt) < Number(payload.createdAt)) {
     throw new InvalidInput('Invalid library record revision or time.')
@@ -65,7 +65,7 @@ export function validateEntity(payload: Record<string, unknown>, kind: 'deck' | 
     }
     return payload.id
   }
-  fields(payload, 'id deckId term meaning dictionaryMeaning dictionaryReference phonetics phoneticsCleared phoneticsNeedsReview meaningSource meaningNeedsReview explanation phonetic pronunciationOverride example note normalizedTerm createdAt updatedAt revision deletedAt termChangedAt')
+  fields(payload, 'id deckId term meaning dictionaryMeaning dictionaryReference phonetics phoneticsCleared phoneticsNeedsReview meaningSource meaningNeedsReview explanation phonetic pronunciationOverride example note normalizedTerm createdAt updatedAt revision deletedAt termChangedAt' + (globalWords ? ' wordId' : ''))
   const term = string(payload, 'term')!
   const meaning = string(payload, 'meaning')!
   if ((payload.meaningSource !== undefined && (!meaning || (payload.meaningSource !== 'manual' && payload.meaningSource !== 'ai' && payload.meaningSource !== 'dictionary')))
@@ -119,12 +119,12 @@ export function validateSpellingChanges(value: unknown): Partial<SpellingPrefere
   return Object.fromEntries(Object.entries(validated).filter(([key]) => Object.hasOwn(patch, key)))
 }
 
-export function validateEvent(payload: Record<string, unknown>, kind: 'practice' | 'review', config: ReviewSchedulerConfig) {
+export function validateEvent(payload: Record<string, unknown>, kind: 'practice' | 'review', config: ReviewSchedulerConfig, globalWords = false) {
   if (!isUuid(payload.id) || !isUuid(payload.deckId) || !isUuid(payload.entryId) || !isUuid(payload.sessionId)) {
     throw new InvalidInput('Invalid study event identity.')
   }
   if (kind === 'practice') {
-    fields(payload, 'id deckId entryId sessionId mode outcome attempts firstTryCorrect assisted startedAt completedAt source round')
+    fields(payload, 'id deckId entryId sessionId mode outcome attempts firstTryCorrect assisted startedAt completedAt source round' + (globalWords ? ' listId' : ''))
     if ((payload.mode !== 'copy' && payload.mode !== 'dictation') || (payload.outcome !== 'completed' && payload.outcome !== 'skipped')
       || !integer(payload.attempts) || typeof payload.firstTryCorrect !== 'boolean' || typeof payload.assisted !== 'boolean'
       || !time(payload.startedAt) || !time(payload.completedAt)
@@ -133,7 +133,7 @@ export function validateEvent(payload: Record<string, unknown>, kind: 'practice'
     return payload.id
   }
   fields(payload, 'id cardId deckId entryId sessionId direction rating reviewedAt schedulerModel schedulerConfigVersion schedulerConfigSnapshot previousCardState resultingCardState schedulerRevlog')
-  const cardId = reviewCardId(payload.entryId)
+  const cardId = globalWords && typeof payload.cardId === 'string' ? payload.cardId : reviewCardId(payload.entryId)
   if (payload.cardId !== cardId || payload.direction !== REVIEW_DIRECTION
     || typeof payload.rating !== 'string' || !isReviewRating(payload.rating) || !time(payload.reviewedAt)) {
     throw new InvalidInput('Invalid review event.')

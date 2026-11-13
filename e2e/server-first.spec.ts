@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Page } from '@playwright/test'
-import { expect, signIn, studyRequest, test, wordbookLink, writeStudy } from './fixtures'
+import { expect, openStudyLists, signIn, studyRequest, test, wordbookLink, writeStudy } from './fixtures'
 import { rebuildCardFromEvents } from '../shared/srs/scheduler'
 
 async function read(page: Page, path: string, args: unknown[] = []) {
@@ -18,9 +18,9 @@ async function word(page: Page) {
   const entry = await write(page, 'library/create-entry', [deck.id, { term: 'cache', meaning: '缓存' }])
   return { deck, entry }
 }
-async function learn(page: Page, deck: string, entry: string) {
+async function learn(page: Page, deck: string, entry: string, term = 'cache') {
   const session = await write(page, 'learn/start', [deck, 'copy', [entry], true])
-  await write(page, 'learn/attempt', [session.sessionId, entry, 'cache', session.revision])
+  await write(page, 'learn/attempt', [session.sessionId, entry, term, session.revision])
   return (await read(page, 'learn/session', [session.sessionId])).session
 }
 async function revealed(page: Page) {
@@ -191,8 +191,8 @@ test('the Review dial explains a conflicting round and one Start resumes the sel
   const previous = await revealed(page)
   await write(page, 'review/status', [previous.sessionId, 'paused', previous.revision])
   const book = await write(page, 'library/create-deck', [{ name: 'Current vocabulary' }])
-  const entry = await write(page, 'library/create-entry', [book.id, { term: 'cache', meaning: '高速缓存' }])
-  const finished = await learn(page, book.id, entry.id)
+  const entry = await write(page, 'library/create-entry', [book.id, { term: 'buffer', meaning: '缓冲区' }])
+  const finished = await learn(page, book.id, entry.id, 'buffer')
   await write(page, 'learn/finish', [finished.sessionId, entry.id, 'completed', finished.revision])
   await page.reload()
   await wordbookLink(page, book.name).click()
@@ -202,7 +202,7 @@ test('the Review dial explains a conflicting round and one Start resumes the sel
   await expect(page.getByRole('heading', { name: 'Another review round is open' })).toBeVisible()
   expect((await read(page, 'review/open')).status).toBe('paused')
   await page.getByRole('button', { name: 'End existing session and start' }).click()
-  await expect(page.getByText('高速缓存', { exact: true })).toBeVisible()
+  await expect(page.getByText('缓冲区', { exact: true })).toBeVisible()
   const current = await read(page, 'review/open')
   expect(current).toMatchObject({ deckId: book.id, status: 'active' })
   expect((await read(page, 'review/scoped', [previous.deckId, previous.sessionId])).session.status).toBe('abandoned')
@@ -214,7 +214,66 @@ test('the Review dial explains a conflicting round and one Start resumes the sel
   await page.goto('/study')
   await page.getByRole('button', { name: 'Words to review 1' }).press('Enter')
   await page.getByRole('button', { name: 'Start', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'cache', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'buffer', exact: true })).toBeVisible()
   expect((await read(page, 'review/open')).sessionId).toBe(current.sessionId)
   expect(backend.db.prepare('SELECT count(*) FROM review_events').pluck().get()).toBe(0)
+})
+
+test('shares a learned word and one FSRS chain across books while keeping each local prompt', async ({ page, backend }) => {
+  const a = await write(page, 'library/create-deck', [{ name: 'CET4' }])
+  const appleA = await write(page, 'library/create-entry', [a.id, { term: 'apple', meaning: '苹果' }])
+  await page.reload()
+  await openStudyLists(page, 'CET4')
+  await page.getByRole('link', { name: 'Start learning' }).click()
+  await page.getByRole('button', { name: 'Learn 1 new word' }).click()
+  await page.getByRole('link', { name: 'Start spelling' }).click()
+  await page.getByRole('textbox', { name: 'Copy the word' }).fill('apple')
+  await expect(page.getByText('Session complete', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Start review' }).click()
+  await page.getByRole('button', { name: 'Show answer' }).click()
+  await page.getByRole('button', { name: 'Again', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Review round complete' })).toBeVisible()
+  const initial = (await read(page, 'backup/library', [null])).reviewCards[0]
+
+  const b = await write(page, 'library/create-deck', [{ name: 'IELTS' }])
+  const appleB = await write(page, 'library/create-entry', [b.id, { term: 'Apple', meaning: '苹果公司' }])
+  expect(appleB.wordId).toBe(appleA.wordId)
+  expect(appleB.id).not.toBe(appleA.id)
+  expect(await read(page, 'learn/daily', [b.id])).toMatchObject({ pendingNew: 0, completedToday: 1, candidates: [] })
+  expect(await read(page, 'library/word-detail', [b.id, appleB.id])).toMatchObject({
+    nextDueAt: initial.dueAt, spelling: { attempts: 1, firstTryCorrectRate: 1 },
+  })
+  backend.advanceTo(initial.dueAt + 1000)
+  expect(await read(page, 'review/overview', [null])).toMatchObject({ due: 1, firstRecall: 0 })
+  await page.goto('/library')
+  await openStudyLists(page, 'IELTS')
+  await expect(page.getByRole('link', { name: 'Practice this list' })).toBeVisible()
+  await page.getByRole('link', { name: 'Review this list' }).click()
+  await page.getByRole('button', { name: 'Start review' }).click()
+  await expect(page.getByText('苹果公司', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Apple', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Show answer' }).click()
+  await page.getByRole('button', { name: 'Good', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Review round complete' })).toBeVisible()
+  const history = await read(page, 'backup/library', [null])
+  expect(history.reviewCards).toMatchObject([{ id: initial.id, revision: 2 }])
+  expect(history.wordCards).toEqual([{ wordId: appleA.wordId, cardId: initial.id, direction: 'meaning-to-term', active: true }])
+  expect(history.reviewEvents).toMatchObject([
+    { entryId: appleA.id, deckId: a.id, cardId: initial.id },
+    { entryId: appleB.id, deckId: b.id, cardId: initial.id },
+  ])
+  expect(await rebuildCardFromEvents(history.reviewEvents)).toEqual(history.reviewCards[0].schedulerState)
+  expect(await read(page, 'library/word-detail', [a.id, appleA.id])).toMatchObject({ nextDueAt: history.reviewCards[0].dueAt })
+  const deckBackup = await read(page, 'backup/library', [b.id])
+  expect(deckBackup).toMatchObject({ decks: [{ id: b.id }], words: [{ id: appleA.wordId }], reviewCards: [], reviewEvents: [] })
+
+  await write(page, 'library/remove-entry', [a.id, appleA.id, true, appleA.revision])
+  await write(page, 'library/archive-deck', [b.id, true, b.revision])
+  backend.advanceTo(history.reviewCards[0].dueAt + 1000)
+  expect(await read(page, 'review/overview', [null])).toMatchObject({ due: 0 })
+  await write(page, 'library/archive-deck', [b.id, false, b.revision + 1])
+  expect(await read(page, 'review/overview', [null])).toMatchObject({ due: 1 })
+  await write(page, 'library/remove-entry', [a.id, appleA.id, false, appleA.revision + 1])
+  expect(await read(page, 'review/overview', [null])).toMatchObject({ due: 1 })
+  expect((await read(page, 'backup/library', [null])).reviewCards).toEqual(history.reviewCards)
 })

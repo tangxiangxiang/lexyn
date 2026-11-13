@@ -7,7 +7,7 @@ import { stableJson } from '../../shared/contracts/json.ts'
 import { cleanDictionaryMeaning, cleanDictionaryReference, cleanPhonetics } from '../../shared/domain/dictionary.ts'
 import { LibraryError, listSizes, type DeckInput, type Entry, type EntryInput } from '../../shared/domain/library.ts'
 import { importFields, parseImport, previewImport, type FieldMapping, type ImportCandidate, type ImportedInput } from '../../shared/domain/library-import.ts'
-import { reviewCardId, reviewRatings } from '../../shared/domain/review.ts'
+import { reviewRatings } from '../../shared/domain/review.ts'
 import { createReviewScheduler, schedulerConfigSnapshot, type ReviewScheduler } from '../../shared/srs/scheduler.ts'
 import { createAllStudy } from './all.ts'
 import { createLearnService } from './learn.ts'
@@ -25,7 +25,7 @@ type Validator<T> = (value: unknown) => T
 const invalid = (message = 'Invalid request arguments.'): never => { throw new InvalidInput(message) }
 const id: Validator<string> = (value) => isUuid(value) ? value : invalid('Invalid identifier.')
 const cardId: Validator<string> = (value) => typeof value === 'string'
-  && value.startsWith('meaning-to-term:') && isUuid(value.slice(16)) ? value : invalid('Invalid card identifier.')
+  && value.startsWith('meaning-to-term:') && isUuid(value.slice(16).replace(/^word:/, '')) ? value : invalid('Invalid card identifier.')
 const num = (min: number, max?: number): Validator<number> => (v) => integer(v, min, max) ? v : invalid('Invalid integer.')
 const text = (max: number): Validator<string> => (v) => typeof v === 'string' && v.length <= max ? v : invalid('Invalid text.')
 const bool: Validator<boolean> = (v) => typeof v === 'boolean' ? v : invalid('Expected a boolean.')
@@ -140,7 +140,7 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
       const learnedAt = "json_extract(progress.body, '$.firstCompletedAt')"
       const practicedAt = "json_extract(progress.body, '$.lastPracticedAt')"
       const addedAt = "json_extract(entries.body, '$.createdAt')"
-      const source = 'FROM entries LEFT JOIN learn_progress AS progress ON progress.entry_id=entries.id WHERE entries.deck_id=@deckId AND active_term IS NOT NULL'
+      const source = 'FROM entries LEFT JOIN word_progress AS progress ON progress.word_id=entries.word_id WHERE entries.deck_id=@deckId AND active_term IS NOT NULL'
       const totals = store.db.prepare(`SELECT count(*) AS "all", count(${learnedAt}) AS learned,
         count(CASE WHEN ${practicedAt} BETWEEN @today AND @now THEN 1 END) AS today,
         count(CASE WHEN ${practicedAt} BETWEEN @week AND @now THEN 1 END) AS week ${source}`)
@@ -166,13 +166,13 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
     'library/word-detail': get([id, id], (deckId, entryId) => {
       const entry = store.entry(entryId)
       if (!entry || entry.deckId !== deckId || entry.deletedAt !== undefined) return null
-      const cardId = reviewCardId(entryId)
+      const card = store.activeCard(entry.wordId!)
       const reviews = store.db.prepare('SELECT reviewed_at FROM review_events WHERE card_id=? ORDER BY reviewed_at DESC, id DESC LIMIT 10')
-        .pluck().all(cardId) as number[]
-      return { entry, reviews, nextDueAt: store.card(cardId)?.dueAt,
+        .pluck().all(card?.id ?? null) as number[]
+      return { entry, reviews, nextDueAt: card?.dueAt,
         learnedAt: store.entryProgress(entryId)?.firstCompletedAt,
-        spelling: spellingStats(store.all<SpellingAttempt>('SELECT body FROM spelling_attempts WHERE entry_id=?', entryId),
-          entry.term, entry.termChangedAt),
+        spelling: spellingStats(store.all<SpellingAttempt>('SELECT body FROM spelling_attempts WHERE word_id=?', entry.wordId)
+          .map((attempt) => ({ ...attempt, termChangedAt: undefined })), entry.term),
         archived: store.deck(deckId)?.archivedAt !== undefined }
     }),
     'library/rename-list': post([id, id, text(100)], library.renameList),
@@ -215,9 +215,13 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
     }, true),
     'learn/finish': post([id, id, choice('completed', 'skipped'), version],
       (id, entry, outcome, revision) => learn.finishCurrent(id, entry, outcome, revision, clock())),
-    'review/overview': get([optId], (deck) => review.overview(deck, clock())),
+    'review/overview': get([optId, optId], (deck, list) => review.overview(deck, clock(), list), true),
     'review/session': get([optId], (deck) => review.legacyRound(deck, clock())),
-    'review/scoped': get([optId, optId], (deck, sessionId) => review.round(deck, clock(), sessionId)),
+    'review/scoped': get([optId, optId, optId], (deck, sessionId, list) => review.round(deck, clock(), sessionId, list), true),
+    'review/start-list': post([id, id], (deck, list) => {
+      if (!store.lists.get(deck, list)) throw new StudyError('List not found in this deck.', 404)
+      return review.start(deck, clock(), true, undefined, list)
+    }),
     'review/open': get([], review.openSession),
     'review/start': post([optId, optional(bool)], (deck, resume) => review.start(deck, clock(), resume), true),
     'review/repair': post([id, version], (id, revision) => review.repair(id, revision, clock())),

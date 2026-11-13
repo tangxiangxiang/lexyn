@@ -18,6 +18,7 @@
     "test:e2e": "playwright test",
     "backup:create": "node --env-file-if-exists=.env dist-server/server/backup/cli.js create",
     "backup:verify": "node --env-file-if-exists=.env dist-server/server/backup/cli.js verify",
+    "backup:audit-words": "node dist-server/server/backup/cli.js audit-words",
     "backup:restore": "node --env-file-if-exists=.env dist-server/server/backup/cli.js restore",
     "backup:restore-json": "node --env-file-if-exists=.env dist-server/server/backup/cli.js restore-json",
     "dictionary:import": "node --env-file-if-exists=.env server/dictionary/cli.ts",

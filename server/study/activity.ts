@@ -7,7 +7,7 @@ export function studyActivity(store: StudyStore, now: number) {
   const dates = new Intl.DateTimeFormat('sv-SE', { timeZone: timezone, dateStyle: 'short' })
   const timestamps = store.db.prepare(`
     SELECT CAST(json_extract(body, '$.firstCompletedAt') AS INTEGER) AS at
-    FROM learn_progress WHERE json_extract(body, '$.firstCompletedAt') IS NOT NULL
+    FROM word_progress WHERE json_extract(body, '$.firstCompletedAt') IS NOT NULL
     UNION SELECT reviewed_at AS at FROM review_events
   `).pluck().all() as number[]
   const days = new Set(timestamps.filter((time) => time <= now).map((time) => dates.format(time)))

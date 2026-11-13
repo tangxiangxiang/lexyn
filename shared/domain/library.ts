@@ -55,6 +55,8 @@ export interface EntryInput {
 
 export interface Entry extends LocalEntity, Omit<EntryInput, 'dictionaryMeaning' | 'dictionaryReference' | 'phonetics'> {
   deckId: string
+  /** Present in server records and v8 backups. Older imports acquire it at restore. */
+  wordId?: string
   dictionaryMeaning?: DictionaryMeaning
   dictionaryReference?: DictionaryReference
   phonetics?: PhoneticVariants

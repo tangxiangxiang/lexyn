@@ -1,3 +1,4 @@
+import { migrateGlobalWords } from './global-words.ts'
 import type Database from 'better-sqlite3'
 import { seedDeckLists } from '../../study/lists.ts'
 
@@ -216,11 +217,12 @@ const migrations: ({ version: number; sql: string } | { version: number; apply: 
       CREATE INDEX spelling_attempt_entry ON spelling_attempts(entry_id);
     `,
   },
+  { version: 13, apply: migrateGlobalWords },
 ]
 
 export const latestDatabaseVersion = migrations.at(-1)!.version
 
-export function migrate(db: Database.Database) {
+export function migrate(db: Database.Database, target = latestDatabaseVersion) {
   db.transaction(() => {
     const currentVersion = db.pragma('user_version', { simple: true }) as number
     if (currentVersion === 1 || currentVersion === 2) {
@@ -232,7 +234,7 @@ export function migrate(db: Database.Database) {
     }
 
     for (const migration of migrations) {
-      if (migration.version <= currentVersion) continue
+      if (migration.version <= currentVersion || migration.version > target) continue
       if ('sql' in migration) db.exec(migration.sql)
       else migration.apply(db)
       db.pragma(`user_version = ${migration.version}`)

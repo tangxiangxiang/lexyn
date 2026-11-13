@@ -10,8 +10,11 @@ const timeFormat = computed(() => new Intl.DateTimeFormat(languageTag.value, { d
 
 export const formatReviewTime = (timestamp: number) => timeFormat.value.format(timestamp)
 
-export function useReviewOverview(deckId: WatchSource<string | undefined>, progress = false) {
-  const overview = useLibraryQuery(deckId, (id, signal) => progress ? study('progress/overview', [], { signal }) : review.overview(id, signal))
+export function useReviewOverview(deckId: WatchSource<string | undefined>, progress = false, listId: WatchSource<string | undefined> = () => undefined) {
+  const scope = computed(() => [typeof deckId === 'function' ? deckId() : deckId.value,
+    typeof listId === 'function' ? listId() : listId.value] as const)
+  const overview = useLibraryQuery(scope, ([id, list], signal) =>
+    progress ? study('progress/overview', [], { signal }) : review.overview(id, signal, list), ([id, list]) => [id, list].join('/'))
   watch(overview.data, (data, _, onCleanup) => {
     if (!data) return
     const now = data.checkedAt

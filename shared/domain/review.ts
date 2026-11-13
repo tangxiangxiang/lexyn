@@ -9,6 +9,10 @@ export function reviewCardId(entryId: string) {
   return `${REVIEW_DIRECTION}:${entryId}`
 }
 
+export function wordReviewCardId(wordId: string) {
+  return `${REVIEW_DIRECTION}:word:${wordId}`
+}
+
 type SchedulerCard = DefaultSchedulerCard<'FSRS-7'>
 type SchedulerRevlog = DefaultSchedulerRevlog<'FSRS-7'>
 
@@ -68,10 +72,13 @@ export interface ReviewSession {
   sessionId: string
   deckId?: string
   entryIds: string[]
+  wordIds?: (string | null)[]
+  listId?: string
   currentIndex: number
   currentCardId?: string
   currentRevealed: boolean
   revealedEntryRevision?: number
+  revealedEntryId?: string
   startedAt: number
   updatedAt: number
   status: 'active' | 'paused' | 'abandoned' | 'completed'

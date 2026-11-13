@@ -426,35 +426,47 @@ test('migration backfills stable membership without rewriting word bodies, study
   await data(post('review/score', [review.sessionId, review.currentCardId, 'good', review.revision]))
   const before = await data(get('backup/library', [null]))
   const { id } = before.decks[0]
-  const entry = before.entries[0]
-  const insert = db.prepare('INSERT INTO entries (id, deck_id, active_term, body, revision) VALUES (?, ?, ?, ?, ?)')
-  const ids = [entry.id]
-  for (let i = 0; i < 31; i++) {
-    const id = randomUUID()
-    const term = `legacy-${i}`
-    ids.push(id)
-    insert.run(id, entry.deckId, term, JSON.stringify({ ...entry, id, term, normalizedTerm: term }), entry.revision)
-  }
-  const legacy = await data(get('backup/library', [null]))
-  db.exec(`DROP TABLE deck_list_members; DROP TABLE deck_lists; DROP INDEX entries_id_deck;
-    ALTER TABLE owner_settings DROP COLUMN study_weekdays;
-    ALTER TABLE owner_settings DROP COLUMN review_reset_minutes;
-    DROP TABLE spelling_attempts; ALTER TABLE owner_settings DROP COLUMN spelling;
-    PRAGMA user_version=9; CREATE TABLE deck_list_members (marker TEXT);`)
-  expect(() => migrate(db)).toThrow('already exists')
-  expect(db.pragma('user_version', { simple: true })).toBe(9)
-  expect(db.prepare("SELECT 1 FROM sqlite_schema WHERE name='deck_lists'").get()).toBeUndefined()
-  db.exec('DROP TABLE deck_list_members')
-  migrate(db)
-  const upgraded = await data(get('backup/library', [null]))
-  for (const key of ['decks', 'entries', 'learnProgress', 'practiceEvents', 'reviewCards', 'reviewEvents']) {
-    expect(upgraded[key]).toEqual(legacy[key])
-  }
-  const { lists } = await data(get('library/lists', [id]))
-  expect(lists.map(({ count }: { count: number }) => count)).toEqual([30, 2])
-  expect((await data(get('library/list', [id, lists[0].id]))).map(({ id }: { id: string }) => id)).toEqual(ids.sort().slice(0, 30))
-  migrate(db)
-  expect(await data(get('library/lists', [id]))).toMatchObject({ lists })
+  const { wordId: _wordId, ...entry } = before.entries[0]
+  const legacy = new Database(':memory:')
+  legacy.pragma('foreign_keys = ON')
+  try {
+    migrate(legacy, 9)
+    legacy.prepare('INSERT INTO decks VALUES (?, ?, ?)').run(id, JSON.stringify(before.decks[0]), before.decks[0].revision)
+    const insert = legacy.prepare('INSERT INTO entries VALUES (?, ?, ?, ?, ?)')
+    const entries = [entry, ...Array.from({ length: 31 }, (_, i) => {
+      const term = `legacy-${i}`
+      return { ...entry, id: randomUUID(), term, normalizedTerm: term }
+    })]
+    for (const row of entries) insert.run(row.id, id, row.normalizedTerm, JSON.stringify(row), row.revision)
+    const practice = before.practiceEvents[0]
+    delete practice.listId
+    const progress = before.learnProgress[0]
+    const card = before.reviewCards[0]
+    const event = before.reviewEvents[0]
+    legacy.prepare('INSERT INTO practice_events VALUES (?, ?, ?)').run(practice.id, entry.id, JSON.stringify(practice))
+    legacy.prepare('INSERT INTO learn_progress VALUES (?, ?)').run(entry.id, JSON.stringify(progress))
+    legacy.prepare('INSERT INTO review_cards VALUES (?, ?, ?, ?, ?)').run(card.id, entry.id, card.direction, card.revision, JSON.stringify(card))
+    legacy.prepare('INSERT INTO review_events VALUES (?, ?, ?, ?, ?)').run(event.id, entry.id, card.id, event.reviewedAt, JSON.stringify(event))
+    legacy.exec('CREATE TABLE deck_list_members (marker TEXT)')
+    expect(() => migrate(legacy)).toThrow('already exists')
+    expect(legacy.pragma('user_version', { simple: true })).toBe(9)
+    expect(legacy.prepare("SELECT 1 FROM sqlite_schema WHERE name='deck_lists'").get()).toBeUndefined()
+    legacy.exec('DROP TABLE deck_list_members')
+    migrate(legacy)
+    const upgraded = legacy.prepare('SELECT body FROM entries').pluck().all()
+      .map((body) => { const { wordId, ...row } = JSON.parse(body as string); expect(wordId).toBeTruthy(); return row })
+    expect(upgraded).toEqual(entries)
+    for (const [table, expected] of Object.entries({ learn_progress: progress, practice_events: practice, review_cards: card, review_events: event })) {
+      expect(JSON.parse(legacy.prepare(`SELECT body FROM ${table}`).pluck().get() as string)).toEqual(expected)
+    }
+    const lists = legacy.prepare('SELECT id FROM deck_lists ORDER BY list_order').pluck().all()
+    expect(lists).toHaveLength(2)
+    const members = legacy.prepare('SELECT entry_id FROM deck_list_members WHERE list_id=? ORDER BY position').pluck()
+    expect(members.all(lists[0])).toEqual(entries.map(({ id }) => id).sort().slice(0, 30))
+    expect(members.all(lists[1])).toHaveLength(2)
+    migrate(legacy)
+    expect(legacy.prepare('SELECT id FROM deck_lists ORDER BY list_order').pluck().all()).toEqual(lists)
+  } finally { legacy.close() }
 })
 
 test('keeps free spelling isolated while persisting bounded retry rounds and idempotent errors', async () => {
@@ -508,7 +520,7 @@ test('keeps free spelling isolated while persisting bounded retry rounds and ide
     positions: [{ position: 2, expected: 't' }, { position: 3, expected: 't' }] })
   await data(post('library/update-entry', [deck.id, letter.id, { term: 'letters', meaning: '信件' }, letter.revision]))
   expect(await data(get('library/word-detail', [deck.id, letter.id]))).toMatchObject({
-    spelling: { attempts: 4, currentAttempts: 0, positions: [] },
+    spelling: { attempts: 0, currentAttempts: 0, positions: [] },
   })
 })
 
@@ -616,4 +628,37 @@ test('All still reviews on a non-study day and can end without allocating new wo
   })
   expect(count('learn_sessions')).toBe(1)
   expect(count('review_events')).toBe(0)
+})
+
+test('a term change reassigns only the membership, without transferring its global progress or FSRS card', async () => {
+  const review = await setupReview()
+  await data(post('review/score', [review.sessionId, review.currentCardId, 'good', review.revision]))
+  const saved = await data(get('backup/library', [null]))
+  const entry = saved.entries[0]
+  const other = await data(post('library/create-deck', [{ name: 'Cache reference' }]))
+  const original = await data(post('library/create-entry', [other.id, { term: 'Cache', meaning: '高速缓存' }]))
+  const changed = await data(post('library/update-entry', [entry.deckId, entry.id, { term: 'orange', meaning: '橙子' }, entry.revision]))
+  expect(changed.id).toBe(entry.id)
+  expect(changed.wordId).not.toBe(original.wordId)
+  expect(await data(get('library/word-detail', [other.id, original.id]))).toMatchObject({
+    learnedAt: now, nextDueAt: saved.reviewCards[0].dueAt, spelling: { attempts: 1 },
+  })
+  expect(await data(get('learn/daily', [entry.deckId]))).toMatchObject({ completedToday: 1, pendingNew: 1, candidates: [{ id: entry.id }] })
+  await data(post('library/update-entry', [entry.deckId, entry.id, { term: 'orange', meaning: '橙子' }, changed.revision]))
+  const session = await data(post('learn/start', [entry.deckId, 'copy', [entry.id], true]))
+  await data(post('learn/attempt', [session.sessionId, entry.id, 'orange', session.revision]))
+  const attempted = await data(get('learn/session', [session.sessionId]))
+  await data(post('learn/finish', [session.sessionId, entry.id, 'completed', attempted.session.revision]))
+  const { round } = await data(post('review/start', [entry.deckId, true]))
+  await data(post('review/reveal', [round.session.sessionId, round.session.currentCardId, round.word.entryRevision, round.session.revision]))
+  const shown = await data(get('review/scoped', [entry.deckId, round.session.sessionId]))
+  await data(post('review/score', [shown.session.sessionId, shown.session.currentCardId, 'good', shown.session.revision]))
+  const result = await data(get('backup/library', [null]))
+  expect(result.reviewCards).toHaveLength(2)
+  expect(result.reviewCards).toContainEqual(saved.reviewCards[0])
+  expect(result.reviewEvents).toContainEqual(saved.reviewEvents[0])
+  expect(result.wordProgress).toEqual(expect.arrayContaining([
+    expect.objectContaining({ wordId: original.wordId, completedCount: 1 }),
+    expect.objectContaining({ wordId: changed.wordId, completedCount: 1 }),
+  ]))
 })

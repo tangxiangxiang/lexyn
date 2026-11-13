@@ -36,6 +36,9 @@ test('sets up the Owner in the browser, signs in automatically and later require
   await expect(page.getByRole('heading', { name: 'Owner account', exact: true })).toBeVisible()
 })
 
+test.describe('schema 4 Owner upgrade', () => {
+  test.use({ schemaVersion: 4 })
+
 test('requires a chosen username for the old default account and keeps its library', async ({ page, backend }) => {
   const { createAuth, initializeOwner } = await import('../server/auth/owner')
   const { migrate } = await import('../server/db/migrations/index')
@@ -46,12 +49,6 @@ test('requires a chosen username for the old default account and keeps its libra
   if (previous.status !== 'ok') throw new Error('Could not prepare previous session.')
   const deck = { id: randomUUID(), name: 'Existing vocabulary', createdAt: Date.now(), updatedAt: Date.now(), revision: 1 }
   backend.db.prepare('INSERT INTO decks (id, body, revision) VALUES (?, ?, 1)').run(deck.id, JSON.stringify(deck))
-  backend.db.exec(`DROP TABLE deck_list_members; DROP TABLE deck_lists; DROP INDEX entries_id_deck; DROP TABLE vocabulary_jobs; DROP TABLE speech_credentials;
-    DROP TABLE speech_settings; DROP TABLE speech_assets;
-    ALTER TABLE owner_settings DROP COLUMN study_weekdays;
-    ALTER TABLE owner_settings DROP COLUMN review_reset_minutes;
-    DROP TABLE spelling_attempts; ALTER TABLE owner_settings DROP COLUMN spelling;
-    PRAGMA user_version = 4;`)
   migrate(backend.db)
   expect(auth.session(previous.token)).toBeUndefined()
   expect((await auth.login('owner', password)).status).toBe('denied')
@@ -67,4 +64,5 @@ test('requires a chosen username for the old default account and keeps its libra
   await page.getByRole('button', { name: 'Save username' }).click()
   await expect(page.getByRole('link', { name: 'Existing vocabulary' })).toBeVisible()
   expect(await auth.login('my.lexyn', password)).toMatchObject({ status: 'ok', ownerId: previous.ownerId })
+})
 })

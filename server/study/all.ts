@@ -55,7 +55,7 @@ export function createAllStudy(store: StudyStore, learn: ReturnType<typeof creat
       return { kind: 'learn' as const, flowId, session: { ...session, currentLastSubmitted: undefined, currentCorrectSpelling: undefined } }
     }
 
-    if (openReview && (openReview.deckId !== deckId || (openReview.studyFlowId && openReview.studyFlowId !== flowId))) {
+    if (openReview && (openReview.deckId !== deckId || openReview.listId || (openReview.studyFlowId && openReview.studyFlowId !== flowId))) {
       return { kind: 'review-conflict' as const, flowId: existing, session: review.openSession()! }
     }
     let latestReview = reviewing

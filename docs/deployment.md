@@ -25,6 +25,8 @@ docker compose --env-file .env.production -f compose.production.yml logs lexyn
 
 ## 升级、备份与回滚
 
+从 SQLite v12 升级到 v13 时，先完成 [全局词汇迁移预检与回滚准备](backup-restore.md#sqlite-v13-全局词汇迁移)。
+
 1. 用运行中的旧容器创建并验证 SQLite 备份，把备份复制到数据卷之外。
 2. 将 `LEXYN_IMAGE` 更新为目标版本或 digest，执行 `pull` 和 `up -d`。保持同一个数据卷和公开 origin。检查健康、Owner 登录和两台设备登录后访问同一份词库，再做离线启动检查。
 3. 页面提示更新时，完成当前操作后关闭所有 Lexyn 窗口再重新打开。不要清理站点数据来切换版本。

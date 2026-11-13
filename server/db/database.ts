@@ -19,14 +19,14 @@ export function lockDataDirectory(dataDir: string) {
   }
 }
 
-export function openDatabase(dataDir: string) {
+export function openDatabase(dataDir: string, schemaVersion?: number) {
   mkdirSync(dataDir, { recursive: true })
   const db = new Database(join(dataDir, 'lexyn.sqlite'))
 
   try {
     db.pragma('journal_mode = WAL')
     db.pragma('foreign_keys = ON')
-    migrate(db)
+    migrate(db, schemaVersion)
     return db
   } catch (error) {
     db.close()

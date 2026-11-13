@@ -4,6 +4,7 @@ import { checkRevision, StudyError, type StudyStore, type Versioned } from './st
 import type { Entry } from '../../shared/domain/library.ts'
 import { defaultSpelling, spellingErrors, spellingKeyboard, type PracticeSource, type SpellingHint } from '../../shared/domain/spelling.ts'
 import { spellingSyllables } from '../../shared/domain/spelling-syllables.ts'
+import { recordWordCompletion } from '../../shared/domain/word.ts'
 import { isStudyDay } from '../../shared/domain/study-plan.ts'
 
 const currentId = (session: LearnSession) => session.entryIds[session.currentIndex]
@@ -33,7 +34,9 @@ export function createLearnService(store: StudyStore) {
 
   function usableEntry(session: LearnSession, id = currentId(session)) {
     const entry = id && store.entry(id)
-    return entry && entry.deckId === session.deckId && entry.deletedAt === undefined ? entry : undefined
+    const reserved = id ? session.entryWords?.[id] : undefined
+    return entry && entry.deckId === session.deckId && entry.deletedAt === undefined
+      && (reserved === undefined || reserved === entry.wordId) ? entry : undefined
   }
 
   function withDefaultHints<T extends LearnSession>(session: T): T {
@@ -103,18 +106,18 @@ export function createLearnService(store: StudyStore) {
       const { quota, dailyNewWords, completedToday, day, progress } = dayState(now)
       const decks = store.decks().filter((deck) => deck.archivedAt === undefined)
       const deckIds = new Set(decks.filter((deck) => !deckId || deckId === deck.id).map(({ id }) => id))
-      const learned = new Map(progress.filter((item) => item.firstCompletedAt !== undefined).map((item) => [item.entryId, item]))
+      const learned = new Map(progress.filter((item) => item.firstCompletedAt !== undefined).map((item) => [item.wordId, item]))
       const activeSession = store.openLearn()
       const locked = new Set(activeSession?.entryIds.slice(activeSession.currentIndex))
       const entries = entriesInScope(deckId, listId).filter((entry) => entry.deletedAt === undefined && deckIds.has(entry.deckId))
-      const candidates = entries.filter((entry) => !learned.has(entry.id) && !locked.has(entry.id))
+      const candidates = entries.filter((entry) => !learned.has(entry.wordId!) && !locked.has(entry.id))
         .slice(0, Math.max(0, quota - completedToday))
       const sameScope = activeSession?.deckId === deckId && (!listId || listId === activeSession?.listId)
-      const reservedNew = sameScope ? entries.filter(({ id }) => locked.has(id) && !learned.has(id)).length : 0
+      const reservedNew = sameScope ? entries.filter(({ id, wordId }) => locked.has(id) && !learned.has(wordId!)).length : 0
       const hasNewWordSession = !!(activeSession && sameScope && (reservedNew || activeSession.firstCompletedEntryIds.length))
       const pendingNew = hasNewWordSession ? Math.min(Math.max(0, quota - completedToday), reservedNew) : candidates.length
-      const practiceCandidates = entries.filter((entry) => learned.has(entry.id))
-        .sort((a, b) => learned.get(a.id)!.lastPracticedAt - learned.get(b.id)!.lastPracticedAt || oldest(a, b)).slice(0, 10)
+      const practiceCandidates = entries.filter((entry) => learned.has(entry.wordId!))
+        .sort((a, b) => learned.get(a.wordId!)!.lastPracticedAt - learned.get(b.wordId!)!.lastPracticedAt || oldest(a, b)).slice(0, 10)
       const lists = listId && deckId ? store.lists.summaries(deckId) : []
       const list = lists.find(({ id }) => id === listId)
       const nextList = list && lists.find(({ order, count }) => order > list.order && count > 0)
@@ -137,7 +140,8 @@ export function createLearnService(store: StudyStore) {
       if (!entryIds.length) throw new StudyError('There are no words to practice.')
       return publicSession(store.saveLearn(withDefaultHints({
         source: 'free', spelling: store.spellingSettings(), currentHints: [],
-        sessionId: randomUUID(), deckId, listId, mode, entryIds, currentIndex: 0,
+        sessionId: randomUUID(), deckId, listId, mode, entryIds,
+        entryWords: Object.fromEntries(entryIds.map((id) => [id, store.entryWord(id)])), currentIndex: 0,
         startedAt: now, updatedAt: now, status: 'active', dailyKey: dateKey(now, store.settings().timezone),
         firstCompletedEntryIds: [], currentEntryStartedAt: now, currentAttempts: 0, currentAssisted: false,
       })))
@@ -154,16 +158,17 @@ export function createLearnService(store: StudyStore) {
       if (!deck || deck.archivedAt !== undefined) throw new StudyError('Choose an active deck to start learning.')
       const expected = new Set(entryIds)
       const { quota, completedToday, day, progress } = dayState(now)
-      const completed = new Set(progress.filter((item) => item.firstCompletedAt !== undefined).map(({ entryId }) => entryId))
+      const completed = new Set(progress.filter((item) => item.firstCompletedAt !== undefined).map(({ wordId }) => wordId))
       const available = entriesInScope(deckId, listId).filter((entry) => expected.has(entry.id) && entry.deletedAt === undefined
-        && completed.has(entry.id) !== newWords)
+        && completed.has(entry.wordId!) !== newWords)
       if (!available.length || available.length !== expected.size || expected.size !== entryIds.length) {
         throw new StudyError('The selected words changed. Reload today’s Learn list.', 409)
       }
       if (newWords && completedToday + available.length > quota) throw new StudyError('The daily new word limit changed.', 409)
       return publicSession(store.saveLearn(withDefaultHints({
         studyFlowId, spelling: store.spellingSettings(), currentHints: [],
-        sessionId: randomUUID(), deckId, listId, mode, entryIds: available.map(({ id }) => id), currentIndex: 0,
+        sessionId: randomUUID(), deckId, listId, mode, entryIds: available.map(({ id }) => id),
+        entryWords: Object.fromEntries(available.map(({ id, wordId }) => [id, wordId!])), currentIndex: 0,
         startedAt: now, updatedAt: now, status: 'active', dailyKey: day,
         firstCompletedEntryIds: [], currentEntryStartedAt: now, currentAttempts: 0, currentAssisted: false,
       })))
@@ -246,7 +251,7 @@ export function createLearnService(store: StudyStore) {
       const round = practiceRound(session)
       store.addSpellingAttempt({
         id: randomUUID(), entryId, sessionId: id, round, attempt: attempts, spelling: normalizeSpelling(entry.term),
-        termChangedAt: entry.termChangedAt, time: now, source: session.source ?? 'learn', mode: session.mode,
+        listId: session.listId ?? store.lists.memberList(entryId), termChangedAt: entry.termChangedAt, time: now, source: session.source ?? 'learn', mode: session.mode,
         keyboard: layout, assisted: session.currentAssisted, correct,
         errors,
       })
@@ -271,16 +276,20 @@ export function createLearnService(store: StudyStore) {
       }
       const round = practiceRound(session)
       const event: PracticeEvent = {
-        id: randomUUID(), deckId: session.deckId, entryId, sessionId: id, mode: session.mode, outcome,
+        id: randomUUID(), deckId: session.deckId, entryId, listId: session.listId ?? store.lists.memberList(entryId), sessionId: id, mode: session.mode, outcome,
         source: session.source ?? 'learn', round,
         attempts: session.currentAttempts, firstTryCorrect: session.currentFirstTryCorrect ?? false,
         assisted: session.currentAssisted, startedAt: session.currentEntryStartedAt, completedAt: now,
       }
       store.addPractice(event)
-      if (formal && outcome === 'completed') store.saveProgress({
-        entryId, firstCompletedAt: progress?.firstCompletedAt ?? now,
-        lastPracticedAt: Math.max(progress?.lastPracticedAt ?? now, now), completedCount: (progress?.completedCount ?? 0) + 1,
-      })
+      if (formal && outcome === 'completed') {
+        store.saveWordProgress(recordWordCompletion(progress, entry.wordId!, now))
+        const previous = store.legacyProgress(entryId)
+        store.saveProgress({
+          entryId, firstCompletedAt: Math.min(previous?.firstCompletedAt ?? now, now),
+          lastPracticedAt: Math.max(previous?.lastPracticedAt ?? now, now), completedCount: (previous?.completedCount ?? 0) + 1,
+        })
+      }
       const retry = round < (session.spelling?.retryLimit ?? 0)
         && session.currentAttempts > 0 && !session.currentFirstTryCorrect
       const queued = retry ? { ...session, entryIds: [...session.entryIds, entryId] } : session

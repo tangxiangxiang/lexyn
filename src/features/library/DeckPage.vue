@@ -316,6 +316,10 @@ function exportDeck() {
               ? 'Continue learning' : selected.learned === selected.count ? 'Practice this list' : 'Start learning')">
             <AppIcon name="bulb" />
           </RouterLink>
+          <RouterLink v-if="selected?.learned && !archived" class="icon-control"
+            :to="{ path: '/review', query: { deckId, listId: selected.id } }" :aria-label="t('Review this list')">
+            <AppIcon name="review" />
+          </RouterLink>
           <RouterLink class="icon-control" to="/progress" :aria-label="t('Learning plan')"><AppIcon name="calendar" /></RouterLink>
         </div>
       </div>
