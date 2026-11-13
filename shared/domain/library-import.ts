@@ -1,3 +1,4 @@
+import { wordSlot } from './word.ts'
 import Papa from 'papaparse'
 import { dictionaryLimits, type DictionaryMeaning } from './dictionary.ts'
 import { cleanEntry, LibraryError, normalizeTerm, type Entry, type EntryInput } from './library.ts'
@@ -103,7 +104,7 @@ export function previewImport(source: ImportSource, mapping: FieldMapping, entri
   }
 
   const active = new Map(entries.filter((entry) => entry.deletedAt === undefined)
-    .map((entry) => [entry.normalizedTerm, entry]))
+    .map((entry) => [wordSlot(entry.term), entry]))
   const seen = new Set<string>()
   const preview: ImportPreview = { rows: [], candidates: [], valid: 0, invalid: 0, duplicates: 0, missingMeaning: 0 }
   for (const { number, cells } of source.rows) {
@@ -125,14 +126,15 @@ export function previewImport(source: ImportSource, mapping: FieldMapping, entri
         if (field !== 'term' && values[field] !== undefined) input[field] = cleaned[field] ?? ''
       }
       const normalizedTerm = normalizeTerm(input.term)
-      const existing = active.get(normalizedTerm)
-      const duplicate = seen.has(normalizedTerm) ? 'file' : existing ? 'existing' : undefined
+      const slot = wordSlot(input.term)
+      const existing = active.get(slot)
+      const duplicate = seen.has(slot) ? 'file' : existing ? 'existing' : undefined
       preview.rows.push({ number, input, duplicate })
       preview.valid++
       if (duplicate) preview.duplicates++
       if (!cleaned.meaning) preview.missingMeaning++
       if (duplicate === 'file') continue
-      seen.add(normalizedTerm)
+      seen.add(slot)
       preview.candidates.push({ input, normalizedTerm, match: existing && { id: existing.id, revision: existing.revision } })
     } catch (error) {
       if (!(error instanceof LibraryError)) throw error

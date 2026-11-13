@@ -132,7 +132,7 @@ test('audits and upgrades v12, preserves competing FSRS chains and resumes exist
     const report = await preflightWordMigration(saved.directory)
     expect(report.before).toMatchObject({ schemaVersion: 12, decks: 2, entries: 9, sharedVocabularyKeys: 3, reviewCards: 4,
       reviewEvents: 6, spellingAttempts: 1, openLearnSessions: 1, openReviewSessions: 1 })
-    expect(report.after).toMatchObject({ schemaVersion: 13, reviewCards: 4, activeCards: 2 })
+    expect(report.after).toMatchObject({ schemaVersion: 14, reviewCards: 4, activeCards: 2 })
     expect(report.wordsWithMultipleChains).toBe(1)
     expect(report.competingChains[0].chains).toEqual(expect.arrayContaining([
       expect.objectContaining({ cardId: first.card.id, active: false }),
@@ -168,7 +168,8 @@ test('audits and upgrades v12, preserves competing FSRS chains and resumes exist
     }
 
     const exported = createLibraryService(store, config).exportLibrary()
-    expect(exported.formatVersion).toBe(8)
+    expect(exported.formatVersion).toBe(9)
+    expect((await prepareLibraryRestore(JSON.stringify({ ...exported, formatVersion: 8 }))).backup.formatVersion).toBe(8)
     migrate(restored)
     await initializeOwner(restored, 'test-admin', password)
     restoreLibrary(restored, await prepareLibraryRestore(JSON.stringify(exported)))

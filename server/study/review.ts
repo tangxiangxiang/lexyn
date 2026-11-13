@@ -51,6 +51,7 @@ export function createReviewService(store: StudyStore, engine: ReviewScheduler) 
     const cards = new Map(store.activeCards().map((card) => [card.wordId, card]))
     const listByEntry = listMembership()
     const listStats = new Map<string, { due: number; firstRecall: number; nextDueAt?: number }>()
+    const deckStats = new Map<string, { due: number; nextDueAt?: number }>()
     const items: { entryId: string; wordId: string; cardId: string; dueAt: number; priority: number }[] = []
     const progress: WordProgress[] = []
     let due = 0
@@ -66,6 +67,14 @@ export function createReviewService(store: StudyStore, engine: ReviewScheduler) 
       if (!withPrompt(entry, members)) continue
       const card = cards.get(wordId)
       const dueAt = card?.dueAt ?? 0
+      if (card) {
+        for (const id of new Set(scope.map((member) => member.deckId))) {
+          const stats = deckStats.get(id) ?? { due: 0 }
+          if (dueAt <= now) stats.due++
+          else stats.nextDueAt = Math.min(stats.nextDueAt ?? dueAt, dueAt)
+          deckStats.set(id, stats)
+        }
+      }
       for (const id of new Set(scope.map((member) => listByEntry.get(member.id)))) {
         if (!id) continue
         const stats = listStats.get(id) ?? { due: 0, firstRecall: 0 }
@@ -85,7 +94,7 @@ export function createReviewService(store: StudyStore, engine: ReviewScheduler) 
     }
     items.sort((a, b) => a.priority - b.priority || a.dueAt - b.dueAt || a.entryId.localeCompare(b.entryId))
     return { decks, items, due, firstRecall, nextDueAt, progress: deckId || listId ? progress : [...learned.values()],
-      listStats: [...listStats].map(([id, stats]) => ({ listId: id, ...stats })) }
+      deckStats, listStats: [...listStats].map(([id, stats]) => ({ listId: id, ...stats })) }
   }
 
   function wordAt(session: ReviewSession, index: number) {
@@ -168,18 +177,22 @@ export function createReviewService(store: StudyStore, engine: ReviewScheduler) 
       return session && { sessionId: session.sessionId, deckId: session.deckId, listId: session.listId, revision: session.revision, status: session.status }
     },
     overview(deckId: string | undefined, now: number, listId?: string) {
-      const { decks, due, firstRecall, nextDueAt, progress, listStats } = queue(deckId, now, listId)
+      const { decks, due, firstRecall, nextDueAt, progress, listStats, deckStats } = queue(deckId, now, listId)
       const { timezone, reviewResetMinutes } = store.settings()
       const [learnStart, learnEnd] = dayBounds(now, timezone)
       const [start, reviewEnd] = reviewDayBounds(now, timezone, reviewResetMinutes)
-      const ratedToday = store.db.prepare(`SELECT count(*) FROM review_events
-        WHERE reviewed_at >= ? AND reviewed_at < ?
-        ${deckId ? "AND json_extract(body, '$.deckId')=?" : ''}`).pluck()
-        .get(start, reviewEnd, ...(deckId ? [deckId] : [])) as number
-      return { decks, due, firstRecall, nextDueAt, ratedToday, nextDayAt: Math.min(learnEnd, reviewEnd), checkedAt: now,
-        listStats,
-        learnedToday: progress.filter(({ firstCompletedAt }) => firstCompletedAt !== undefined
-          && firstCompletedAt >= learnStart && firstCompletedAt < learnEnd).length }
+      const { ratedToday, reviewedWordsToday } = store.db.prepare(`SELECT count(*) AS ratedToday,
+        count(DISTINCT link.word_id) AS reviewedWordsToday
+        FROM review_events e LEFT JOIN word_cards link ON link.card_id=e.card_id
+        WHERE e.reviewed_at >= ? AND e.reviewed_at < ? AND e.reviewed_at <= ?
+        ${deckId ? "AND json_extract(e.body, '$.deckId')=?" : ''}
+        ${listId ? "AND json_extract(e.body, '$.listId')=?" : ''}`)
+        .get(start, reviewEnd, now, ...(deckId ? [deckId] : []), ...(listId ? [listId] : [])) as
+        { ratedToday: number; reviewedWordsToday: number }
+      return { decks, due, firstRecall, nextDueAt, ratedToday, reviewedWordsToday,
+        nextDayAt: Math.min(learnEnd, reviewEnd), checkedAt: now, listStats, learnedTotal: progress.length,
+        deckStats: [...deckStats].map(([deckId, stats]) => ({ deckId, ...stats })),
+        learnedToday: progress.filter(({ firstCompletedAt }) => firstCompletedAt >= learnStart && firstCompletedAt <= now).length }
     },
     round(deckId: string | undefined, now: number, sessionId?: string, listId?: string) {
       const open = store.openReview()

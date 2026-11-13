@@ -62,7 +62,7 @@ test('rejects corrupted or incomplete v4 JSON without accepting partial history'
   await expect(parse({ ...good, entries: [{ ...good.entries[0], phoneticsNeedsReview: 'true' }] }))
     .rejects.toThrow('Invalid phonetics metadata')
   await expect(prepareLibraryRestore('{')).rejects.toThrow('not valid JSON')
-  await expect(parse({ ...good, formatVersion: 2 })).rejects.toThrow('formats v4, v5, v6, v7 and v8')
+  await expect(parse({ ...good, formatVersion: 2 })).rejects.toThrow('formats v4, v5, v6, v7, v8 and v9')
   await expect(parse({ ...good, entries: [] })).rejects.toThrow('missing entry')
   await expect(parse({ ...good, reviewEvents: [] })).rejects.toThrow('incomplete')
   await expect(parse({ ...good, reviewEvents: [...good.reviewEvents, ...good.reviewEvents] })).rejects.toThrow('Duplicate ID')
@@ -178,7 +178,7 @@ test('validates v6 list ownership, coverage and positions and preserves list IDs
     const ownerId = db.prepare('SELECT id FROM owner').pluck().get() as string
     const library = createLibraryService(createStudyStore(db, ownerId), backup.schedulerConfig)
     const snapshot = library.exportLibrary(list.deckId)
-    expect(snapshot).toMatchObject({ formatVersion: 8, lists: [list], listMembers: [member], metadata: { scope: 'deck' } })
+    expect(snapshot).toMatchObject({ formatVersion: 9, lists: [list], listMembers: [member], metadata: { scope: 'deck' } })
     expect(snapshot.reviewCards).toEqual(backup.reviewCards)
     expect(snapshot.entries).toMatchObject(backup.entries)
     expect(snapshot.entries[0].wordId).toBeTruthy()

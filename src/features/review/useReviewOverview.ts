@@ -2,6 +2,7 @@ import { computed, onMounted, onUnmounted, watch, type WatchSource } from 'vue'
 import { useLibraryQuery } from '../library/useLibraryQuery'
 import { review } from './api'
 import { useI18n } from '../../i18n/useI18n'
+import type { StudyEndpoints } from '../../../shared/contracts/study'
 import { study } from '../../api/client'
 
 const refreshLimit = 30 * 60 * 1000
@@ -10,11 +11,13 @@ const timeFormat = computed(() => new Intl.DateTimeFormat(languageTag.value, { d
 
 export const formatReviewTime = (timestamp: number) => timeFormat.value.format(timestamp)
 
-export function useReviewOverview(deckId: WatchSource<string | undefined>, progress = false, listId: WatchSource<string | undefined> = () => undefined) {
+export function useReviewOverview<P extends boolean = false>(deckId: WatchSource<string | undefined>, progress = false as P, listId: WatchSource<string | undefined> = () => undefined) {
   const scope = computed(() => [typeof deckId === 'function' ? deckId() : deckId.value,
     typeof listId === 'function' ? listId() : listId.value] as const)
+  type Data = P extends true ? StudyEndpoints['progress/overview']['result'] : StudyEndpoints['review/overview']['result']
   const overview = useLibraryQuery(scope, ([id, list], signal) =>
-    progress ? study('progress/overview', [], { signal }) : review.overview(id, signal, list), ([id, list]) => [id, list].join('/'))
+    (progress ? study('progress/overview', [], { signal }) : review.overview(id, signal, list)) as Promise<Data>,
+    ([id, list]) => [id, list].join('/'))
   watch(overview.data, (data, _, onCleanup) => {
     if (!data) return
     const now = data.checkedAt

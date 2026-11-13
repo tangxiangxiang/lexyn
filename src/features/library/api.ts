@@ -1,12 +1,11 @@
 import { study } from '../../api/client'
 import type { StudyEndpoints } from '../../../shared/contracts/study'
-import type { BuiltinWordbookId, BuiltinWordbookTag } from '../../../shared/domain/builtin-books'
 
 export const library = {
   builtinBooks: (signal?: AbortSignal) => study('library/builtin-books', [], { signal }),
   builtinBook: (args: StudyEndpoints['library/builtin-book']['args'], signal?: AbortSignal) => study('library/builtin-book', args, { signal }),
-  createBuiltinBook: (id: BuiltinWordbookId, tags: BuiltinWordbookTag[]) =>
-    study('library/create-builtin-book', [id, tags], { write: true }),
+  createBuiltinBook: (...args: StudyEndpoints['library/create-builtin-book']['args']) =>
+    study('library/create-builtin-book', args, { write: true }),
   async listDecks(signal?: AbortSignal) {
     const decks: StudyEndpoints['library/decks']['result'] = []
     for (let offset = 0; ; offset += 200) {

@@ -1,3 +1,4 @@
+import { Worker } from 'node:worker_threads'
 import type Database from 'better-sqlite3'
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
@@ -14,11 +15,15 @@ import { createLearnService } from './learn.ts'
 import { createLibraryService } from './library.ts'
 import { createReviewService } from './review.ts'
 import { createStudyStore, StudyError } from './store.ts'
+import { difficultWords, spellingWindow } from './spelling-stats.ts'
 import { studyActivity } from './activity.ts'
 import { dayBounds, weekStart } from './calendar.ts'
 import { allStudyDays, minutesPerDay } from '../../shared/domain/study-plan.ts'
 import { builtinWordbooks, builtinWordbookTags, type BuiltinWordbookId, type BuiltinWordbookTag } from '../../shared/domain/builtin-books.ts'
 import { spellingStats, type SpellingAttempt } from '../../shared/domain/spelling.ts'
+import { cefrLevels, defaultWordbookFilters, wordbookOrders, wordbookStates, type WordbookFilters } from '../../shared/contracts/wordbooks.ts'
+import { installBuiltinBook, previewBuiltinBook } from './wordbooks.ts'
+import type { InstallRequest, InstallResult } from './wordbook-worker.ts'
 import type { Ecdict } from '../dictionary/ecdict.ts'
 
 type Validator<T> = (value: unknown) => T
@@ -42,6 +47,36 @@ const builtinWordbookId: Validator<BuiltinWordbookId> = (value) => typeof value 
   && builtinWordbooks.some(({ id }) => id === value) ? value as BuiltinWordbookId : invalid('Invalid built-in wordbook.')
 const builtinWordbookTag: Validator<BuiltinWordbookTag> = (value) => typeof value === 'string'
   && builtinWordbookTags.some(({ id }) => id === value) ? value as BuiltinWordbookTag : invalid('Invalid wordbook category.')
+
+function wordbookFilters(value: unknown): WordbookFilters {
+  const row = object(value)
+  fields(row, 'cefr collins states order')
+  return {
+    cefr: list(choice(...cefrLevels, 'unknown'), 7)(row.cefr),
+    collins: list(num(1, 5), 5)(row.collins),
+    states: list(choice(...wordbookStates), 3)(row.states),
+    order: choice(...wordbookOrders)(row.order),
+  }
+}
+
+const readBookArgs = [builtinWordbookId, list(builtinWordbookTag, builtinWordbookTags.length)] as const
+const installArgs: Validators<[BuiltinWordbookId, BuiltinWordbookTag[], WordbookFilters, number, string]> = [
+  ...readBookArgs, wordbookFilters, num(listSizes.min, listSizes.max), (value) =>
+    typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value : invalid('Refresh the wordbook preview.'),
+]
+
+function installInWorker(request: InstallRequest) {
+  return new Promise<ReturnType<typeof installBuiltinBook>>((resolve, reject) => {
+    const script = import.meta.url.endsWith('.ts') ? './wordbook-worker.ts' : './wordbook-worker.js'
+    const worker = new Worker(new URL(script, import.meta.url), { workerData: request })
+    worker.once('message', (message: InstallResult) => {
+      if ('result' in message) resolve(message.result)
+      else reject(new StudyError(message.message, message.status))
+    })
+    worker.once('error', reject)
+    worker.once('exit', () => reject(new Error('Wordbook installation worker exited before returning a result.')))
+  })
+}
 
 function deckInput(value: unknown): DeckInput {
   const row = object(value)
@@ -114,22 +149,14 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
     'library/decks': get([offset, limit], library.listDecks),
     'library/builtin-books': get([], () => library.builtinBooks(dictionary?.wordbooks()
       ?? { installed: false, books: builtinWordbooks.map(({ id, name }) => ({ id, name, count: 0, available: false })) })),
-    'library/builtin-book': get([builtinWordbookId, list(builtinWordbookTag, builtinWordbookTags.length)], (id, selectedTags) => {
-      const catalog = dictionary?.wordbooks()
-        ?? { installed: false, books: builtinWordbooks.map(({ id, name }) => ({ id, name, count: 0, available: false })) }
-      const book = library.builtinBooks(catalog).books.find((candidate) => candidate.id === id)
-      const detail = dictionary?.wordbookDetail(id, selectedTags) ?? {
-        installed: false,
-        count: 0,
-        categories: builtinWordbookTags.map(({ id, name }) => ({ id, name, count: 0, selected: selectedTags.includes(id) })),
-      }
-      return { ...book, ...detail }
-    }),
-    'library/create-builtin-book': post([builtinWordbookId, list(builtinWordbookTag, builtinWordbookTags.length)], (id, selectedTags) =>
-      library.createBuiltinBook(id, dictionary?.wordbookEntries(id, selectedTags), clock(), selectedTags)),
+    'library/builtin-book': get([...readBookArgs, optional(wordbookFilters), optional(offset), optional(limit)],
+      (book, tags, filters, from, size) => previewBuiltinBook(store, dictionary, clock(), book, tags,
+        filters ?? defaultWordbookFilters, from ?? 0, size ?? 20)),
+    'library/create-builtin-book': post(installArgs, (book, tags, filters, size, selection) =>
+      installBuiltinBook(store, schedulerConfigSnapshot(engine), dictionary, clock(), book, tags, filters, size, selection)),
     'library/lists': get([id], library.getLists),
     'library/list': get([id, id], library.getList),
-    'library/words': get([id, offset, limit, choice('all', 'learned', 'unlearned', 'today', 'week'),
+    'library/words': get([id, offset, limit, choice('all', 'learned', 'unlearned', 'today', 'week', 'difficult'),
       choice('added', 'learned', 'alphabetical'), optId], (deckId, from, size, filter, sort, anchor) => {
       const deck = store.deck(deckId)
       if (!deck) return null
@@ -145,20 +172,26 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
         count(CASE WHEN ${practicedAt} BETWEEN @today AND @now THEN 1 END) AS today,
         count(CASE WHEN ${practicedAt} BETWEEN @week AND @now THEN 1 END) AS week ${source}`)
         .get({ deckId, today, week, now }) as { all: number; learned: number; today: number; week: number }
-      const counts = { ...totals, unlearned: totals.all - totals.learned }
+      const recent = spellingWindow(now)
+      const difficult = store.db.prepare(`SELECT count(*) FROM (${difficultWords})`).pluck().get({ deckId, recent, now }) as number
+      const counts = { ...totals, unlearned: totals.all - totals.learned, difficult }
       const conditions = {
         all: '', learned: `AND ${learnedAt} IS NOT NULL`, unlearned: `AND ${learnedAt} IS NULL`,
         today: `AND ${practicedAt} BETWEEN @today AND @now`, week: `AND ${practicedAt} BETWEEN @week AND @now`,
       }
-      const condition = conditions[filter]
+      const condition = filter === 'difficult' ? '' : conditions[filter]
+      const scopedSource = filter === 'difficult'
+        ? source.replace(' WHERE ', ` JOIN (${difficultWords}) trouble ON trouble.word_id=entries.word_id WHERE `) : source
       const date = sort === 'learned' ? learnedAt : addedAt
-      const order = sort === 'alphabetical' ? 'active_term, entries.id' : `${date} DESC, active_term, entries.id`
-      const params = filter === 'today' ? { deckId, today, now } : filter === 'week' ? { deckId, week, now } : { deckId }
+      const alphabetical = 'lower(active_term), active_term, entries.id'
+      const order = filter === 'difficult' ? `1.0*trouble.failures/trouble.sessions DESC, trouble.failures DESC, ${alphabetical}`
+        : sort === 'alphabetical' ? alphabetical : `${date} DESC, ${alphabetical}`
+      const params = filter === 'today' ? { deckId, today, now } : filter === 'week' ? { deckId, week, now } : filter === 'difficult' ? { deckId, recent, now } : { deckId }
       const anchorPosition = anchor ? store.db.prepare(`
         SELECT position FROM (
-          SELECT entries.id, row_number() OVER (ORDER BY ${order}) - 1 AS position ${source} ${condition}
+          SELECT entries.id, row_number() OVER (ORDER BY ${order}) - 1 AS position ${scopedSource} ${condition}
         ) WHERE id=@anchor`).pluck().get({ ...params, anchor }) as number | undefined : undefined
-      const rows = store.db.prepare(`SELECT entries.body, ${date} AS groupedAt ${source} ${condition}
+      const rows = store.db.prepare(`SELECT entries.body, ${date} AS groupedAt ${scopedSource} ${condition}
         ORDER BY ${order} LIMIT @size OFFSET @from`).all({ ...params, size, from }) as { body: string; groupedAt: number | null }[]
       const entries = rows.map(({ body, groupedAt }) => ({ entry: JSON.parse(body) as Entry, groupedAt }))
       return { deck, count: counts[filter], counts, entries, timezone, anchorPosition }
@@ -231,7 +264,16 @@ function endpoints(store: ReturnType<typeof createStudyStore>, engine: ReviewSch
       (id, card, entryRevision, revision) => review.reveal(id, card, entryRevision, revision, clock())),
     'review/score': post([id, cardId, choice(...reviewRatings), version],
       (id, card, rating, revision) => review.score(id, card, rating, revision, clock())),
-    'progress/overview': get([], () => review.overview(undefined, clock())),
+    'progress/overview': get([], () => {
+      const now = clock()
+      const overview = review.overview(undefined, now)
+      const activity = studyActivity(store, now)
+      const spelling = store.db.prepare(`SELECT
+        count(CASE WHEN json_extract(body, '$.source')='free' THEN 1 END) AS freeAttempts,
+        count(CASE WHEN json_extract(body, '$.correct')=0 THEN 1 END) AS failures
+        FROM spelling_attempts`).get() as { freeAttempts: number; failures: number }
+      return { ...overview, streak: activity.streak, spelling, lists: store.lists.summaries() }
+    }),
     'progress/activity': get([], () => studyActivity(store, clock())),
     'settings/spelling': get([], store.spellingSettings),
     'settings/save-spelling': post([validateSpellingChanges], (patch) => store.saveSpellingSettings({ ...store.spellingSettings(), ...patch })),
@@ -254,6 +296,7 @@ export type StudyEndpoints = { [K in keyof ReturnType<typeof endpoints>]: Return
 export function studyRoutes(db: Database.Database, auth: ReturnType<typeof createAuthApi>, clock = Date.now, dictionary?: Ecdict) {
   const app = new Hono<AuthEnv>()
   let scheduler: Promise<ReviewScheduler> | undefined
+  let wordbookInstalls = Promise.resolve()
   for (const area of ['library', 'learn', 'review', 'progress', 'settings', 'backup']) {
     app.use(`/${area}/*`, auth.guardOrigin, auth.requireOwner)
     app.on(['GET', 'POST'], `/${area}/:action`, bodyLimit({ maxSize: area === 'library' ? 16 * 1024 * 1024 : 8192,
@@ -276,6 +319,19 @@ export function studyRoutes(db: Database.Database, auth: ReturnType<typeof creat
             raw = await c.req.json()
           }
         } catch { return invalid('Expected JSON arguments.') }
+        if (key === 'library/create-builtin-book' && !db.memory) {
+          if (!Array.isArray(raw) || raw.length !== installArgs.length) return invalid()
+          const [book, tags, filters, size, selection] = installArgs.map((read, index) => read(raw[index])) as
+            [BuiltinWordbookId, BuiltinWordbookTag[], WordbookFilters, number, string]
+          const request: InstallRequest = {
+            path: db.name, dataDir: dictionary?.dataDir, ownerId: c.get('ownerId'),
+            requestId: id(c.req.header('Idempotency-Key')), payload: stableJson([key, raw]),
+            args: [clock(), book, tags, filters, size, selection], config: schedulerConfigSnapshot(engine),
+          }
+          const installation = wordbookInstalls.then(() => installInWorker(request))
+          wordbookInstalls = installation.then(() => undefined, () => undefined)
+          return c.json({ data: await installation })
+        }
         const apply = () => action.run(raw)
         const result = action.write
           ? store.request(id(c.req.header('Idempotency-Key')), stableJson([key, raw]), apply)

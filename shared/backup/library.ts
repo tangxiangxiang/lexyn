@@ -6,7 +6,7 @@ import { normalizeSpelling, type LearnProgress } from '../domain/learning.ts'
 import { allStudyDays, minutesPerDay } from '../domain/study-plan.ts'
 import { listSizes, type DeckList, type DeckListMember, type Entry } from '../domain/library.ts'
 import { REVIEW_DIRECTION, reviewCardId, wordReviewCardId, type ReviewCard, type ReviewCardState, type ReviewEvent } from '../domain/review.ts'
-import { recordWordCompletion, wordKey, type Word, type WordCardLink, type WordHistoryLink, type WordProgress } from '../domain/word.ts'
+import { recordWordCompletion, wordKey, wordSlot, type Word, type WordCardLink, type WordHistoryLink, type WordProgress } from '../domain/word.ts'
 import { createReviewScheduler, rebuildCardFromEvents, schedulerConfigSnapshot } from '../srs/scheduler.ts'
 
 export const MAX_LIBRARY_BACKUP_BYTES = 64 * 1024 * 1024
@@ -49,9 +49,9 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
   try { raw = JSON.parse(text) } catch { throw new Error('The file is not valid JSON.') }
   const root = object(raw)
   const version = root.formatVersion
-  requireValid(root.format === 'lexyn-library' && (version === 4 || version === 5 || version === 6 || version === 7 || version === libraryFormatVersion),
-    'Only Lexyn library backup formats v4, v5, v6, v7 and v8 are supported.')
-  const globalWords = version === libraryFormatVersion
+  requireValid(root.format === 'lexyn-library' && (version === 4 || version === 5 || version === 6 || version === 7 || version === 8 || version === libraryFormatVersion),
+    'Only Lexyn library backup formats v4, v5, v6, v7, v8 and v9 are supported.')
+  const globalWords = version >= 8
   fields(root, 'format formatVersion exportedAt metadata decks entries practiceEvents learnProgress settings reviewCards reviewEvents schedulerConfig'
     + (version >= 6 ? ' lists listMembers' : '') + (version >= 7 ? ' spellingAttempts' : '')
     + (globalWords ? ' words wordProgress wordCards practiceWords spellingWords' : ''))
@@ -71,7 +71,7 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
 
   const decks = rows<LibraryExport['decks'][number]>(root.decks, 'decks', (deck) => {
     requireValid(version >= 6 || deck.listSize === undefined, 'List size requires backup format v6.')
-    return validateEntity(deck, 'deck')
+    return validateEntity(deck, 'deck', false, version >= 9)
   })
   const deckIds = new Set(decks.map(({ id }) => id))
   requireValid(meta.scope !== 'deck' || decks.length === 1, 'A deck backup must contain exactly one deck.')
@@ -81,7 +81,7 @@ export async function prepareLibraryRestore(text: string): Promise<LibraryRestor
     const id = validateEntity(entry, 'entry', globalWords)
     requireValid(deckIds.has(entry.deckId as string), 'An entry refers to a missing deck.')
     if (entry.deletedAt === undefined) {
-      const key = `${entry.deckId}:${entry.normalizedTerm}`
+      const key = `${entry.deckId}:${version >= 9 ? wordSlot(entry.term as string) : entry.normalizedTerm}`
       requireValid(!activeTerms.has(key), 'Duplicate active spelling in a deck.')
       activeTerms.add(key)
     }

@@ -10,6 +10,9 @@ import { useLibraryQuery } from '../library/useLibraryQuery'
 const { languageTag } = useI18n()
 const { data, error, reload } = useLibraryQuery(() => null, (_, signal) => study('progress/activity', [], { signal }))
 const monthOffset = ref(0)
+const selectedDate = ref<string>()
+const selectedDay = computed(() => selectedDate.value ?? data.value?.today)
+const selectedStats = computed(() => (selectedDay.value && data.value?.daily[selectedDay.value]) || { learned: 0, reviews: 0 })
 const weekdayFormat = computed(() => new Intl.DateTimeFormat(languageTag.value, { weekday: 'short', timeZone: 'UTC' }))
 const dateFormat = computed(() => new Intl.DateTimeFormat(languageTag.value, { dateStyle: 'long', timeZone: 'UTC' }))
 const weekdays = computed(() => Array.from({ length: 7 }, (_, index) =>
@@ -55,12 +58,21 @@ const calendar = computed(() => {
       <div class="spell-calendar" :aria-label="t('Study calendar')">
         <span v-for="day in weekdays" :key="day" class="spell-weekday">{{ day }}</span>
         <span v-for="index in calendar.leading" :key="'empty-' + index" aria-hidden="true"></span>
-        <time v-for="day in calendar.days" :key="day.key" :datetime="day.key" :aria-current="day.key === data.today ? 'date' : undefined"
+        <button v-for="day in calendar.days" :key="day.key" type="button" :disabled="day.future"
+          :aria-pressed="selectedDay === day.key" @click="selectedDate = day.key" :aria-current="day.key === data.today ? 'date' : undefined"
           :class="{ 'day-studied': day.studied, 'day-future': day.future }"
           :aria-label="day.studied ? t('Studied on {date}', { date: day.label }) : day.label">
-          <span>{{ day.number }}</span>
-        </time>
+          <time :datetime="day.key">{{ day.number }}</time>
+        </button>
       </div>
+      <p v-if="selectedDay" class="activity-day-summary" aria-live="polite">
+        {{ dateFormat.format(new Date(selectedDay + 'T00:00:00Z')) }} ·
+        {{ t('{learned} new words · {reviews} review ratings', selectedStats) }}
+      </p>
     </template>
   </section>
 </template>
+
+<style scoped>
+.activity-day-summary { text-align: center; color: var(--muted); }
+</style>

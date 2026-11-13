@@ -1,3 +1,4 @@
+import type { WordbookSnapshot } from '../contracts/wordbooks.ts'
 import { cleanDictionaryMeaning, cleanDictionaryReference, cleanPhonetics, hasFinalMeaning, meaningFromSenses,
   type DictionaryMeaning, type DictionaryReference, type PhoneticVariants } from './dictionary.ts'
 
@@ -16,6 +17,7 @@ export interface DeckInput {
 
 export interface Deck extends LocalEntity, DeckInput {
   archivedAt?: number
+  builtin?: WordbookSnapshot
 }
 
 export const listSizes = { min: 1, default: 30, max: 100 } as const

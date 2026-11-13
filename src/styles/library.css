@@ -512,10 +512,6 @@
 .builtin-book-detail { display: flex; flex-direction: column; gap: 17px; width: min(100%, 430px); min-height: calc(100dvh - 156px); margin-inline: auto; }
 .builtin-book-detail-heading { display: grid; justify-items: center; padding: 15px 0 4px; text-align: center; }
 .builtin-book-detail-heading h1 { font-size: clamp(1.7rem, 5vw, 2.25rem); font-weight: 640; letter-spacing: -.025em; }
-.builtin-detail-tabs { display: flex; align-items: center; gap: 7px; overflow-x: auto; padding: 4px; border-radius: 14px; background: var(--panel); }
-.builtin-detail-tabs button { flex: 1 0 auto; min-height: 44px; padding: 7px 12px; border: 0; border-radius: 10px; color: #dceaffba; background: transparent; font: inherit; font-size: .83rem; cursor: pointer; }
-.builtin-detail-tabs button[aria-selected="true"] { color: #fff; background: var(--accent-surface); }
-.builtin-detail-tabs button:disabled { opacity: .46; cursor: default; }
 .builtin-book-detail-count { display: flex; align-items: baseline; justify-content: center; gap: 7px; margin: 19px 0 7px; color: #eaf3ff; }
 .builtin-book-detail-count strong { font-size: 1.8rem; font-weight: 650; font-variant-numeric: tabular-nums; }
 .builtin-book-detail-count span { color: #d8e7ffb8; font-size: 1rem; }

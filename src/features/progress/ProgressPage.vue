@@ -5,30 +5,32 @@ import { t } from '../../i18n/useI18n'
 import { NAlert, NButton } from 'naive-ui'
 import { RouterLink } from 'vue-router'
 import { formatReviewTime, useReviewOverview } from '../review/useReviewOverview'
-import { library } from '../library/api'
-import { useLibraryQuery } from '../library/useLibraryQuery'
 
 const { data: overview, error, reload } = useReviewOverview(() => undefined, true)
-const { data: plan, error: planError, reload: reloadPlan } = useLibraryQuery(() => null, async (_key, signal) => {
-  const decks = await library.listDecks(signal)
-  const groups = await Promise.all(decks.filter(({ deck }) => deck.archivedAt === undefined).map(async ({ deck }) => {
-    const result = await library.getLists(deck.id, signal)
-    return result?.lists.filter(({ count }) => count > 0).map((list) => ({ deck, list })) ?? []
-  }))
-  return groups.flat()
+const books = computed(() => {
+  if (!overview.value) return []
+  const stats = new Map(overview.value.deckStats.map((stat) => [stat.deckId, stat]))
+  const lists = new Map<string, typeof overview.value.lists>()
+  for (const list of overview.value.lists) {
+    if (!list.count) continue
+    const group = lists.get(list.deckId) ?? []
+    group.push(list)
+    lists.set(list.deckId, group)
+  }
+  return overview.value.decks.map((deck) => {
+    const group = lists.get(deck.id) ?? []
+    const count = group.reduce((sum, list) => sum + list.count, 0)
+    const learned = group.reduce((sum, list) => sum + list.learned, 0)
+    return { deck, group, count, learned, completed: group.filter((list) => list.learned === list.count).length,
+      due: stats.get(deck.id)?.due ?? 0, nextDueAt: stats.get(deck.id)?.nextDueAt }
+  })
 })
-
-const listStats = computed(() => new Map((overview.value?.listStats ?? []).map((stat) => [stat.listId, stat])))
-const planRows = computed(() => plan.value?.map((row) => ({
-  ...row,
-  due: listStats.value.get(row.list.id)?.due ?? 0,
-  firstRecall: listStats.value.get(row.list.id)?.firstRecall ?? 0,
-  nextDueAt: listStats.value.get(row.list.id)?.nextDueAt,
-})))
-
-function retry() {
-  void Promise.all([reload(), reloadPlan()])
-}
+const listStats = computed(() => new Map(overview.value?.listStats.map((stat) => [stat.listId, stat])))
+const planRows = computed(() => books.value.flatMap(({ deck, group }) => group.map((list) => ({
+  deck, list, due: listStats.value.get(list.id)?.due ?? 0,
+  firstRecall: listStats.value.get(list.id)?.firstRecall ?? 0,
+  nextDueAt: listStats.value.get(list.id)?.nextDueAt,
+}))))
 </script>
 
 <template>
@@ -37,14 +39,17 @@ function retry() {
       <RouterLink class="icon-control spell-session-back" to="/study" :aria-label="t('Back to study')"><AppIcon name="chevronLeft" /></RouterLink>
       <h1 :aria-label="t('Progress')">{{ t('Learning plan') }}</h1>
     </header>
-    <NAlert v-if="error || planError" type="error" role="alert">
+    <NAlert v-if="error" type="error" role="alert">
       {{ t('Your progress could not be loaded from the server.') }}
-      <NButton text @click="retry">{{ t('Try again') }}</NButton>
+      <NButton text @click="reload">{{ t('Try again') }}</NButton>
     </NAlert>
     <template v-else-if="overview">
       <dl class="plan-summary" :aria-label="t('Learning summary')">
+        <div><dt>{{ t('Total learned words') }}</dt><dd>{{ overview.learnedTotal }}</dd></div>
+        <div><dt>{{ t('Study streak') }}</dt><dd>{{ overview.streak }}</dd></div>
         <div><dt>{{ t('Learned for the first time today') }}</dt><dd>{{ overview.learnedToday }}</dd></div>
         <div><dt>{{ t('Reviews rated today') }}</dt><dd>{{ overview.ratedToday }}</dd></div>
+        <div><dt>{{ t('Unique words reviewed today') }}</dt><dd>{{ overview.reviewedWordsToday }}</dd></div>
         <div><dt>{{ t('Due reviews') }}</dt><dd>{{ overview.due }}</dd></div>
         <div><dt>{{ t('Waiting for first recall') }}</dt><dd>{{ overview.firstRecall }}</dd></div>
       </dl>
@@ -53,13 +58,30 @@ function retry() {
       </p>
       <p v-else class="plan-next library-muted">{{ t('No upcoming reviews scheduled.') }}</p>
 
+      <p class="plan-next">
+        {{ t('Free spelling attempts') }} {{ overview.spelling.freeAttempts }} ·
+        {{ t('Incorrect spelling attempts') }} {{ overview.spelling.failures }}
+      </p>
+      <section v-if="books.length" class="plan-section">
+        <div class="plan-section-heading"><h2>{{ t('Wordbook progress') }}</h2></div>
+        <ul class="plan-books">
+          <li v-for="book in books" :key="book.deck.id">
+            <RouterLink :to="{ name: 'library-deck', params: { deckId: book.deck.id } }">{{ book.deck.name }}</RouterLink>
+            <span>{{ t('{learned}/{total} learned · {remaining} to learn · {due} due', {
+              learned: book.learned, total: book.count, remaining: book.count - book.learned, due: book.due,
+            }) }}</span>
+            <span>{{ t('{complete}/{total} lists completed', { complete: book.completed, total: book.group.length }) }}</span>
+            <span v-if="book.nextDueAt !== undefined">{{ t('Next review') }} {{ formatReviewTime(book.nextDueAt) }}</span>
+          </li>
+        </ul>
+      </section>
+
       <section class="plan-section" aria-labelledby="plan-lists-heading">
         <div class="plan-section-heading">
           <h2 id="plan-lists-heading">{{ t('Study lists') }}</h2>
           <span v-if="planRows" class="library-muted">{{ t('{count} lists', { count: planRows.length }) }}</span>
         </div>
-        <p v-if="plan === undefined" class="library-muted" aria-live="polite">{{ t('Loading your study plan…') }}</p>
-        <p v-else-if="!planRows?.length" class="library-muted">{{ t('No active study lists.') }}</p>
+        <p v-if="!planRows.length" class="library-muted">{{ t('No active study lists.') }}</p>
         <div v-else class="plan-table" role="table" :aria-label="t('Study lists')">
           <div class="plan-table-row plan-table-head" role="row">
             <span role="columnheader">{{ t('List') }}</span>
@@ -106,6 +128,9 @@ function retry() {
 .plan-summary dt { color: var(--muted); font-size: .82rem; line-height: 1.35; }
 .plan-summary dd { margin: 5px 0 0; font-size: 1.35rem; font-weight: 650; }
 .plan-next { color: var(--muted); font-size: .9rem; }
+.plan-books { margin: 0; padding: 0; list-style: none; }
+.plan-books li { display: grid; gap: 4px; padding: 8px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.plan-books li span { color: var(--muted); font-size: .86rem; }
 .plan-section { display: grid; gap: 10px; }
 .plan-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .plan-section-heading h2 { font-size: 1.05rem; font-weight: 650; }

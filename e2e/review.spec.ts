@@ -183,6 +183,8 @@ test('learns from Library, restores a revealed answer and scores on the server w
   await page.goto('/progress')
   await expect(stat(page, 'Learned for the first time today')).toHaveText('1')
   await expect(stat(page, 'Reviews rated today')).toHaveText('1')
+  await expect(stat(page, 'Unique words reviewed today')).toHaveText('1')
+  await expect(stat(page, 'Total learned words')).toHaveText('1')
   await expect(stat(page, 'Due reviews')).toHaveText('0')
   await expect(stat(page, 'Waiting for first recall')).toHaveText('0')
   await expect(page.locator('time')).toHaveAttribute('datetime', expected.dueAt.toISOString())

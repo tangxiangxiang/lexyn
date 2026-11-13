@@ -1,3 +1,4 @@
+import { builtinWordbookById } from '../domain/builtin-books.ts'
 import { defaultSpelling, type SpellingPreferences } from '../domain/spelling.ts'
 import { stableJson } from './json.ts'
 import { cleanDictionaryMeaning, cleanDictionaryReference, cleanPhonetics } from '../domain/dictionary.ts'
@@ -49,13 +50,14 @@ export function validateCardState(value: unknown, cardId: string) {
   }
 }
 
-export function validateEntity(payload: Record<string, unknown>, kind: 'deck' | 'entry', globalWords = false) {
+export function validateEntity(payload: Record<string, unknown>, kind: 'deck' | 'entry', globalWords = false, withWordbookSnapshot = false) {
   if (!isUuid(payload.id) || !integer(payload.revision, 1) || !time(payload.createdAt)
     || !time(payload.updatedAt) || Number(payload.updatedAt) < Number(payload.createdAt)) {
     throw new InvalidInput('Invalid library record revision or time.')
   }
   if (kind === 'deck') {
-    fields(payload, 'id name description listSize createdAt updatedAt revision archivedAt')
+    fields(payload, 'id name description listSize createdAt updatedAt revision archivedAt' + (withWordbookSnapshot ? ' builtin' : ''))
+    if (payload.builtin !== undefined) validateWordbookSnapshot(payload.builtin)
     const name = string(payload, 'name')!
     const description = string(payload, 'description', true)
     const clean = cleanDeck({ name, description })
@@ -159,4 +161,27 @@ export function validateTimezone(value: unknown) {
   try { new Intl.DateTimeFormat('en', { timeZone: value }) }
   catch { throw new InvalidInput('Enter a valid IANA timezone.') }
   return value
+}
+
+function validateWordbookSnapshot(value: unknown) {
+  const row = object(value)
+  fields(row, 'id selection count sources')
+  if (typeof row.id !== 'string' || !Object.hasOwn(builtinWordbookById, row.id)
+    || typeof row.selection !== 'string' || !/^[a-f0-9]{64}$/.test(row.selection)
+    || !integer(row.count, 1) || !Array.isArray(row.sources) || !row.sources.length || row.sources.length > 20) {
+    throw new InvalidInput('Invalid built-in wordbook snapshot.')
+  }
+  for (const value of row.sources) {
+    const source = object(value)
+    fields(source, 'name url version importedAt sha256 license redistribution fields wordCount')
+    const text = (value: unknown) => typeof value === 'string' && value.length > 0 && value.length <= 512
+    if (![source.name, source.url, source.version, source.license].every(text)
+      || typeof source.url !== 'string' || !source.url.startsWith('https://')
+      || typeof source.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(source.sha256)
+      || (source.importedAt !== undefined && (typeof source.importedAt !== 'string' || !time(Date.parse(source.importedAt))))
+      || !['with-attribution-and-share-alike', 'verify-upstream-rights', 'not-verified'].includes(String(source.redistribution))
+      || !integer(source.wordCount, 1) || !Array.isArray(source.fields) || source.fields.length > 100 || !source.fields.every(text)) {
+      throw new InvalidInput('Invalid vocabulary source.')
+    }
+  }
 }

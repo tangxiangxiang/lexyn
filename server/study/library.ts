@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { hasFinalMeaning } from '../../shared/domain/dictionary.ts'
-import { builtinWordbookById, builtinWordbookDescription, type BuiltinWordbookId, type BuiltinWordbookTag } from '../../shared/domain/builtin-books.ts'
+import { builtinWordbookById, builtinWordbookDescription, type BuiltinWordbookId } from '../../shared/domain/builtin-books.ts'
 import type { SpellingAttempt } from '../../shared/domain/spelling.ts'
+import type { WordbookSnapshot } from '../../shared/contracts/wordbooks.ts'
 import type { DictionaryEntry } from '../../shared/contracts/dictionary.ts'
 import { libraryFormatVersion, type LibraryExport } from '../../shared/contracts/library.ts'
 import { stableJson } from '../../shared/contracts/json.ts'
@@ -9,7 +10,7 @@ import { cleanDeck, cleanEntry, normalizeTerm, type DeckListSummary, type Deck, 
 import type { LearnProgress, PracticeEvent } from '../../shared/domain/learning.ts'
 import type { ReviewEvent, ReviewSchedulerConfig } from '../../shared/domain/review.ts'
 import { manualMeaningFromImport, type DuplicateMode, type ImportPreview } from '../../shared/domain/library-import.ts'
-import { recordWordCompletion, wordKey, type Word, type WordHistoryLink, type WordProgress } from '../../shared/domain/word.ts'
+import { recordWordCompletion, wordKey, wordSlot, type Word, type WordHistoryLink, type WordProgress } from '../../shared/domain/word.ts'
 import { cardLinks } from './words.ts'
 import { checkRevision, StudyError, type StudyStore } from './store.ts'
 
@@ -95,52 +96,38 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       return { ...catalog, books: catalog.books.map((book) => ({
         ...book,
         ...(() => {
-          const deck = decks.find(({ description }) => description === builtinWordbookDescription(book.id))
+          const deck = decks.find(({ builtin }) => builtin?.id === book.id)
+            ?? decks.find(({ description }) => description === builtinWordbookDescription(book.id))
           return deck ? { deckId: deck.id, deckArchived: deck.archivedAt !== undefined } : {}
         })(),
       })) }
     },
-    createBuiltinBook(id: BuiltinWordbookId, rows: DictionaryEntry[] | undefined, now: number, selectedTags: BuiltinWordbookTag[]) {
+    installedBuiltinBook(id: BuiltinWordbookId, now: number) {
+      const deck = store.decks().find(({ builtin, description }) => builtin?.id === id || description === builtinWordbookDescription(id))
+      if (!deck) return
+      const restored = deck.archivedAt === undefined ? deck : { ...revise(deck, now), archivedAt: undefined }
+      if (restored !== deck) store.saveDeck(restored)
+      const count = store.db.prepare('SELECT count(*) FROM entries WHERE deck_id=? AND active_term IS NOT NULL').pluck().get(deck.id) as number
+      return { deck: restored, count, addedCount: 0, alreadyAdded: true }
+    },
+    createBuiltinBook(id: BuiltinWordbookId, rows: DictionaryEntry[], now: number, listSize: number, builtin: WordbookSnapshot) {
       const book = builtinWordbookById[id]
-      if (!book?.tag) throw new StudyError('This built-in wordbook is not available from the installed dictionary.', 404)
-      if (!rows) throw new StudyError('ECDICT is not installed on this server.', 404)
-      if (!selectedTags.length) throw new StudyError('Choose at least one word group.', 400)
-      if (!rows.length) throw new StudyError('No words match the selected word groups.', 404)
-
-      const description = builtinWordbookDescription(id)
-      const previous = store.decks().find((deck) => deck.description === description)
-      const deck = previous
-        ? previous.archivedAt === undefined ? previous : { ...revise(previous, now), archivedAt: undefined }
-        : { ...newEntity(now), ...cleanDeck({ name: book.name, description, listSize: 30 }) }
-      if (!previous || deck !== previous) store.saveDeck(deck)
-      const entryIds: string[] = []
-      const seen = new Set<string>()
-      for (const row of rows) {
-        const normalized = normalizeTerm(row.word)
-        if (!normalized || seen.has(normalized) || store.activeEntry(deck.id, normalized) || !row.translation.trim()) continue
-        seen.add(normalized)
-        const entry = makeEntry(deck.id, {
-          term: row.word,
-          meaning: row.translation,
-          dictionaryMeaning: row.dictionaryMeaning,
-          dictionaryReference: {
-            sourceWord: row.word,
-            sourceRevision: row.dictionaryMeaning?.sourceRevision,
-            translation: row.translation,
-            definition: row.definition,
-            partOfSpeech: row.pos,
-            phonetic: row.phonetic,
-          },
-          phonetic: row.phonetic,
-          meaningSource: 'dictionary',
-          meaningNeedsReview: true,
-        }, now)
-        store.saveEntry(entry)
-        entryIds.push(entry.id)
-      }
+      const deck = { ...newEntity(now), ...cleanDeck({ name: book.name, description: builtinWordbookDescription(id), listSize }), builtin }
+      store.saveDeck(deck)
+      const entryIds = rows.map((row) => store.saveEntry(makeEntry(deck.id, {
+        term: row.word,
+        meaning: row.translation,
+        dictionaryMeaning: row.dictionaryMeaning,
+        dictionaryReference: {
+          sourceWord: row.word, sourceRevision: row.dictionaryMeaning?.sourceRevision, translation: row.translation,
+          definition: row.definition, partOfSpeech: row.pos, phonetic: row.phonetic,
+        },
+        phonetic: row.phonetic,
+        meaningSource: 'dictionary',
+        meaningNeedsReview: true,
+      }, now)).id)
       store.lists.append(deck, entryIds)
-      const count = store.entries(deck.id).filter(({ deletedAt }) => deletedAt === undefined).length
-      return { deck, count, addedCount: entryIds.length, alreadyAdded: entryIds.length === 0 }
+      return { deck, count: rows.length, addedCount: rows.length, alreadyAdded: false }
     },
     listDecks(offset: number, limit: number) {
       const counts = store.db.prepare(`SELECT deck_id AS deckId, COUNT(active_term) AS count,
@@ -218,7 +205,7 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
     createEntry(deckId: string, input: EntryInput, now: number) {
       const deck = requireDeck(deckId)
       const entry = makeEntry(deckId, input, now)
-      unique(deckId, entry.normalizedTerm)
+      unique(deckId, entry.term)
       const saved = store.saveEntry(entry)
       store.lists.append(deck, [saved.id])
       return saved
@@ -228,14 +215,14 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       checkRevision(previous, revision)
       if (previous.deletedAt !== undefined) throw new StudyError('Restore this word before editing it.', 409)
       const entry = makeEntry(deckId, { ...input, explanation: input.explanation ?? previous.explanation }, now, previous)
-      unique(deckId, entry.normalizedTerm, id)
+      unique(deckId, entry.term, id)
       return store.saveEntry(entry)
     },
     setEntryRemoved(deckId: string, id: string, removed: boolean, revision: number, now: number) {
       const entry = requireEntry(deckId, id)
       checkRevision(entry, revision)
       if ((entry.deletedAt !== undefined) === removed) return
-      if (!removed) unique(deckId, entry.normalizedTerm, id)
+      if (!removed) unique(deckId, entry.term, id)
       store.saveEntry({ ...revise(entry, now), deletedAt: removed ? now : undefined })
     },
     importEntries(deckId: string, candidates: ImportPreview['candidates'], mode: DuplicateMode, now: number, listSize?: number) {
@@ -247,9 +234,10 @@ export function createLibraryService(store: StudyStore, config: ReviewSchedulerC
       let skipped = 0
       for (const candidate of candidates) {
         const term = normalizeTerm(candidate.input.term)
-        if (term !== candidate.normalizedTerm || seen.has(term)) throw new StudyError('Generate a new import preview.')
-        seen.add(term)
-        const previous = store.activeEntry(deckId, term)
+        const slot = wordSlot(candidate.input.term)
+        if (term !== candidate.normalizedTerm || seen.has(slot)) throw new StudyError('Generate a new import preview.')
+        seen.add(slot)
+        const previous = store.activeEntry(deckId, candidate.input.term)
         if (previous?.id !== candidate.match?.id || previous?.revision !== candidate.match?.revision) {
           throw new StudyError('The matching words changed. Review the updated preview and confirm again.', 409)
         }

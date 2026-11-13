@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { Page } from '@playwright/test'
 import { expect, openStudyLists, studyRequest, test, writeStudy } from './fixtures'
 
@@ -92,6 +93,39 @@ test('sets synchronized options, corrects a duplicate letter and resumes a free 
   await page.goto('/library/' + deck.id + '/words?word=' + word.id)
   await page.getByText('Spelling history', { exact: true }).click()
   await expect(page.locator('.spelling-history-positions')).toContainText('3 · p')
+})
+
+test('ranks repeated recent spelling errors without counting one old error or assisted practice', async ({ page, backend }) => {
+  const { deck, word } = await deckWithApple(page)
+  const pear = await api(page, 'library/create-entry', [deck.id, { term: 'pear', meaning: '梨' }], true)
+  const now = Date.UTC(2026, 9, 2, 12)
+  backend.advanceTo(now)
+  const save = backend.db.prepare('INSERT INTO spelling_attempts (id,entry_id,session_id,round,attempt,body,word_id) VALUES (?,?,?,?,?,?,?)')
+  function record(entry: typeof word, time: number, assisted = false, correct = false) {
+    const row = { id: randomUUID(), entryId: entry.id, sessionId: randomUUID(), round: 0, attempt: 1,
+      spelling: entry.term, time, source: 'free', mode: 'copy', keyboard: 'full', assisted, correct,
+      errors: correct ? [] : [{ position: 0, expected: entry.term[0], type: 'incorrect' }] }
+    save.run(row.id, entry.id, row.sessionId, 0, 1, JSON.stringify(row), entry.wordId)
+  }
+  record(word, now - 60_000)
+  record(word, now - 120_000)
+  record(word, now, false, true)
+  record(pear, now - 60_000)
+  record(pear, now - 31 * 86_400_000)
+  record(pear, now, true)
+  await page.goto('/library/' + deck.id + '/words')
+  await page.getByLabel('Word list options').click()
+  await page.getByRole('button', { name: 'Difficult spellings 1' }).click()
+  await expect(page.getByRole('link', { name: 'apple', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'pear', exact: true })).toHaveCount(0)
+  expect(await api(page, 'progress/overview')).toMatchObject({
+    spelling: { freeAttempts: 6, failures: 5 }, learnedTotal: 0, ratedToday: 0, streak: 0,
+  })
+  record(word, now, false, true)
+  record(word, now, false, true)
+  await page.reload()
+  await page.getByLabel('Word list options').click()
+  await expect(page.getByRole('button', { name: /Difficult spellings/ })).toHaveCount(0)
 })
 
 test('dictation exposes only generic keys until an assisted keyboard is requested and retains the choice on reload', async ({ page }) => {

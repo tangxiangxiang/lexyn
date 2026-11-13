@@ -6,7 +6,7 @@ import type { SpellingAttempt, SpellingPreferences } from '../domain/spelling.ts
 
 import type { Word, WordCardLink, WordHistoryLink, WordProgress } from '../domain/word.ts'
 
-export const libraryFormatVersion = 8
+export const libraryFormatVersion = 9
 
 interface LibraryBackupData {
   format: 'lexyn-library'
@@ -26,6 +26,6 @@ export type LibraryExport = LibraryBackupData & (
   | { formatVersion: 4 | 5 }
   | { formatVersion: 6; lists: DeckList[]; listMembers: DeckListMember[] }
   | { formatVersion: 7; lists: DeckList[]; listMembers: DeckListMember[]; spellingAttempts: SpellingAttempt[] }
-  | { formatVersion: typeof libraryFormatVersion; lists: DeckList[]; listMembers: DeckListMember[]; spellingAttempts: SpellingAttempt[]
+  | { formatVersion: 8 | typeof libraryFormatVersion; lists: DeckList[]; listMembers: DeckListMember[]; spellingAttempts: SpellingAttempt[]
     words: Word[]; wordProgress: WordProgress[]; wordCards: WordCardLink[]; practiceWords: WordHistoryLink[]; spellingWords: WordHistoryLink[] }
 )

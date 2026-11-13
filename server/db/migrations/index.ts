@@ -218,6 +218,13 @@ const migrations: ({ version: number; sql: string } | { version: number; apply: 
     `,
   },
   { version: 13, apply: migrateGlobalWords },
+  { version: 14, sql: `
+    UPDATE entries SET active_term=(SELECT variant FROM words WHERE id=entries.word_id)
+    WHERE active_term IS NOT NULL AND EXISTS (
+      SELECT 1 FROM words WHERE id=entries.word_id AND language='en' AND variant<>''
+    );
+    CREATE INDEX spelling_attempt_time ON spelling_attempts(CAST(json_extract(body, '$.time') AS INTEGER));
+  ` },
 ]
 
 export const latestDatabaseVersion = migrations.at(-1)!.version

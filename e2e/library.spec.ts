@@ -1,9 +1,10 @@
+import { defaultWordbookFilters } from '../shared/contracts/wordbooks'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { importEcdictCsv } from '../server/dictionary/import'
 import type { Page } from '@playwright/test'
 import type Database from 'better-sqlite3'
-import { openStudyLists, expect, libraryAction, fillMeaning, signIn, test, wordbookLink, writeStudy } from './fixtures'
+import { openStudyLists, expect, libraryAction, fillMeaning, signIn, studyRequest, test, wordbookLink, writeStudy } from './fixtures'
 import type { LibraryExport } from '../shared/contracts/library'
 import type { Entry } from '../shared/domain/library'
 import { trackPlayback } from './mock-speech'
@@ -24,7 +25,7 @@ async function addWord(page: Page, term: string, meaning = '') {
 }
 
 async function expectNoOverflow(page: Page) {
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(page.viewportSize()!.width)
   const dialog = page.locator('.library-dialog:visible')
   if (await dialog.count()) {
     expect(await dialog.evaluate((element) => element.scrollWidth)).toBeLessThanOrEqual(await dialog.evaluate((element) => element.clientWidth))
@@ -39,9 +40,9 @@ function storedEntry(db: Database.Database, term: string) {
 test('chooses a built-in book from the actual dictionary and respects the composition filter', async ({ page, backend }) => {
   const file = join(backend.directory, 'dictionary.csv')
   await writeFile(file, [
-    'word,phonetic,definition,translation,pos,tag,bnc,frq,exchange',
-    'signal,ˈsɪɡnəl,signal,n. 信号,n,cet4 gk,0,0,',
-    'thread,θred,thread,n. 线程,n,cet4,0,0,',
+    'word,phonetic,definition,translation,pos,tag,bnc,frq,exchange,collins,oxford',
+    'signal,ˈsɪɡnəl,signal,n. 信号,n,cet4 gk,42,50,,4,1',
+    'thread,θred,thread,n. 线程,n,cet4,100,0,,2,',
   ].join('\n'))
   await importEcdictCsv(backend.directory, file, 'e2e')
 
@@ -49,16 +50,44 @@ test('chooses a built-in book from the actual dictionary and respects the compos
   await expect(page.getByRole('button', { name: 'Japanese' })).toBeDisabled()
   await expect(page.getByRole('button', { name: /Primary school/ })).toBeDisabled()
   await page.getByRole('button', { name: 'College English Test Band 4 2 words' }).click()
-  await expect(page.getByRole('tab', { name: 'CEFR levels' })).toBeDisabled()
-  await expect(page.getByRole('tab', { name: 'Collins levels' })).toBeDisabled()
+  await page.getByText('Wordbook filters', { exact: true }).click()
+  await expect(page.getByText('CEFR sources have not been installed.')).toBeVisible()
+  await expect(page.getByRole('checkbox', { name: 'A1', exact: true })).toBeDisabled()
+  await page.getByRole('checkbox', { name: '4 ★' }).check()
+  await expect(page.locator('.builtin-book-detail-count')).toHaveText('1 word')
+  await page.getByRole('checkbox', { name: '4 ★' }).uncheck()
+  await expect(page.locator('.builtin-book-detail-count')).toHaveText('2 words')
   const bandFour = page.getByRole('button', { name: 'College English Test Band 4 2 words' })
   await expect(bandFour).toHaveAttribute('aria-pressed', 'true')
   await bandFour.click()
   await expect(bandFour).toHaveAttribute('aria-pressed', 'false')
   await expect(page.locator('.builtin-book-detail-count')).toHaveText('1 word')
+  for (const width of [320, 375, 430, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 850 })
+    await expectNoOverflow(page)
+  }
   await page.getByRole('button', { name: 'Choose', exact: true }).click()
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  expect(backend.db.prepare('SELECT count(*) FROM decks').pluck().get()).toBe(0)
+  await page.getByRole('button', { name: 'Choose', exact: true }).click()
+  await page.getByRole('button', { name: '20', exact: true }).click()
+  await page.getByRole('button', { name: 'Install wordbook', exact: true }).click()
   await expect(page.getByRole('link', { name: 'signal', exact: true })).toBeVisible()
   await expect(page.getByRole('link', { name: 'thread', exact: true })).toHaveCount(0)
+  const preview = await studyRequest(page, 'library/builtin-book', ['cet4', ['cet4'], defaultWordbookFilters, 0, 20])
+  const { data: selection } = await preview.json()
+  const [first, second] = await Promise.all([
+    writeStudy(page, 'library/create-builtin-book', ['cet4', ['cet4'], defaultWordbookFilters, 50, selection.selection]),
+    writeStudy(page, 'library/create-builtin-book', ['cet4', ['cet4'], defaultWordbookFilters, 30, selection.selection]),
+  ])
+  for (const response of [first, second]) {
+    expect(response.ok()).toBe(true)
+    expect((await response.json()).data).toMatchObject({ addedCount: 0, alreadyAdded: true })
+  }
+  expect(backend.db.prepare('SELECT count(*) FROM decks').pluck().get()).toBe(1)
+  expect(backend.db.prepare('SELECT count(*) FROM entries').pluck().get()).toBe(1)
+  expect(backend.db.prepare("SELECT json_extract(body, '$.listSize') FROM decks").pluck().get()).toBe(20)
+  expect(backend.vocabulary.requests).toEqual([])
   await page.goto('/study')
   await expect(page.getByRole('button', { name: 'Words to learn 1', exact: true })).toBeVisible()
 })
@@ -278,11 +307,14 @@ test('studies from the current book, restores its last list and preserves progre
   await page.goto('/')
   await page.getByRole('link', { name: 'Study activity' }).click()
   await expect(page.locator('.spell-streak strong')).toHaveText('1')
-  await expect(page.locator('.spell-calendar time[aria-current="date"]')).toHaveClass('day-studied')
+  await expect(page.locator('.spell-calendar button[aria-current="date"]')).toHaveClass('day-studied')
+  await expect(page.locator('.activity-day-summary')).toContainText('1 new words · 0 review ratings')
+  await page.locator('.spell-calendar button.day-studied').click()
+  await expect(page.locator('.spell-calendar button.day-studied')).toHaveAttribute('aria-pressed', 'true')
   await page.getByRole('button', { name: 'Previous month' }).click()
-  await expect(page.locator('.spell-calendar time[aria-current="date"]')).toHaveCount(0)
+  await expect(page.locator('.spell-calendar button[aria-current="date"]')).toHaveCount(0)
   await page.getByRole('button', { name: 'Next month' }).click()
-  await expect(page.locator('.spell-calendar time[aria-current="date"]')).toBeVisible()
+  await expect(page.locator('.spell-calendar button[aria-current="date"]')).toBeVisible()
   await expectNoOverflow(page)
   await page.goto('/library')
   await wordbookLink(page, 'Other vocabulary').click()
@@ -492,7 +524,7 @@ test('previews TXT and CSV, explicitly overwrites duplicates and downloads full 
   await libraryAction(page, 'Import words', 'Deck options')
   const upload = page.getByLabel('Vocabulary file')
   await upload.setInputFiles({
-    name: 'systems.txt', mimeType: 'text/plain', buffer: Buffer.from('\uFEFFWAL\t预写日志\r\ncopy-on-write\r\nwal\t重复\r\n'),
+    name: 'systems.txt', mimeType: 'text/plain', buffer: Buffer.from('\uFEFFWal\t预写日志\r\ncopy-on-write\r\nwal\t重复\r\n'),
   })
   await expect(page.getByText('3 total · 3 valid · 1 duplicates · 0 invalid · 1 missing meanings')).toBeVisible()
   await expectNoOverflow(page)
@@ -532,7 +564,7 @@ test('previews TXT and CSV, explicitly overwrites duplicates and downloads full 
   ])
   const exported: LibraryExport = JSON.parse(await readFile(await download.path(), 'utf8'))
   expect(exported).toMatchObject({
-    format: 'lexyn-library', formatVersion: 8, metadata: { scope: 'library' },
+    format: 'lexyn-library', formatVersion: 9, metadata: { scope: 'library' },
     settings: { dailyNewWords: 10, timezone: 'UTC' },
     decks: [{ name: 'Computer English', archivedAt: expect.any(Number), revision: 2 }],
   })

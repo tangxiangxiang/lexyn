@@ -16,7 +16,7 @@ export function readListeningBookmark(deckId: string): ListeningBookmark | undef
   try {
     const value = JSON.parse(localStorage.getItem(storageKey) ?? 'null')
     if (value && isUuid(value.entryId)
-      && ['all', 'learned', 'unlearned', 'today', 'week'].includes(value.filter)
+      && ['all', 'learned', 'unlearned', 'today', 'week', 'difficult'].includes(value.filter)
       && ['added', 'learned', 'alphabetical'].includes(value.sort)) return value
   } catch { /* The player can run without a saved position. */ }
 }

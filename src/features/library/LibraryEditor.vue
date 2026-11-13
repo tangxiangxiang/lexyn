@@ -3,7 +3,8 @@ import { computed, reactive, ref } from 'vue'
 import { NAlert, NButton, NInput } from 'naive-ui'
 import { t, translateError } from '../../i18n/useI18n'
 import { hasFinalMeaning, meaningFromSenses, type DictionaryMeaning, type PhoneticVariants } from '../../../shared/domain/dictionary'
-import { listSizes, normalizeTerm, type Deck, type Entry } from '../../../shared/domain/library'
+import { wordSlot } from '../../../shared/domain/word'
+import { listSizes, type Deck, type Entry } from '../../../shared/domain/library'
 import { refreshStudy } from '../../api/client'
 import DictionaryMeaningEditor from '../dictionary/DictionaryMeaningEditor.vue'
 import LibraryDialog from './LibraryDialog.vue'
@@ -33,7 +34,7 @@ const phonetics = reactive({
 })
 const entryForm = reactive({ term: entry?.term ?? '' })
 const originalTerm = ref(entry?.term ?? '')
-const termChanged = computed(() => !!entry && normalizeTerm(entryForm.term) !== normalizeTerm(originalTerm.value))
+const termChanged = computed(() => !!entry && wordSlot(entryForm.term) !== wordSlot(originalTerm.value))
 const hint = ref('')
 const entryRevision = ref(entry?.revision ?? 0)
 const meaningText = computed(() => meaningFromSenses(fullMeaning.value?.senses ?? []))

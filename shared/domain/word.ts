@@ -40,6 +40,11 @@ export function wordKey(term: string, language = 'en') {
   }
 }
 
+export function wordSlot(term: string) {
+  const { normalizedTerm, variant } = wordKey(term)
+  return variant || normalizedTerm
+}
+
 export function recordWordCompletion(previous: WordProgress | undefined, wordId: string, at: number): WordProgress {
   return {
     wordId,

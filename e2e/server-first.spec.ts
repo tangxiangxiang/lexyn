@@ -50,6 +50,7 @@ test('two devices resume the same Review session and competing ratings commit on
     expect(history.reviewEvents).toHaveLength(1)
     expect(history.reviewCards).toHaveLength(1)
     expect(await rebuildCardFromEvents(history.reviewEvents)).toEqual(history.reviewCards[0].schedulerState)
+    expect(await read(page, 'progress/overview')).toMatchObject({ learnedTotal: 1, ratedToday: 1, reviewedWordsToday: 1 })
     await second.reload()
     await expect(second.getByText('Rated today')).toBeVisible()
   } finally { await context.close() }
@@ -220,6 +221,7 @@ test('the Review dial explains a conflicting round and one Start resumes the sel
 })
 
 test('shares a learned word and one FSRS chain across books while keeping each local prompt', async ({ page, backend }) => {
+  backend.advanceTo(Date.UTC(2026, 9, 2, 12))
   const a = await write(page, 'library/create-deck', [{ name: 'CET4' }])
   const appleA = await write(page, 'library/create-entry', [a.id, { term: 'apple', meaning: '苹果' }])
   await page.reload()
@@ -244,7 +246,10 @@ test('shares a learned word and one FSRS chain across books while keeping each l
     nextDueAt: initial.dueAt, spelling: { attempts: 1, firstTryCorrectRate: 1 },
   })
   backend.advanceTo(initial.dueAt + 1000)
-  expect(await read(page, 'review/overview', [null])).toMatchObject({ due: 1, firstRecall: 0 })
+  expect(await read(page, 'progress/overview')).toMatchObject({
+    due: 1, firstRecall: 0, learnedTotal: 1,
+    deckStats: expect.arrayContaining([{ deckId: a.id, due: 1 }, { deckId: b.id, due: 1 }]),
+  })
   await page.goto('/library')
   await openStudyLists(page, 'IELTS')
   await expect(page.getByRole('link', { name: 'Practice this list' })).toBeVisible()
@@ -263,6 +268,7 @@ test('shares a learned word and one FSRS chain across books while keeping each l
     { entryId: appleB.id, deckId: b.id, cardId: initial.id },
   ])
   expect(await rebuildCardFromEvents(history.reviewEvents)).toEqual(history.reviewCards[0].schedulerState)
+  expect(await read(page, 'progress/overview')).toMatchObject({ learnedTotal: 1, ratedToday: 2, reviewedWordsToday: 1 })
   expect(await read(page, 'library/word-detail', [a.id, appleA.id])).toMatchObject({ nextDueAt: history.reviewCards[0].dueAt })
   const deckBackup = await read(page, 'backup/library', [b.id])
   expect(deckBackup).toMatchObject({ decks: [{ id: b.id }], words: [{ id: appleA.wordId }], reviewCards: [], reviewEvents: [] })

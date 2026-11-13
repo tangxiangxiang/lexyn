@@ -38,10 +38,11 @@ const filters = [
   { value: 'all', label: 'All words' },
   { value: 'learned', label: 'Learned' },
   { value: 'unlearned', label: 'Not yet learned' },
+  { value: 'difficult', label: 'Difficult spellings' },
 ] as const
 const filter = ref<WordArgs[3]>('all')
 const sort = ref<WordArgs[4]>('added')
-const groupByDate = computed(() => grouped.value && sort.value !== 'alphabetical')
+const groupByDate = computed(() => grouped.value && sort.value !== 'alphabetical' && filter.value !== 'difficult')
 const wordId = computed(() => typeof route.query.word === 'string' ? route.query.word : undefined)
 const { busy, error: exportError, run } = useLibraryAction()
 const { data: words, error, reload } = useLibraryQuery(
@@ -166,7 +167,7 @@ function resumePlaylist() {
             <RouterLink class="spell-word-options-link" :to="{ path: '/learn', query: { deckId, free: '1' } }">
               {{ t('Free spelling') }} <AppIcon name="chevronRight" />
             </RouterLink>
-            <button v-for="option in filters" :key="option.value" type="button" :aria-pressed="filter === option.value"
+            <button v-for="option in filters.filter(({ value }) => value !== 'difficult' || !!words?.counts.difficult || filter === value)" :key="option.value" type="button" :aria-pressed="filter === option.value"
               @click="filter = option.value">
               {{ t(option.label) }} <span>{{ words?.counts[option.value] }}</span>
             </button>
@@ -223,7 +224,9 @@ function resumePlaylist() {
             <dl class="spell-memory">
               <div><dt>{{ t('Spelling attempts') }}</dt><dd>{{ detail.spelling.attempts }}</dd></div>
               <div><dt>{{ t('Spelling failures') }}</dt><dd>{{ detail.spelling.failures }}</dd></div>
-              <div><dt>{{ t('Unassisted first tries') }}</dt><dd>{{ detail.spelling.firstCorrect }}</dd></div>
+              <div v-if="detail.spelling.firstTryCorrectRate !== undefined">
+                <dt>{{ t('First-try accuracy without hints') }}</dt><dd>{{ Math.round(detail.spelling.firstTryCorrectRate * 100) }}%</dd>
+              </div>
               <div v-if="detail.spelling.latest !== undefined"><dt>{{ t('Last spelling practice') }}</dt>
                 <dd>{{ memoryFormat.format(detail.spelling.latest) }}</dd></div>
             </dl>

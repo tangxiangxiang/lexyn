@@ -733,7 +733,9 @@
 .spell-streak-label { text-align: center; font-size: 1.1rem; }
 .spell-calendar { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; justify-items: center; }
 .spell-weekday { color: var(--muted); font-size: .8rem; margin-block: 4px; }
-.spell-calendar time {
+.spell-calendar button {
+  border: 0;
+  color: inherit;
   display: grid;
   place-items: center;
   width: min(100%, 40px);
@@ -745,7 +747,7 @@
 .spell-calendar .day-studied { background: #a8e3ff; color: #102d63; font-weight: 700; }
 .spell-calendar [aria-current="date"] { outline: 1px solid #d3ebff; outline-offset: 1px; }
 .spell-calendar .day-future { background: transparent; }
-.spell-calendar .day-future span { opacity: .66; }
+.spell-calendar .day-future time { opacity: .66; }
 
 @media (max-width: 380px) {
   .spell-home-tools { gap: 4px; }
@@ -755,3 +757,5 @@
 .study-result { display: grid; gap: 14px; }
 .study-result-grid { display: flex; flex-wrap: wrap; margin-block: 8px; }
 .study-result-grid > div { flex: 1 1 100px; }
+
+.spell-calendar button[aria-pressed="true"] { box-shadow: inset 0 0 0 1px currentColor; }

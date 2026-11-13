@@ -6,7 +6,7 @@ import type { LearnSession, PracticeEvent, LearnProgress } from '../../shared/do
 import type { ReviewSession, ReviewCard, ReviewEvent } from '../../shared/domain/review.ts'
 import { defaultSpelling, type PracticeSource, type SpellingAttempt, type SpellingPreferences } from '../../shared/domain/spelling.ts'
 import { findWord, insertCardLink, saveWordProgress } from './words.ts'
-import { wordKey, type Word, type WordCardLink, type WordProgress } from '../../shared/domain/word.ts'
+import { wordKey, wordSlot, type Word, type WordCardLink, type WordProgress } from '../../shared/domain/word.ts'
 import { allStudyDays } from '../../shared/domain/study-plan.ts'
 
 export class StudyError extends Error {
@@ -35,6 +35,9 @@ export function createStudyStore(db: Database.Database, ownerId: string) {
     return row && JSON.parse(row.body) as T
   }
 
+  let insertEntry: Database.Statement | undefined
+  const prepareEntry = () => insertEntry ??= db.prepare(`INSERT INTO entries (id,deck_id,active_term,body,revision,word_id) VALUES (?,?,?,?,?,?)
+    ON CONFLICT(id) DO UPDATE SET active_term=excluded.active_term,body=excluded.body,revision=excluded.revision,word_id=excluded.word_id`)
   function entryWord(id: string) {
     const wordId = db.prepare('SELECT word_id FROM entries WHERE id=?').pluck().get(id) as string | undefined
     if (!wordId) throw new Error('An Entry is missing its Word.')
@@ -94,7 +97,7 @@ export function createStudyStore(db: Database.Database, ownerId: string) {
       : all<Entry>('SELECT body FROM entries WHERE deck_id=?', deckId),
     entry: (id: string) => one<Entry>('SELECT body FROM entries WHERE id=?', id),
     activeEntry: (deckId: string, term: string) =>
-      one<Entry>('SELECT body FROM entries WHERE deck_id=? AND active_term=?', deckId, term),
+      one<Entry>('SELECT body FROM entries WHERE deck_id=? AND active_term=?', deckId, wordSlot(term)),
     saveDeck(deck: Deck) {
       db.prepare(`INSERT INTO decks (id,body,revision) VALUES (?,?,?)
         ON CONFLICT(id) DO UPDATE SET body=excluded.body,revision=excluded.revision`)
@@ -106,10 +109,8 @@ export function createStudyStore(db: Database.Database, ownerId: string) {
       const wordId = restoredWordId ?? (prior && prior.normalizedTerm === key.normalizedTerm && prior.variant === key.variant
         ? prior.id : findWord(db, entry.term, entry.termChangedAt ?? entry.createdAt, key.language).id)
       const value = { ...entry, wordId }
-      db.prepare(`INSERT INTO entries (id,deck_id,active_term,body,revision,word_id) VALUES (?,?,?,?,?,?)
-        ON CONFLICT(id) DO UPDATE SET active_term=excluded.active_term,body=excluded.body,revision=excluded.revision,word_id=excluded.word_id`)
-        .run(value.id, value.deckId, value.deletedAt === undefined ? value.normalizedTerm : null,
-          JSON.stringify(value), value.revision, wordId)
+      prepareEntry().run(value.id, value.deckId, value.deletedAt === undefined ? wordSlot(value.term) : null,
+        JSON.stringify(value), value.revision, wordId)
       return value
     },
     entryWord,
